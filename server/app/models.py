@@ -20,7 +20,10 @@ def _now() -> datetime:
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(index=True, unique=True)
-    password_hash: str
+    # Google 전용 가입자는 비밀번호가 없으므로 nullable
+    password_hash: Optional[str] = None
+    # Google 계정 고유 ID(sub). 소셜 로그인으로 가입·연동된 사용자에만 존재
+    google_sub: Optional[str] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=_now)
 
 

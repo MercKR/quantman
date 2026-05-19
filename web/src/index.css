@@ -101,6 +101,15 @@ thead th { color: var(--muted); font-weight: 600; }
 .center-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
 .auth-box { width: 340px; }
 .spacer { height: 10px; }
+.or-divider {
+  display: flex; align-items: center; text-align: center;
+  color: var(--muted); font-size: 12px; margin: 16px 0;
+}
+.or-divider::before, .or-divider::after {
+  content: ""; flex: 1; border-bottom: 1px solid var(--border);
+}
+.or-divider::before { margin-right: 12px; }
+.or-divider::after { margin-left: 12px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
 .dot.on { background: var(--green); }
 .dot.off { background: #cbd5e1; }

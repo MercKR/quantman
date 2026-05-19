@@ -8,3 +8,4 @@ bcrypt>=4.1
 email-validator>=2.1
 httpx>=0.27
 psycopg[binary]>=3.2          # PostgreSQL 드라이버 (프로덕션 DB)
+google-auth[requests]>=2.30   # Google 소셜 로그인 — ID 토큰 검증

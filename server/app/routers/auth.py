@@ -12,8 +12,8 @@ from ..db import get_session
 from ..deps import get_current_user
 from ..models import Device, PairingRequest, User
 from ..schemas import (DeviceApproveIn, DeviceOut, DeviceStartIn, DeviceStartOut,
-                       DeviceTokenIn, DeviceTokenOut, LoginIn, SignupIn,
-                       TokenOut, UserOut)
+                       DeviceTokenIn, DeviceTokenOut, GoogleLoginIn, LoginIn,
+                       SignupIn, TokenOut, UserOut)
 from ..security import (create_access_token, hash_password, hash_token,
                         new_device_code, new_device_token, new_user_code,
                         verify_password)
@@ -40,6 +40,45 @@ def login(body: LoginIn, session: Session = Depends(get_session)):
     user = session.exec(select(User).where(User.email == body.email)).first()
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "이메일 또는 비밀번호가 올바르지 않습니다.")
+    return TokenOut(access_token=create_access_token(user.id))
+
+
+@router.post("/google", response_model=TokenOut)
+def google_login(body: GoogleLoginIn, session: Session = Depends(get_session)):
+    """Google ID 토큰을 검증하고 이메일로 사용자를 찾거나 생성한다.
+
+    비밀번호 가입자가 같은 이메일로 Google 로그인하면 자동으로 연동된다.
+    """
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "Google 로그인이 설정되지 않았습니다.")
+    # 지연 import — Google 로그인 미사용 환경에서 의존성 부담을 줄임
+    from google.auth.transport import requests as google_requests
+    from google.oauth2 import id_token as google_id_token
+
+    try:
+        info = google_id_token.verify_oauth2_token(
+            body.credential, google_requests.Request(), settings.GOOGLE_CLIENT_ID
+        )
+    except Exception:  # noqa: BLE001  — 서명·만료·audience 불일치 등 모두 인증 실패로
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Google 인증에 실패했습니다.")
+
+    email = info.get("email")
+    sub = info.get("sub")
+    if not email or not info.get("email_verified") or not sub:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "이메일이 확인되지 않은 Google 계정입니다.")
+
+    user = session.exec(select(User).where(User.email == email)).first()
+    if user is None:
+        user = User(email=email, password_hash=None, google_sub=sub)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    elif user.google_sub is None:          # 기존 비밀번호 계정에 Google 연동
+        user.google_sub = sub
+        session.add(user)
+        session.commit()
     return TokenOut(access_token=create_access_token(user.id))
 
 

@@ -20,6 +20,10 @@ class LoginIn(BaseModel):
     password: str
 
 
+class GoogleLoginIn(BaseModel):
+    credential: str        # Google Identity Services가 발급한 ID 토큰(JWT)
+
+
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"

@@ -38,6 +38,10 @@ export const api = {
     req<{ access_token: string }>("/auth/login", {
       method: "POST", body: JSON.stringify({ email, password }),
     }),
+  googleLogin: (credential: string) =>
+    req<{ access_token: string }>("/auth/google", {
+      method: "POST", body: JSON.stringify({ credential }),
+    }),
   me: () => req<{ id: number; email: string; created_at: string }>("/auth/me"),
 
   symbols: () => req<{ symbols: SymbolInfo[] }>("/symbols"),

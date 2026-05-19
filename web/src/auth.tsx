@@ -6,6 +6,7 @@ interface AuthState {
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string) => Promise<void>;
+  loginWithGoogle: (credential: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -35,13 +36,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const u = await api.me();
     setEmail(u.email);
   }
+  async function loginWithGoogle(credential: string) {
+    const { access_token } = await api.googleLogin(credential);
+    tokenStore.set(access_token);
+    const u = await api.me();
+    setEmail(u.email);
+  }
   function logout() {
     tokenStore.clear();
     setEmail(null);
   }
 
   return (
-    <Ctx.Provider value={{ email, ready, login, signup, logout }}>
+    <Ctx.Provider value={{ email, ready, login, signup, loginWithGoogle, logout }}>
       {children}
     </Ctx.Provider>
   );

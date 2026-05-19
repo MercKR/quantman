@@ -12,6 +12,9 @@ class Settings:
     JWT_ALGO: str = "HS256"
     ACCESS_TOKEN_HOURS: int = int(os.getenv("QP_ACCESS_TOKEN_HOURS", "168"))  # 7일
 
+    # Google 소셜 로그인 — ID 토큰 검증 시 audience(aud) 확인용. 미설정 시 비활성.
+    GOOGLE_CLIENT_ID: str = os.getenv("QP_GOOGLE_CLIENT_ID", "")
+
     # DB
     DB_URL: str = os.getenv("QP_DB_URL", f"sqlite:///{_BASE / 'data.db'}")
 
