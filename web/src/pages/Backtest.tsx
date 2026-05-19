@@ -3,6 +3,7 @@ import { api } from "../api";
 import ConditionBuilder from "../components/ConditionBuilder";
 import SymbolPicker from "../components/SymbolPicker";
 import EquityChart from "../components/EquityChart";
+import Verdict from "../components/Verdict";
 import type {
   AnalysisResult, BacktestResult, ConditionGroup, StrategyDef, SymbolInfo,
 } from "../types";
@@ -163,6 +164,9 @@ export default function Backtest() {
 
           <div className="panel">
             <h3>2. 매수 조건</h3>
+            <p className="muted" style={{ margin: "0 0 12px" }}>
+              지정한 조건이 충족되는 날 해당 종목을 매수합니다.
+            </p>
             <ConditionBuilder symbols={symbols} group={buy} onChange={setBuy} />
           </div>
 
@@ -213,38 +217,46 @@ export default function Backtest() {
             </div>
           </div>
 
-          <div className="panel">
-            <h3>5. 실행</h3>
-            <div className="row">
-              <div>
-                <label>분석: 조건 발생 후 N일 뒤 수익률</label>
-                <input type="number" value={forwardDays} min={1}
-                       style={{ width: 90 }}
+          <div className="action-bar">
+            <div className="action-bar-info">
+              <strong>{name || "새 전략"}</strong> · {tradeSymbol || "종목 미선택"} 매수
+            </div>
+            <div className="action-bar-actions">
+              <span className="fwd">
+                분석:
+                <input type="number" min={1} value={forwardDays}
                        onChange={(e) => setForwardDays(Number(e.target.value))} />
-              </div>
-              <button className="ghost" disabled={!!busy} onClick={runAnalysis}>
-                {busy === "analysis" ? "분석 중…" : "데이터 분석"}
-              </button>
+                일 뒤 수익률
+                <button className="ghost sm" disabled={!!busy}
+                        onClick={runAnalysis}>
+                  {busy === "analysis" ? "분석 중…" : "통계 미리보기"}
+                </button>
+              </span>
               <button disabled={!!busy} onClick={runBacktest}>
                 {busy === "backtest" ? "실행 중…" : "백테스트 실행"}
               </button>
             </div>
-            {err && <div className="error">{err}</div>}
           </div>
+          {err && <div className="error">{err}</div>}
 
           {analysis && (
             <div className="panel">
-              <h3>데이터 분석 결과</h3>
+              <h3>통계 미리보기 결과</h3>
               {analysis.success ? (
                 <div className="cards">
-                  <Stat label="표본 수" value={`${analysis.n_samples}회`} />
+                  <Stat label="표본 수" value={`${analysis.n_samples}회`}
+                        hint="조건이 과거에 발생한 횟수입니다. 많을수록 결과가 믿을 만합니다." />
                   <Stat label="양수 확률"
                         value={`${fmt(analysis.prob_positive)}%`}
-                        tone={(analysis.prob_positive ?? 0) >= 50 ? "pos" : "neg"} />
+                        tone={(analysis.prob_positive ?? 0) >= 50 ? "pos" : "neg"}
+                        hint="조건 발생 후 N일 뒤 수익률이 플러스였던 비율입니다." />
                   <Stat label="평균 수익률" value={`${fmt(analysis.mean, 2)}%`}
-                        tone={(analysis.mean ?? 0) >= 0 ? "pos" : "neg"} />
-                  <Stat label="중앙값" value={`${fmt(analysis.median, 2)}%`} />
-                  <Stat label="p-value" value={fmt(analysis.p_value, 3)} />
+                        tone={(analysis.mean ?? 0) >= 0 ? "pos" : "neg"}
+                        hint="조건 발생 후 N일 뒤 수익률의 평균입니다." />
+                  <Stat label="중앙값" value={`${fmt(analysis.median, 2)}%`}
+                        hint="수익률을 줄 세웠을 때 한가운데 값입니다. 극단값의 영향을 덜 받습니다." />
+                  <Stat label="p-value" value={fmt(analysis.p_value, 3)}
+                        hint="이 결과가 우연일 가능성입니다. 0.05 미만이면 통계적으로 의미 있다고 봅니다." />
                 </div>
               ) : (
                 <div className="error">{analysis.error}</div>
@@ -257,17 +269,25 @@ export default function Backtest() {
               <h3>백테스트 결과</h3>
               {backtest.success && m ? (
                 <>
+                  <Verdict metrics={m} />
                   <div className="cards" style={{ marginBottom: 18 }}>
                     <Stat label="총수익률" value={`${fmt(m.total_return)}%`}
-                          tone={(m.total_return ?? 0) >= 0 ? "pos" : "neg"} />
-                    <Stat label="CAGR" value={`${fmt(m.cagr)}%`} />
-                    <Stat label="MDD" value={`${fmt(m.mdd)}%`} tone="neg" />
-                    <Stat label="샤프" value={fmt(m.sharpe, 2)} />
-                    <Stat label="승률" value={`${fmt(m.win_rate)}%`} />
-                    <Stat label="거래 수" value={`${m.n_trades ?? 0}회`} />
+                          tone={(m.total_return ?? 0) >= 0 ? "pos" : "neg"}
+                          hint="백테스트 전체 기간 동안 자산이 늘어난 비율입니다." />
+                    <Stat label="CAGR" value={`${fmt(m.cagr)}%`}
+                          hint="복리로 환산한 연평균 수익률입니다. 기간이 달라도 서로 비교할 수 있습니다." />
+                    <Stat label="MDD" value={`${fmt(m.mdd)}%`} tone="neg"
+                          hint="고점 대비 자산이 가장 크게 떨어졌던 낙폭입니다. 0에 가까울수록 안전합니다." />
+                    <Stat label="샤프" value={fmt(m.sharpe, 2)}
+                          hint="위험 한 단위당 거둔 수익입니다. 1 이상이면 양호, 2 이상이면 우수합니다." />
+                    <Stat label="승률" value={`${fmt(m.win_rate)}%`}
+                          hint="전체 거래 중 이익으로 끝난 거래의 비율입니다." />
+                    <Stat label="거래 수" value={`${m.n_trades ?? 0}회`}
+                          hint="백테스트 기간 중 매수 후 청산이 완료된 횟수입니다." />
                     <Stat label="vs Buy&Hold"
                           value={`${fmt(m.excess_return)}%p`}
-                          tone={(m.excess_return ?? 0) >= 0 ? "pos" : "neg"} />
+                          tone={(m.excess_return ?? 0) >= 0 ? "pos" : "neg"}
+                          hint="같은 종목을 그냥 사서 보유했을 때와 비교한 초과 수익입니다 (%p)." />
                   </div>
                   <EquityChart equity={backtest.equity ?? []}
                                benchmark={backtest.benchmark} />
@@ -326,12 +346,15 @@ export default function Backtest() {
   );
 }
 
-function Stat({ label, value, tone }: {
-  label: string; value: string; tone?: "pos" | "neg";
+function Stat({ label, value, tone, hint }: {
+  label: string; value: string; tone?: "pos" | "neg"; hint?: string;
 }) {
   return (
     <div className="stat">
-      <div className="label">{label}</div>
+      <div className="label">
+        {label}
+        {hint && <span className="metric-hint" data-tip={hint}>?</span>}
+      </div>
       <div className={"value" + (tone ? " " + tone : "")}>{value}</div>
     </div>
   );

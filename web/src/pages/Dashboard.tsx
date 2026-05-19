@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import EquityChart from "../components/EquityChart";
@@ -28,6 +28,27 @@ export default function Dashboard() {
   const bal = snap?.payload.balance;
   const positions = snap?.payload.positions ?? [];
 
+  const steps: { name: string; done: boolean; desc: ReactNode }[] = [
+    {
+      name: "전략 만들기", done: strategies.length > 0,
+      desc: <>백테스트로 첫 매매 전략을 만들어 보세요. <Link to="/backtest">백테스트로 이동 →</Link></>,
+    },
+    {
+      name: "모의투자 배정", done: paper.length > 0,
+      desc: <>만든 전략을 모의투자 모드로 바꾸면 로컬앱이 가져가 실행합니다. <Link to="/strategies">전략 관리 →</Link></>,
+    },
+    {
+      name: "기기 연결", done: connected,
+      desc: <>로컬앱을 설치하고 이 계정과 연결하세요. <Link to="/pair">기기 연결 →</Link></>,
+    },
+    {
+      name: "자동매매 가동", done: !!snap,
+      desc: <>로컬앱에서 자동매매를 시작하면 체결·평가 결과가 이 화면에 동기화됩니다.</>,
+    },
+  ];
+  const currentIdx = steps.findIndex((s) => !s.done);
+  const allDone = currentIdx === -1;
+
   return (
     <div>
       <h1 className="page-title">대시보드</h1>
@@ -37,23 +58,30 @@ export default function Dashboard() {
 
       {loaded && (
         <>
-          <div className="panel">
-            <h3>
-              <span className={"dot " + (connected ? "on" : "off")} />
-              로컬앱 {connected ? "연결됨" : "미연결"}
-            </h3>
-            {connected ? (
-              <p className="muted">
-                연결된 기기 {devices.length}대 · 모의투자 전략 {paper.length}개 가동.
-                {!snap && " 아직 동기화된 데이터가 없습니다."}
-              </p>
-            ) : (
-              <p className="muted">
-                모의투자를 시작하려면 로컬앱을 설치하고{" "}
-                <Link to="/pair">기기 연결</Link>을 완료하세요. 백테스트는 연결 없이 바로 가능합니다.
-              </p>
-            )}
-          </div>
+          {allDone ? (
+            <div className="panel done-banner">
+              <span className="dot on" />
+              설정 완료 — 모의투자 자동매매가 가동 중입니다.
+            </div>
+          ) : (
+            <div className="steps">
+              {steps.map((s, i) => {
+                const state = s.done ? "done"
+                  : i === currentIdx ? "current" : "todo";
+                return (
+                  <div key={i} className={"step " + state}>
+                    <div className="step-num">{s.done ? "✓" : i + 1}</div>
+                    <div className="step-body">
+                      <div className="step-name">{s.name}</div>
+                      {state === "current" && (
+                        <div className="step-desc">{s.desc}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {snap && bal && (
             <>
@@ -114,8 +142,8 @@ export default function Dashboard() {
               </p>
             ) : (
               <p className="muted">
-                전략 {strategies.length}개 · 모의투자 {paper.length}개.{" "}
-                <Link to="/strategies">전략 관리</Link>
+                전략 {strategies.length}개 · 모의투자 {paper.length}개 가동.{" "}
+                <Link to="/strategies">전략 관리 →</Link>
               </p>
             )}
           </div>

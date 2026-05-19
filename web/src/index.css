@@ -8,6 +8,10 @@
   --accent-soft: #eef2ff;
   --green: #15803d;
   --red: #b91c1c;
+  --amber: #b45309;
+  --green-soft: #ecfdf3;
+  --red-soft: #fef2f2;
+  --amber-soft: #fffbeb;
   --radius: 10px;
   font-family: -apple-system, "Segoe UI", "Malgun Gothic", Roboto, sans-serif;
   color: var(--text);
@@ -201,3 +205,103 @@ thead th { color: var(--muted); font-weight: 600; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
 .dot.on { background: var(--green); }
 .dot.off { background: #cbd5e1; }
+
+/* 지표 설명 툴팁 */
+.metric-hint {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; margin-left: 4px; vertical-align: middle;
+  border-radius: 50%; background: var(--border); color: var(--muted);
+  font-size: 9px; font-weight: 700; cursor: help; position: relative;
+}
+.metric-hint::after {
+  content: attr(data-tip);
+  position: absolute; bottom: calc(100% + 7px); left: 50%;
+  transform: translateX(-50%);
+  width: 214px; padding: 9px 11px;
+  background: var(--text); color: #fff;
+  font-size: 12px; font-weight: 400; line-height: 1.55;
+  border-radius: 7px; text-align: left;
+  opacity: 0; pointer-events: none; transition: opacity .12s;
+  z-index: 60;
+}
+.metric-hint:hover::after { opacity: 1; }
+
+/* 결과 해석 카드 */
+.verdict {
+  border: 1px solid var(--border); border-left-width: 4px;
+  border-radius: var(--radius); padding: 16px 18px; margin-bottom: 18px;
+}
+.verdict.good { border-left-color: var(--green); background: var(--green-soft); }
+.verdict.ok   { border-left-color: var(--accent); background: var(--accent-soft); }
+.verdict.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+.verdict.bad  { border-left-color: var(--red);   background: var(--red-soft); }
+.verdict-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.verdict-grade {
+  font-size: 14px; font-weight: 800; padding: 3px 11px;
+  border-radius: 999px; color: #fff;
+}
+.verdict.good .verdict-grade { background: var(--green); }
+.verdict.ok   .verdict-grade { background: var(--accent); }
+.verdict.warn .verdict-grade { background: var(--amber); }
+.verdict.bad  .verdict-grade { background: var(--red); }
+.verdict-tagline { font-size: 14px; font-weight: 600; }
+.verdict-summary { font-size: 13px; line-height: 1.7; margin: 11px 0 0; }
+.verdict-points {
+  list-style: none; padding: 0; margin: 12px 0 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.verdict-points li { font-size: 13px; line-height: 1.55; }
+.verdict-points .pt-good    { color: var(--green); }
+.verdict-points .pt-warn    { color: var(--amber); }
+.verdict-points .pt-bad     { color: var(--red); }
+.verdict-points .pt-neutral { color: var(--muted); }
+
+/* 하단 실행 액션바 */
+.action-bar {
+  position: sticky; bottom: 14px; z-index: 30;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px; margin-bottom: 18px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.10);
+}
+.action-bar-info { font-size: 13px; color: var(--muted); }
+.action-bar-info strong { color: var(--text); font-weight: 700; }
+.action-bar-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.action-bar .fwd {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--muted);
+}
+.action-bar .fwd input { width: 56px; padding: 6px 8px; }
+
+/* 대시보드 진행 단계 */
+.steps { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.step {
+  flex: 1; min-width: 190px;
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px;
+}
+.step.current { border-color: var(--accent); background: var(--accent-soft); }
+.step-num {
+  flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700;
+  background: var(--border); color: var(--muted);
+}
+.step.done .step-num { background: var(--green); color: #fff; }
+.step.current .step-num { background: var(--accent); color: #fff; }
+.step-name { font-size: 13px; font-weight: 600; }
+.step.todo .step-name { color: var(--muted); }
+.step-desc { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.6; }
+.done-banner {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 600;
+  background: var(--green-soft); border-color: var(--green);
+}
+
+/* 빈 상태 카드 */
+.empty-state { text-align: center; padding: 38px 24px; }
+.empty-title { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+.empty-state p { max-width: 430px; margin: 0 auto 16px; line-height: 1.65; }

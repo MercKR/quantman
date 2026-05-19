@@ -45,11 +45,14 @@ export default function Strategies() {
       {!loaded && <p className="muted">불러오는 중…</p>}
 
       {loaded && rows.length === 0 && (
-        <div className="panel">
+        <div className="panel empty-state">
+          <div className="empty-title">아직 저장된 전략이 없습니다</div>
           <p className="muted">
-            저장된 전략이 없습니다. <Link to="/backtest">백테스트</Link>에서
-            전략을 만들고 저장하세요.
+            백테스트에서 매수·매도 조건을 만들고 과거 데이터로 검증한 뒤
+            전략으로 저장하세요. 저장한 전략을 모의투자 모드로 바꾸면
+            연결된 로컬앱이 가져가 자동으로 실행합니다.
           </p>
+          <Link to="/backtest"><button>백테스트로 첫 전략 만들기</button></Link>
         </div>
       )}
 
@@ -58,34 +61,43 @@ export default function Strategies() {
           <table>
             <thead>
               <tr>
-                <th>전략</th><th>매수 대상</th><th>조건 수</th>
+                <th>전략</th><th>매수 종목</th><th>조건</th>
                 <th>모드</th><th>수정일</th><th></th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.name}</td>
-                  <td>{s.definition.trade_symbol}</td>
-                  <td>{s.definition.buy?.conditions?.length ?? 0}</td>
-                  <td>
-                    <select
-                      value={s.run_mode}
-                      onChange={(e) => changeMode(s, e.target.value)}
-                    >
-                      {["draft", "paper"].map((m) => (
-                        <option key={m} value={m}>{MODE_LABEL[m]}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>{s.updated_at.slice(0, 10)}</td>
-                  <td>
-                    <button className="ghost sm" onClick={() => remove(s.id)}>
-                      삭제
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {rows.map((s) => {
+                const buyN = s.definition.buy?.conditions?.length ?? 0;
+                const sellN = s.definition.sell?.conditions?.length ?? 0;
+                return (
+                  <tr key={s.id}>
+                    <td>{s.name}</td>
+                    <td>{s.definition.trade_symbol}</td>
+                    <td>매수 {buyN} · 매도 {sellN}</td>
+                    <td>
+                      <select
+                        value={s.run_mode}
+                        onChange={(e) => changeMode(s, e.target.value)}
+                      >
+                        {["draft", "paper"].map((m) => (
+                          <option key={m} value={m}>{MODE_LABEL[m]}</option>
+                        ))}
+                      </select>
+                      {s.run_mode === "paper" && (
+                        <span className="badge" style={{ marginLeft: 6 }}>
+                          로컬앱 실행
+                        </span>
+                      )}
+                    </td>
+                    <td>{s.updated_at.slice(0, 10)}</td>
+                    <td>
+                      <button className="ghost sm" onClick={() => remove(s.id)}>
+                        삭제
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
