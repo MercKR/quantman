@@ -49,37 +49,67 @@ FDR_SYMBOLS = {
 
 # 매크로 지표 — yfinance
 MACRO_YF_SYMBOLS = {
-    "VIX":        "^VIX",
-    "VIX 3개월":  "^VIX3M",
-    "MOVE 지수":  "^MOVE",
-    "SKEW 지수":  "^SKEW",
-    "VVIX":       "^VVIX",
-    "달러지수":    "DX-Y.NYB",
-    "구리선물":    "HG=F",
-    "미국채10년":  "^TNX",
+    "VIX":          "^VIX",
+    "VIX 3개월":    "^VIX3M",
+    "VIX 9일":      "^VIX9D",
+    "MOVE 지수":    "^MOVE",
+    "SKEW 지수":    "^SKEW",
+    "VVIX":         "^VVIX",
+    "나스닥변동성":  "^VXN",
+    "달러지수":      "DX-Y.NYB",
+    "구리선물":      "HG=F",
+    "미국채10년":    "^TNX",
 }
 
 # 매크로 지표 — FRED (https://fred.stlouisfed.org, API 키 불필요)
+# 일간/주간 시리즈 — 당일~익일 공시라 발표지연/룩어헤드 보정 불필요
 MACRO_FRED_SYMBOLS = {
     "장단기금리차10Y2Y": "T10Y2Y",
     "장단기금리차10Y3M": "T10Y3M",
     "하이일드스프레드":   "BAMLH0A0HYM2",
     "투자등급스프레드":   "BAMLC0A0CM",
     "금융여건지수":       "NFCI",
-    # 금리·신용 일간(daily) 시리즈 — 발표지연/룩어헤드 없음
+    # 금리·신용 일간 시리즈
     "미국채2년":          "DGS2",
     "미국채30년":         "DGS30",
     "기대인플레이션10년":  "T10YIE",
     "실효기준금리":        "DFF",
     "회사채AAA금리":       "DAAA",
     "회사채BAA금리":       "DBAA",
+    # 그룹 A-1 — 추가 금리·환율 일간 시리즈
+    "미국채3개월":        "DGS3MO",
+    "미국채5년":          "DGS5",
+    "기대인플레이션5년":   "T5YIE",
+    "SOFR금리":           "SOFR",
+    "무역가중달러지수":    "DTWEXBGS",
+    "원달러환율":         "DEXKOUS",
 }
 
+# 월간 거시지표 — 발표지연이 커서 인덱스를 뒤로 밀어 룩어헤드를 방지한다.
+# {표시명: (FRED 시리즈ID, 지연일수)}
+MACRO_FRED_LAGGED = {
+    "실업률":            ("UNRATE", 35),
+    "비농업고용":        ("PAYEMS", 35),
+    "CPI":               ("CPIAUCSL", 45),
+    "코어CPI":           ("CPILFESL", 45),
+    "산업생산":          ("INDPRO", 45),
+    "M2통화량":          ("M2SL", 30),
+    "미시간소비심리":     ("UMCSENT", 15),
+    "시카고연준활동지수":  ("CFNAI", 35),
+    "침체확률":          ("RECPROUSM156N", 60),
+    "GDP":               ("GDP", 30),     # 파생(버핏지수) 계산용 + 자체 지표
+}
+
+# 전용 API로 수집하는 기타 매크로 지표
+MACRO_OTHER = ["암호화폐공포탐욕"]
+
 # 매크로 파생 지표 (수집한 시리즈로 계산)
-MACRO_DERIVED = ["VIX 기간구조", "구리금비율", "회사채신용스프레드"]
+MACRO_DERIVED = ["VIX 기간구조", "구리금비율", "회사채신용스프레드",
+                 "버핏지수", "실질기준금리"]
 
 ASSET_SYMBOLS = list(YFINANCE_SYMBOLS) + list(FDR_SYMBOLS) + ["비트코인"]
-MACRO_SYMBOLS = list(MACRO_YF_SYMBOLS) + list(MACRO_FRED_SYMBOLS) + MACRO_DERIVED
+MACRO_SYMBOLS = (list(MACRO_YF_SYMBOLS) + list(MACRO_FRED_SYMBOLS)
+                 + list(MACRO_FRED_LAGGED) + MACRO_OTHER + MACRO_DERIVED)
 ALL_SYMBOLS = ASSET_SYMBOLS + MACRO_SYMBOLS
 
 
@@ -225,10 +255,15 @@ def fetch_bitcoin() -> pd.DataFrame:
 
 # ── FRED (매크로 지표) ────────────────────────────────────────────────────────
 
-def fetch_fred(symbol_name: str, series_id: str, start: str = "2010-01-01") -> pd.DataFrame:
-    """FRED 시계열을 CSV로 직접 수집 (API 키 불필요). OHLCV 형식으로 저장."""
+def fetch_fred(symbol_name: str, series_id: str, start: str = "2010-01-01",
+               lag_days: int = 0) -> pd.DataFrame:
+    """FRED 시계열을 CSV로 직접 수집 (API 키 불필요). OHLCV 형식으로 저장.
+
+    lag_days>0이면 발표지연만큼 인덱스를 뒤로 민다(월간 거시지표 룩어헤드 방지).
+    지연 적용 시리즈는 증분 수집이 부정확하므로 매번 전체 수집한다(월간이라 가벼움).
+    """
     existing = _load_existing(symbol_name)
-    if not existing.empty:
+    if not existing.empty and lag_days == 0:
         start = (existing.index[-1] + timedelta(days=1)).strftime("%Y-%m-%d")
     try:
         url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}"
@@ -244,6 +279,8 @@ def fetch_fred(symbol_name: str, series_id: str, start: str = "2010-01-01") -> p
         df = pd.DataFrame({"Open": val, "High": val, "Low": val,
                            "Close": val, "Volume": 0.0})
         df.index = pd.to_datetime(df.index).tz_localize(None)
+        if lag_days:
+            df.index = df.index + pd.Timedelta(days=lag_days)
         merged = _merge(existing, df)
         _save(symbol_name, merged)
         return merged
@@ -251,6 +288,40 @@ def fetch_fred(symbol_name: str, series_id: str, start: str = "2010-01-01") -> p
         print(f"  [오류] {symbol_name} (FRED {series_id}): {e}")
         return existing
 
+
+# ── 암호화폐 공포·탐욕지수 (alternative.me, API 키 불필요) ─────────────────────
+
+def fetch_crypto_fng() -> pd.DataFrame:
+    """alternative.me 암호화폐 공포·탐욕지수(0=극공포 ~ 100=극탐욕). 일간."""
+    symbol_name = "암호화폐공포탐욕"
+    existing = _load_existing(symbol_name)
+    try:
+        data = requests.get("https://api.alternative.me/fng/?limit=0&format=json",
+                             timeout=20).json()
+        rows = data.get("data", []) if isinstance(data, dict) else []
+        recs = []
+        for r in rows:
+            try:
+                ts = pd.to_datetime(int(r["timestamp"]), unit="s")
+                recs.append({"Date": ts, "val": float(r["value"])})
+            except (KeyError, ValueError, TypeError):
+                continue
+        if not recs:
+            return existing
+        raw = pd.DataFrame(recs).set_index("Date").sort_index()
+        val = raw["val"]
+        df = pd.DataFrame({"Open": val, "High": val, "Low": val,
+                           "Close": val, "Volume": 0.0})
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+        merged = _merge(existing, df)
+        _save(symbol_name, merged)
+        return merged
+    except Exception as e:
+        print(f"  [오류] {symbol_name} (alternative.me): {e}")
+        return existing
+
+
+# ── 매크로 파생 지표 ──────────────────────────────────────────────────────────
 
 def _build_derived(results: dict) -> dict:
     """수집된 시리즈로 매크로 파생 지표(비율)를 계산해 results에 추가·저장."""
@@ -283,10 +354,36 @@ def _build_derived(results: dict) -> dict:
         _save(name, df)
         results[name] = df
 
+    def _combine(name, a_name, b_name, op, pre_b=None):
+        """주기가 다른 두 시리즈를 a의 인덱스에 ffill로 맞춰 결합한다.
+        op: 'ratio'(a/b) 또는 'diff'(a-b). pre_b: b 시리즈 사전 변환 함수."""
+        a, b = results.get(a_name), results.get(b_name)
+        if a is None or b is None or a.empty or b.empty:
+            return
+        a_s = a["Close"]
+        b_s = pre_b(b["Close"]) if pre_b else b["Close"]
+        # b를 두 인덱스의 합집합에 reindex → ffill → a의 인덱스만 추출
+        b_d = b_s.reindex(a_s.index.union(b_s.index)).ffill().reindex(a_s.index)
+        if op == "ratio":
+            r = (a_s / b_d.replace(0, np.nan)).dropna()
+        else:
+            r = (a_s - b_d).dropna()
+        if r.empty:
+            return
+        df = pd.DataFrame({"Open": r, "High": r, "Low": r, "Close": r, "Volume": 0.0})
+        _save(name, df)
+        results[name] = df
+
     _ratio("VIX 기간구조", "VIX", "VIX 3개월")   # >1 = 백워데이션(스트레스)
     _ratio("구리금비율", "구리선물", "금선물")     # 상승 = 리플레이션
     # 신용 스프레드 = BAA(중간등급) - AAA(최우량) 회사채 금리차. 확대 = 신용경색
     _diff("회사채신용스프레드", "회사채BAA금리", "회사채AAA금리")
+    # 버핏지수 = S&P500 ÷ GDP (시장 과열도 프록시; 윌셔5000이 FRED에서
+    # 폐지돼 S&P500을 시장 대용으로 사용. GDP는 분기→일별 ffill)
+    _combine("버핏지수", "S&P500", "GDP", "ratio")
+    # 실질기준금리 = 실효기준금리 − CPI 전년동월비(%)
+    _combine("실질기준금리", "실효기준금리", "CPI", "diff",
+             pre_b=lambda s: s.pct_change(12) * 100)
     return results
 
 
@@ -522,6 +619,14 @@ def fetch_all(verbose: bool = True) -> dict[str, pd.DataFrame]:
         if verbose: print(f"수집 중: {name} (FRED {series_id})")
         results[name] = fetch_fred(name, series_id)
         time.sleep(0.2)
+
+    for name, (series_id, lag) in MACRO_FRED_LAGGED.items():
+        if verbose: print(f"수집 중: {name} (FRED {series_id}, 지연 {lag}일)")
+        results[name] = fetch_fred(name, series_id, lag_days=lag)
+        time.sleep(0.2)
+
+    if verbose: print("수집 중: 암호화폐공포탐욕 (alternative.me)")
+    results["암호화폐공포탐욕"] = fetch_crypto_fng()
 
     _build_derived(results)
 
