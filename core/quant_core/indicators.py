@@ -338,6 +338,27 @@ FUND_INDICATOR_COLS = [
     "fcf_yield", "altman_z",
 ]
 
+# 지표 소분류 — 조건 빌더 UI에서 드롭다운을 그룹화하기 위한 분류
+INDICATOR_GROUPS: dict[str, list[str]] = {
+    "가격·수익률": ["price_level", "pct_change_1d", "pct_change_5d",
+                  "pct_change_20d", "pct_change_252d", "log_return_1d"],
+    "모멘텀":      ["momentum_12_1m", "streak"],
+    "이동평균":    ["ma_dev_20d", "ma_dev_60d", "ma_dev_200d",
+                  "ma_gap_20_60", "high_dev_20d"],
+    "변동성·기술적": ["bb_width", "bb_pct", "rsi_14", "rsi_bear_div",
+                   "atr_14_pct", "realized_vol_20d", "realized_vol_60d"],
+    "통계":        ["zscore_20d", "zscore_60d"],
+    "거래량":      ["volume_ratio", "adv_20d"],
+    "펀더멘털":     list(FUND_INDICATOR_COLS),
+}
+
+_COL_TO_GROUP = {col: grp for grp, cols in INDICATOR_GROUPS.items() for col in cols}
+
+
+def get_indicator_group(col: str) -> str:
+    """지표 컬럼이 속한 소분류명을 반환."""
+    return _COL_TO_GROUP.get(col, "기타")
+
 
 def compute_all(df: pd.DataFrame, fund_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     df = add_returns(df)

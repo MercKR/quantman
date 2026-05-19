@@ -1,6 +1,7 @@
-export interface IndicatorInfo { key: string; label: string }
+export interface IndicatorInfo { key: string; label: string; group: string }
 export interface SymbolInfo {
-  symbol: string; tradable: boolean; rows: number; indicators: IndicatorInfo[];
+  symbol: string; category: string; tradable: boolean; rows: number;
+  indicators: IndicatorInfo[];
 }
 
 export type Op = ">" | ">=" | "<" | "<=" | "between" | "cross_up" | "cross_down";

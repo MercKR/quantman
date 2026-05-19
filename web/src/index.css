@@ -90,6 +90,74 @@ button.sm { padding: 5px 10px; font-size: 13px; }
 .logic-toggle { display: inline-flex; gap: 4px; margin: 6px 0 10px; }
 .logic-toggle button { padding: 4px 12px; font-size: 13px; }
 
+/* 조건 칩 + 팝오버 */
+.chip-wrap { position: relative; display: inline-block; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 10px; font: inherit; font-size: 13px; color: var(--text);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 7px; cursor: pointer;
+}
+.chip:hover { border-color: var(--accent); }
+.chip-caret { color: var(--muted); font-size: 9px; }
+.chip.ghost-chip { color: var(--muted); border-style: dashed; }
+.op-select {
+  padding: 6px 8px; font: inherit; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 7px; background: var(--panel);
+}
+.x-btn {
+  border: none; background: none; cursor: pointer; color: var(--muted);
+  font-size: 14px; padding: 0 2px; line-height: 1;
+}
+
+.popover {
+  position: absolute; top: calc(100% + 5px); left: 0; z-index: 50;
+  width: 308px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18); padding: 12px;
+}
+.popover input { width: auto; }
+.popover .pop-search {
+  width: 100%; box-sizing: border-box; padding: 7px 9px;
+  font: inherit; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.seg { display: flex; gap: 4px; margin-bottom: 4px; }
+.seg button {
+  flex: 1; padding: 6px 8px; font: inherit; font-size: 12px; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--muted);
+}
+.seg button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.op-label {
+  font-size: 11px; color: var(--muted); font-weight: 600;
+  margin: 9px 0 3px;
+}
+.op-field { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.op-field.hist-row { flex-wrap: wrap; }
+.op-field label { font-size: 12px; color: var(--muted); }
+.popover .op-field input { width: 64px; }
+
+.cat-list {
+  max-height: 154px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.cat-head {
+  font-size: 10px; color: var(--muted); font-weight: 700;
+  padding: 5px 9px 3px; background: var(--bg);
+  position: sticky; top: 0;
+}
+.cat-item {
+  display: block; width: 100%; text-align: left;
+  padding: 6px 10px; font: inherit; font-size: 13px;
+  background: none; border: none; cursor: pointer; color: var(--text);
+}
+.cat-item:hover { background: var(--bg); }
+.cat-item.sel { background: var(--accent); color: #fff; }
+.cat-empty {
+  padding: 12px; color: var(--muted); font-size: 12px; text-align: center;
+}
+
 /* 테이블 */
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--border); }

@@ -25,9 +25,11 @@ def list_symbols(user: User = Depends(get_current_user)):
         cols = [c for c in df.columns if c in indic_cols]
         out.append({
             "symbol": sym,
+            "category": qc.symbol_category(sym),
             "tradable": {"Open", "Close"}.issubset(df.columns),
             "rows": len(df),
-            "indicators": [{"key": c, "label": qc.get_indicator_label(c)} for c in cols],
+            "indicators": [{"key": c, "label": qc.get_indicator_label(c),
+                            "group": qc.get_indicator_group(c)} for c in cols],
         })
     return {"symbols": out}
 
