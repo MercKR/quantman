@@ -7,8 +7,9 @@ from pathlib import Path
 APP_DIR = Path(os.getenv("QP_LOCAL_DIR", Path.home() / ".quant-platform"))
 APP_DIR.mkdir(parents=True, exist_ok=True)
 
-# 연동할 플랫폼 서버
-PLATFORM_URL = os.getenv("QP_PLATFORM_URL", "http://localhost:8000")
+# 연동할 플랫폼 서버 (배포 기본값 — 개발 시 QP_PLATFORM_URL 환경변수로 덮어쓰기)
+PLATFORM_URL = os.getenv("QP_PLATFORM_URL",
+                         "https://quantman-production.up.railway.app")
 
 # keyring 서비스명 (OS 자격증명 저장소 키)
 KEYRING_SERVICE = "quant-platform-local"
