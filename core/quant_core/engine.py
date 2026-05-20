@@ -13,6 +13,7 @@ import pandas as pd
 
 from .analysis import build_signal_mask, run_analysis
 from .backtest import run_backtest
+from .exec_defaults import merged_execution
 from .strategy import Strategy
 
 
@@ -27,8 +28,17 @@ def run_strategy_backtest(
     start=None,
     end=None,
 ) -> dict:
-    """Strategy를 과거 데이터로 시뮬레이션한다."""
+    """Strategy를 과거 데이터로 시뮬레이션한다.
+
+    ExecutionPolicy(있으면 글로벌 default와 병합)의 비용·갭 가정을 적용한다.
+    레거시 commission/slippage 필드는 ExecutionPolicy가 없을 때만 fallback.
+    """
     ex = strategy.exit_rules
+    pol_dict = strategy.execution.model_dump() if strategy.execution else None
+    pol = merged_execution(pol_dict)
+    # 편도 비용을 bps → 비율로 변환. 정책 우선, fallback은 strategy 필드.
+    commission = pol["bt_commission_bps"] / 10_000.0
+    slippage = pol["bt_slippage_bps"] / 10_000.0
     return run_backtest(
         data=data,
         trade_symbol=strategy.trade_symbol,
@@ -42,11 +52,13 @@ def run_strategy_backtest(
         sell_conditions=_conds(strategy.sell) if strategy.sell else None,
         sell_logic=strategy.sell.logic if strategy.sell else "AND",
         fill=strategy.fill,
-        commission=strategy.commission,
-        slippage=strategy.slippage,
+        commission=commission,
+        slippage=slippage,
         initial_capital=initial_capital,
         start=start,
         end=end,
+        gap_extra_cost=bool(pol["bt_gap_extra_cost"]),
+        gap_threshold_pct=float(pol["bt_gap_threshold_pct"]),
     )
 
 

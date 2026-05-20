@@ -20,12 +20,19 @@ ledger.json
 equity.json
 trades.jsonl
 pending_snapshot.json
+orders.jsonl
+cycles.jsonl
+killswitch.json
+slippage.json
+pending_orders.json
 
 # 빌드 산출물
 dist/
 dist2/
+dist_rel/
 build/
 build2/
+build_rel/
 Output/
 *.zip
 

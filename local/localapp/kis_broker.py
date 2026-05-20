@@ -2,17 +2,25 @@
 
 자격증명은 keyring에서만 읽는다. Access Token은 APP_DIR에 캐싱(24h).
 실전(virtual=False) TR_ID도 분기하지만 첫 릴리스는 모의투자만 사용한다.
+
+Phase 9 확장:
+- 지정가 주문 (ORD_DVSN="00") + 시장가 (ORD_DVSN="01")
+- 주문 취소·정정 (order-rvsecncl)
+- 일별 주문체결 조회 (inquire-daily-ccld) — 미체결/체결 상태 추적
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta
 
 import requests
 
 from .config import APP_DIR
 from .secrets_store import load_kis
+
+log = logging.getLogger("localapp.kis_broker")
 
 _VTS = "https://openapivts.koreainvestment.com:29443"
 _REAL = "https://openapi.koreainvestment.com:9443"
@@ -118,24 +126,138 @@ class KisBroker:
 
     # ── 주문 ──────────────────────────────────────────────────────────────────
 
-    def _order(self, symbol: str, qty: int, side: str) -> dict:
+    def _submit(self, symbol: str, qty: int, side: str,
+                ord_dvsn: str, unit_price: int) -> dict:
+        """ord_dvsn: 00=지정가, 01=시장가. unit_price는 지정가일 때만 의미.
+
+        반환: {success, message, order_no, filled_qty(=0, 미체결 시작), msg_cd}
+        """
         if side == "buy":
             tr = "VTTC0802U" if self.virtual else "TTTC0802U"
         else:
             tr = "VTTC0801U" if self.virtual else "TTTC0801U"
-        r = requests.post(f"{self.base}/uapi/domestic-stock/v1/trading/order-cash",
-                          headers=self._headers(tr), timeout=10, json={
+        body = {
             "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_cd,
-            "PDNO": symbol, "ORD_DVSN": "01",   # 시장가
-            "ORD_QTY": str(qty), "ORD_UNPR": "0",
-        })
+            "PDNO": symbol, "ORD_DVSN": ord_dvsn,
+            "ORD_QTY": str(qty),
+            "ORD_UNPR": str(unit_price) if ord_dvsn == "00" else "0",
+        }
+        r = requests.post(f"{self.base}/uapi/domestic-stock/v1/trading/order-cash",
+                          headers=self._headers(tr), timeout=10, json=body)
+        d = _kis_check(r)
+        return {
+            "success": d.get("rt_cd") == "0",
+            "message": d.get("msg1", ""),
+            "msg_cd": d.get("msg_cd", ""),
+            "order_no": d.get("output", {}).get("ODNO", ""),
+            "ord_branch": d.get("output", {}).get("KRX_FWDG_ORD_ORGNO", ""),
+            "filled_qty": 0,
+        }
+
+    def buy(self, symbol: str, qty: int) -> dict:
+        return self._submit(symbol, qty, "buy", "01", 0)
+
+    def sell(self, symbol: str, qty: int) -> dict:
+        return self._submit(symbol, qty, "sell", "01", 0)
+
+    def buy_limit(self, symbol: str, qty: int, limit_price: int) -> dict:
+        return self._submit(symbol, qty, "buy", "00", int(limit_price))
+
+    def sell_limit(self, symbol: str, qty: int, limit_price: int) -> dict:
+        return self._submit(symbol, qty, "sell", "00", int(limit_price))
+
+    # ── 주문 취소 / 조회 ──────────────────────────────────────────────────────
+
+    def cancel(self, order_no: str, symbol: str, qty: int,
+               ord_branch: str = "") -> dict:
+        """미체결 주문 전량 취소."""
+        tr = "VTTC0803U" if self.virtual else "TTTC0803U"
+        r = requests.post(
+            f"{self.base}/uapi/domestic-stock/v1/trading/order-rvsecncl",
+            headers=self._headers(tr), timeout=10, json={
+                "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_cd,
+                "KRX_FWDG_ORD_ORGNO": ord_branch or "",
+                "ORGN_ODNO": order_no, "ORD_DVSN": "00",
+                "RVSE_CNCL_DVSN_CD": "02",       # 02 = 취소
+                "ORD_QTY": str(qty), "ORD_UNPR": "0",
+                "QTY_ALL_ORD_YN": "Y",
+            })
         d = _kis_check(r)
         return {"success": d.get("rt_cd") == "0",
                 "message": d.get("msg1", ""),
-                "order_no": d.get("output", {}).get("ODNO", "")}
+                "msg_cd": d.get("msg_cd", "")}
 
-    def buy(self, symbol: str, qty: int) -> dict:
-        return self._order(symbol, qty, "buy")
+    def _daily_ccld(self) -> dict:
+        """당일 주문체결 조회 — 미체결·체결·취소 모두 포함."""
+        tr = "VTTC8001R" if self.virtual else "TTTC8001R"
+        today = datetime.now().strftime("%Y%m%d")
+        r = requests.get(
+            f"{self.base}/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+            headers=self._headers(tr), timeout=10, params={
+                "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_cd,
+                "INQR_STRT_DT": today, "INQR_END_DT": today,
+                "SLL_BUY_DVSN_CD": "00", "INQR_DVSN": "00",
+                "PDNO": "", "CCLD_DVSN": "00",
+                "ORD_GNO_BRNO": "", "ODNO": "",
+                "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
+                "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+            })
+        return _kis_check(r)
 
-    def sell(self, symbol: str, qty: int) -> dict:
-        return self._order(symbol, qty, "sell")
+    def order_status(self, order_no: str) -> dict:
+        """특정 주문번호의 현재 상태."""
+        try:
+            body = self._daily_ccld()
+        except Exception as e:
+            log.warning("주문 조회 실패: %s", e)
+            return {"order_no": order_no, "status": "unknown",
+                    "filled_qty": 0, "remain_qty": 0, "fill_price": 0.0}
+        for row in body.get("output1", []) or []:
+            if row.get("odno") == order_no:
+                ord_qty = int(row.get("ord_qty", 0) or 0)
+                ccld_qty = int(row.get("tot_ccld_qty", 0) or 0)
+                avg_px = float(row.get("avg_prvs", 0) or 0)
+                cncl = row.get("cncl_yn", "") == "Y"
+                if cncl:
+                    status = "cancelled"
+                elif ccld_qty >= ord_qty and ord_qty > 0:
+                    status = "filled"
+                elif ccld_qty > 0:
+                    status = "partial"
+                else:
+                    status = "submitted"
+                return {"order_no": order_no, "status": status,
+                        "filled_qty": ccld_qty,
+                        "remain_qty": max(0, ord_qty - ccld_qty),
+                        "fill_price": avg_px,
+                        "ord_branch": row.get("ord_gno_brno", "")}
+        return {"order_no": order_no, "status": "unknown",
+                "filled_qty": 0, "remain_qty": 0, "fill_price": 0.0}
+
+    def pending_orders(self) -> list[dict]:
+        """현재 미체결 잔량이 있는 주문 목록."""
+        try:
+            body = self._daily_ccld()
+        except Exception as e:
+            log.warning("미체결 조회 실패: %s", e)
+            return []
+        out = []
+        for row in body.get("output1", []) or []:
+            ord_qty = int(row.get("ord_qty", 0) or 0)
+            ccld_qty = int(row.get("tot_ccld_qty", 0) or 0)
+            if row.get("cncl_yn", "") == "Y":
+                continue
+            remain = ord_qty - ccld_qty
+            if remain <= 0:
+                continue
+            out.append({
+                "order_no": row.get("odno", ""),
+                "symbol": row.get("pdno", ""),
+                "name": row.get("prdt_name", ""),
+                "side": "buy" if row.get("sll_buy_dvsn_cd") == "02" else "sell",
+                "qty": ord_qty, "filled_qty": ccld_qty, "remain_qty": remain,
+                "limit_price": float(row.get("ord_unpr", 0) or 0),
+                "ord_branch": row.get("ord_gno_brno", ""),
+                "submitted_at": row.get("ord_tmd", ""),
+            })
+        return out

@@ -114,3 +114,28 @@ class SyncSnapshotOut(BaseModel):
     payload: dict[str, Any]
     received_at: datetime
     device_id: int
+
+
+# ── 명령 큐 ───────────────────────────────────────────────────────────────────
+
+class CommandIn(BaseModel):
+    device_id: int                       # 명령을 받을 기기 (사용자 소유 확인)
+    type: str                            # 명령 타입
+    params: dict[str, Any] = {}
+
+
+class CommandAckIn(BaseModel):
+    status: str                          # done | failed
+    result: dict[str, Any] = {}
+
+
+class CommandOut(BaseModel):
+    id: int
+    device_id: int
+    type: str
+    params: dict[str, Any]
+    status: str
+    created_at: datetime
+    delivered_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    result: dict[str, Any]

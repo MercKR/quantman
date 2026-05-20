@@ -72,6 +72,52 @@ export interface DeviceRow {
   id: number; name: string; created_at: string; last_seen_at: string | null;
 }
 
+export interface PendingOrder {
+  order_no: string; symbol: string; name?: string;
+  side: "buy" | "sell"; qty: number; filled_qty?: number;
+  remain_qty?: number; limit_price?: number; submitted_at?: string;
+}
+
+export interface OrderEvent {
+  ts: string;
+  event: "submitted" | "filled" | "partial" | "cancelled" | "rejected" | "timeout";
+  side: "buy" | "sell"; symbol: string; qty: number;
+  order_no?: string; intended_price?: number | null;
+  limit_price?: number | null; fill_price?: number | null;
+  strategy?: string; reason?: string; msg?: string;
+}
+
+export interface CycleSummary {
+  today?: string; n_strategies?: number;
+  n_bought?: number; n_sold?: number;
+  n_skip_gap?: number; n_skip_signal?: number; n_skip_held?: number;
+  n_rejected?: number; n_unfilled?: number; n_errors?: number;
+  kill_switch?: boolean;
+  equity_pre?: number; equity_post?: number;
+}
+
+export interface CycleRow {
+  ts: string;
+  decisions: { action: string; strategy_id: string; strategy_name: string;
+                symbol: string; reason: string;
+                prev_close?: number; cur_price?: number;
+                intended?: number; fill?: number }[];
+  summary: CycleSummary;
+}
+
+export interface SlippageStats {
+  n: number;
+  avg_bps: number | null; p50_bps: number | null;
+  p95_bps: number | null; max_bps: number | null;
+  recent: { ts: string; side: string; symbol: string;
+             intended: number; fill: number; bps: number }[];
+}
+
+export interface KillSwitchState {
+  active: boolean; since: string | null; reason: string;
+  day_start_equity: number | null; day_start_date: string | null;
+}
+
 export interface SyncSnapshot {
   payload: {
     balance?: { cash: number; total_eval: number };
@@ -79,6 +125,26 @@ export interface SyncSnapshot {
                   avg_price?: number; eval_price?: number }[];
     equity?: { date: string; value: number }[];
     trades?: Record<string, string | number>[];
+    decisions?: CycleRow["decisions"];
+    broker_pending?: PendingOrder[];
+    pending_local?: PendingOrder[];
+    recent_orders?: OrderEvent[];
+    recent_cycles?: CycleRow[];
+    slippage?: SlippageStats;
+    kill_switch?: KillSwitchState;
+    cycle_summary?: CycleSummary;
   };
   received_at: string; device_id: number;
+}
+
+export type CommandType =
+  | "RUN_CYCLE_NOW" | "PAUSE_AUTO" | "RESUME_AUTO"
+  | "LIQUIDATE_ALL" | "CANCEL_ORDER" | "RESET_KILL_SWITCH";
+
+export interface CommandRow {
+  id: number; device_id: number; type: CommandType;
+  params: Record<string, string | number>;
+  status: "pending" | "delivered" | "done" | "failed";
+  created_at: string; delivered_at: string | null;
+  completed_at: string | null; result: Record<string, unknown>;
 }

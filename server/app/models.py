@@ -67,3 +67,23 @@ class SyncSnapshot(SQLModel, table=True):
     device_id: int = Field(foreign_key="device.id")
     payload: dict = Field(default_factory=dict, sa_column=Column(JSON))
     received_at: datetime = Field(default_factory=_now)
+
+
+class Command(SQLModel, table=True):
+    """웹 → 로컬앱 명령 큐.
+
+    웹에서 사용자가 발행하면 status='pending'으로 저장. 로컬앱이 SSE 또는
+    폴링으로 pickup → 실행 → status='done|failed'로 업데이트.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, foreign_key="user.id")
+    device_id: int = Field(index=True, foreign_key="device.id")
+    # RUN_CYCLE_NOW / PAUSE_AUTO / RESUME_AUTO / LIQUIDATE_ALL
+    # / CANCEL_ORDER / RESET_KILL_SWITCH
+    type: str
+    params: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    status: str = "pending"           # pending | delivered | done | failed
+    created_at: datetime = Field(default_factory=_now)
+    delivered_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    result: dict = Field(default_factory=dict, sa_column=Column(JSON))

@@ -1,6 +1,6 @@
 import type {
-  AnalysisResult, BacktestResult, DeviceRow, StrategyDef,
-  StrategyRow, SymbolInfo, SyncSnapshot,
+  AnalysisResult, BacktestResult, CommandRow, CommandType, DeviceRow,
+  StrategyDef, StrategyRow, SymbolInfo, SyncSnapshot,
 } from "./types";
 
 const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
@@ -80,4 +80,18 @@ export const api = {
     }),
 
   snapshot: () => req<SyncSnapshot | null>("/sync/snapshot"),
+
+  // 명령 버스 — 웹에서 발행, 로컬앱이 SSE로 수신·실행
+  listCommands: (deviceId?: number, onlyPending = false) => {
+    const q = new URLSearchParams();
+    if (deviceId !== undefined) q.set("device_id", String(deviceId));
+    if (onlyPending) q.set("only_pending", "true");
+    return req<CommandRow[]>(`/sync/commands?${q.toString()}`);
+  },
+  createCommand: (deviceId: number, type: CommandType,
+                   params: Record<string, string | number> = {}) =>
+    req<CommandRow>("/sync/commands", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, type, params }),
+    }),
 };

@@ -5,6 +5,7 @@ const NAV = [
   { to: "/", label: "대시보드" },
   { to: "/backtest", label: "백테스트" },
   { to: "/strategies", label: "내 전략" },
+  { to: "/monitor", label: "자동매매 모니터" },
   { to: "/pair", label: "기기 연결" },
 ];
 

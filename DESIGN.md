@@ -82,8 +82,30 @@
 
 미니멀-기능적. 색·투명도 전환만(120ms 내외). 등장 애니메이션·스크롤 연출 없음.
 
+## 자동매매 정책 (Phase 9A부터)
+
+베타 단계의 자동매매는 다음 best practice를 글로벌 default로 적용한다. 전략별
+override는 `Strategy.execution` 필드로 가능. 자세한 근거는 별도 리서치 노트 참조.
+
+1. **시장가 → 지정가 + price tolerance.** 신규 진입은 어제 종가 × (1 + 1%)
+   지정가, 청산은 −2% 지정가. 미체결 시 5분 후 자동 취소 → 그날 신호 폐기.
+   호가 단위 자동 라운딩.
+2. **갭 필터.** 전일 종가 대비 현재가 갭이 ±2.5% 초과 시 신규 진입 폐기.
+   매도 시그널은 손절을 위해 갭 필터 무시 (단 limit tolerance로 보호).
+3. **일일 손실 한도 + kill switch.** 자본 대비 −3% 도달 시 자동 전량 청산 +
+   신규 차단. 사용자가 명시적 reset 전까지 유지.
+4. **ATR 변동성 보정 사이징.** 수량 = (자본 × 1% risk) ÷ (ATR × 2). 단일
+   종목 비중은 자본의 10%로 클램프. 레거시 `amount_pct` 모드(`sizing_mode:
+   pct_cash`)도 지원.
+5. **백테스트 슬리피지·갭 가정.** 편도 25bps 수수료 + 10bps 슬리피지 default,
+   갭 1% 초과분의 절반을 추가 비용으로 산입. 라이브에서는 의도가 vs 체결가를
+   bps로 누적 측정해 백테스트 가정과 비교 가능하게 함.
+
 ## 변경 이력
 
 | 날짜 | 결정 | 근거 |
 |------|------|------|
 | 2026-05-20 | 초기 디자인 시스템 문서화 | 기존 인디고 클린 스타일을 유지·정제하기로 하고, 웹앱 흐름·결과해석 개선과 로컬앱 Tkinter 정제를 진행하며 토큰·패턴을 명문화 |
+| 2026-05-20 | Phase 9A — 자동매매 5 best practice 도입 | 갭 체결 문제 발견 + 업계 리서치 결과 반영. ExecutionPolicy 스키마 + 글로벌 default + strategy override 구조. 모든 변경은 후방호환(필드 모두 Optional, None이면 default). |
+| 2026-05-20 | Phase 9B — 상세 거래 추적 + 로컬앱 GUI 확장 | orders.jsonl / cycles.jsonl / slippage.json / pending_orders.json 인프라. 로컬앱에 Notebook 5탭(주문 현황 / 주문 내역 / 사이클 로그 / 슬리피지 / 활동 로그) + kill switch 배너·reset 버튼 추가. |
+| 2026-05-20 | Phase 9C — 웹↔로컬 SSE 명령 전달 + 모니터 페이지 | Command 모델 + commands 라우터 (POST/GET/SSE stream/poll fallback/ack). 로컬앱 CommandClient (SSE → 폴링 fallback, 지수 백오프). 웹 /monitor 페이지: 미체결·주문 내역·사이클·슬리피지·kill switch + 액션 버튼(RUN_CYCLE / PAUSE / RESUME / LIQUIDATE / CANCEL / RESET). |

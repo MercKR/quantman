@@ -18,3 +18,10 @@ LEDGER_PATH = APP_DIR / "ledger.json"
 EQUITY_PATH = APP_DIR / "equity.json"
 TRADES_PATH = APP_DIR / "trades.jsonl"
 PENDING_PATH = APP_DIR / "pending_snapshot.json"
+
+# Phase 9 추가
+ORDERS_PATH = APP_DIR / "orders.jsonl"           # 주문 이벤트 로그 (제출/체결/취소/거부)
+CYCLES_PATH = APP_DIR / "cycles.jsonl"           # 사이클별 의사결정 로그
+KILLSWITCH_PATH = APP_DIR / "killswitch.json"    # kill switch 상태
+PENDING_ORDERS_PATH = APP_DIR / "pending_orders.json"  # 미체결 추적
+SLIPPAGE_PATH = APP_DIR / "slippage.json"        # 누적 슬리피지 통계

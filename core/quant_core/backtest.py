@@ -76,6 +76,8 @@ def run_backtest(
     initial_capital: float = 10_000_000.0,
     start=None,
     end=None,
+    gap_extra_cost: bool = False,
+    gap_threshold_pct: float = 1.0,
 ) -> dict:
     """매매 전략을 과거 데이터로 시뮬레이션한다. 결과 dict를 반환한다."""
     if trade_symbol not in data or data[trade_symbol].empty:
@@ -135,9 +137,23 @@ def run_backtest(
     trades: list[dict] = []
     equity = np.empty(n, dtype=float)
 
+    def _gap_extra(i: int) -> float:
+        """전일 종가 → 당일 시가 갭이 임계값 초과 시 추가 슬리피지 (편도)."""
+        if not gap_extra_cost or i == 0:
+            return 0.0
+        prev_close = closes[i - 1]
+        if prev_close <= 0:
+            return 0.0
+        gap_pct = abs(opens[i] - prev_close) / prev_close * 100
+        if gap_pct <= gap_threshold_pct:
+            return 0.0
+        # 임계값 초과분의 절반을 추가 비용으로 계상
+        return (gap_pct - gap_threshold_pct) / 100 * 0.5
+
     def _open(i: int, raw_price: float):
         nonlocal cash, shares, position, entry_price, entry_i, peak_high, peak_close
-        price = raw_price * (1 + slippage)
+        extra = _gap_extra(i) if next_open else 0.0
+        price = raw_price * (1 + slippage + extra)
         shares = cash / (price * (1 + commission))
         cash -= shares * price * (1 + commission)
         entry_price = price
@@ -148,7 +164,8 @@ def run_backtest(
 
     def _close(i: int, raw_price: float, reason: str):
         nonlocal cash, shares, position
-        price = raw_price * (1 - slippage)
+        extra = _gap_extra(i) if next_open else 0.0
+        price = raw_price * (1 - slippage - extra)
         proceeds = shares * price * (1 - commission)
         cost = shares * entry_price * (1 + commission)
         trades.append({

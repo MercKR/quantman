@@ -84,6 +84,35 @@ class ExitRules(BaseModel):
     trail_pct: Optional[float] = None        # %
 
 
+class ExecutionPolicy(BaseModel):
+    """체결 정책 — 모든 필드가 Optional. None이면 글로벌 default 사용.
+
+    quant_core.exec_defaults.DEFAULT_EXECUTION에 정의된 default와 병합된다.
+    """
+    # 주문 유형
+    use_limit: Optional[bool] = None
+    buy_tolerance_pct: Optional[float] = None
+    sell_tolerance_pct: Optional[float] = None
+    exit_tolerance_pct: Optional[float] = None
+    unfilled_timeout_sec: Optional[int] = None
+    poll_interval_sec: Optional[int] = None
+    # 갭 필터
+    gap_filter_pct: Optional[float] = None
+    # 사이징
+    sizing_mode: Optional[str] = None              # "pct_cash" | "atr_risk"
+    atr_risk_pct: Optional[float] = None
+    atr_mult: Optional[float] = None
+    max_position_pct: Optional[float] = None
+    # 시스템 리스크
+    daily_loss_limit_pct: Optional[float] = None
+    max_drawdown_pct: Optional[float] = None
+    # 백테스트 비용 가정
+    bt_commission_bps: Optional[float] = None
+    bt_slippage_bps: Optional[float] = None
+    bt_gap_extra_cost: Optional[bool] = None
+    bt_gap_threshold_pct: Optional[float] = None
+
+
 class Strategy(BaseModel):
     """매매 전략 — 백테스트/모의/실전 공용."""
     name: str = "새 전략"
@@ -96,3 +125,5 @@ class Strategy(BaseModel):
     fill: Fill = "next_open"                           # 백테스트 체결 모델
     commission: float = 0.00015
     slippage: float = 0.0005
+    # 체결 정책 — None이면 글로벌 default 적용
+    execution: Optional[ExecutionPolicy] = None

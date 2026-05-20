@@ -1,0 +1,180 @@
+"""주문 이벤트 로그 + 사이클 의사결정 로그 + 슬리피지 통계.
+
+- orders.jsonl: 주문 단위 이벤트 (submitted/filled/cancelled/rejected)
+- cycles.jsonl: 사이클 단위 요약 (어떤 전략이 진입·스킵됐고 사유는)
+- slippage.json: 최근 N건의 (intended, fill, bps) 누적 통계
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Iterable
+
+from .config import CYCLES_PATH, ORDERS_PATH, SLIPPAGE_PATH
+
+log = logging.getLogger("localapp.orderlog")
+
+_SLIPPAGE_KEEP = 100   # 최근 N건만 유지
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _append(path, obj: dict) -> None:
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    except Exception as e:
+        log.warning("로그 기록 실패 [%s]: %s", path.name, e)
+
+
+# ── 주문 이벤트 ────────────────────────────────────────────────────────────────
+
+def log_order(event: str, symbol: str, side: str, qty: int,
+              order_no: str = "", intended_price: float | None = None,
+              limit_price: float | None = None, fill_price: float | None = None,
+              strategy_name: str = "", reason: str = "",
+              extra: dict | None = None) -> None:
+    """주문 이벤트 한 건을 orders.jsonl에 append.
+
+    event: submitted | filled | partial | cancelled | rejected | timeout
+    """
+    row = {
+        "ts": _now(), "event": event, "side": side, "symbol": symbol,
+        "qty": int(qty), "order_no": order_no,
+        "intended_price": intended_price, "limit_price": limit_price,
+        "fill_price": fill_price, "strategy": strategy_name, "reason": reason,
+    }
+    if extra:
+        row.update(extra)
+    _append(ORDERS_PATH, row)
+    # 체결 이벤트면 슬리피지 누적
+    if event == "filled" and intended_price and fill_price and intended_price > 0:
+        record_slippage(side, symbol, intended_price, fill_price)
+
+
+def read_orders(limit: int = 100) -> list[dict]:
+    """최근 N건의 주문 이벤트 읽기. 신규 → 과거 순."""
+    if not ORDERS_PATH.exists():
+        return []
+    try:
+        lines = ORDERS_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    rows = []
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+# ── 사이클 의사결정 ────────────────────────────────────────────────────────────
+
+def log_cycle(decisions: list[dict], summary: dict) -> None:
+    """1회 사이클 의사결정·결과 요약."""
+    _append(CYCLES_PATH, {"ts": _now(), "decisions": decisions, "summary": summary})
+
+
+def read_cycles(limit: int = 20) -> list[dict]:
+    if not CYCLES_PATH.exists():
+        return []
+    try:
+        lines = CYCLES_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    rows = []
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+# ── 슬리피지 통계 ──────────────────────────────────────────────────────────────
+
+def _load_slip() -> dict:
+    if not SLIPPAGE_PATH.exists():
+        return {"samples": []}
+    try:
+        return json.loads(SLIPPAGE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"samples": []}
+
+
+def _save_slip(d: dict) -> None:
+    SLIPPAGE_PATH.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+
+
+def record_slippage(side: str, symbol: str, intended: float, fill: float) -> None:
+    """체결 1건의 슬리피지를 bps 단위로 누적."""
+    if intended <= 0:
+        return
+    # 매수: 체결가 > 의도 → 양의 슬리피지(불리). 매도: 체결가 < 의도 → 양의 슬리피지.
+    sign = 1 if side == "buy" else -1
+    bps = sign * (fill - intended) / intended * 10_000
+    d = _load_slip()
+    d["samples"].append({"ts": _now(), "side": side, "symbol": symbol,
+                          "intended": intended, "fill": fill, "bps": round(bps, 2)})
+    d["samples"] = d["samples"][-_SLIPPAGE_KEEP:]
+    _save_slip(d)
+
+
+def slippage_stats() -> dict:
+    """평균·중앙값·p95 슬리피지 bps."""
+    d = _load_slip()
+    samples = d.get("samples", [])
+    n = len(samples)
+    if n == 0:
+        return {"n": 0, "avg_bps": None, "p50_bps": None, "p95_bps": None,
+                "max_bps": None, "recent": []}
+    bps_list = sorted(s["bps"] for s in samples)
+    avg = sum(bps_list) / n
+    p50 = bps_list[n // 2]
+    p95 = bps_list[min(n - 1, int(n * 0.95))]
+    return {
+        "n": n, "avg_bps": round(avg, 2), "p50_bps": round(p50, 2),
+        "p95_bps": round(p95, 2), "max_bps": round(bps_list[-1], 2),
+        "recent": list(reversed(samples[-10:])),
+    }
+
+
+# ── Decision helper (사이클 빌더용) ────────────────────────────────────────────
+
+def decision(action: str, strategy_id: str | int = "", strategy_name: str = "",
+             symbol: str = "", reason: str = "", extra: dict | None = None) -> dict:
+    """사이클 의사결정 한 줄을 만든다.
+
+    action: bought | sold | skip_gap | skip_killswitch | skip_signal | skip_funds
+            | skip_held | unfilled | rejected | error
+    """
+    row = {"action": action, "strategy_id": str(strategy_id),
+           "strategy_name": strategy_name, "symbol": symbol, "reason": reason}
+    if extra:
+        row.update(extra)
+    return row
+
+
+def iter_open_orders(orders: Iterable[dict]) -> list[dict]:
+    """orders.jsonl 이벤트들로부터 현재 미체결 상태인 주문만 추려낸다."""
+    by_no: dict[str, dict] = {}
+    for o in orders:
+        no = o.get("order_no", "")
+        if not no:
+            continue
+        by_no[no] = o
+    return [o for o in by_no.values()
+            if o.get("event") in ("submitted", "partial")]

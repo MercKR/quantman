@@ -9,15 +9,26 @@ UI는 웹앱과 같은 인디고 톤으로 맞추고, 상단 상태 히어로 + 
 
 from __future__ import annotations
 
+import json
 import socket
 import threading
 import tkinter as tk
 import webbrowser
 from tkinter import messagebox, ttk
 
-from . import pairing, secrets_store
-from .config import EQUITY_PATH, LEDGER_PATH, PLATFORM_URL
+from . import killswitch, order_log, pairing, secrets_store
+from .commands_client import CommandClient
+from .config import (EQUITY_PATH, LEDGER_PATH, PENDING_ORDERS_PATH,
+                       PLATFORM_URL)
 from .logging_setup import setup_logging
+
+
+def json_dumps(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def json_loads(s: str):
+    return json.loads(s)
 
 _LOG_PATH_NAME = "logs/localapp.log"
 
@@ -32,6 +43,7 @@ ACCENT_DARK = "#4338ca"
 GREEN = "#15803d"
 AMBER = "#b45309"
 SLATE = "#475569"
+RED = "#b91c1c"
 
 
 def _read_json(path, default):
@@ -51,15 +63,20 @@ class SettingsApp:
         setup_logging()
         self.scheduler = None
         self.on_close_to_tray = None     # tray.py가 주입
+        self.auto_paused = False         # 웹의 PAUSE_AUTO 명령으로 일시정지된 상태
 
         self.root = tk.Tk()
         self.root.title("퀀트 플랫폼 — 로컬앱")
-        self.root.geometry("560x740")
-        self.root.resizable(False, True)
+        self.root.geometry("760x900")
+        self.root.resizable(True, True)
         self._apply_theme()
         self._build()
         self.refresh_status()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # 웹에서 발행한 명령 수신 시작 (페어링돼 있으면 즉시 연결)
+        self.cmd_client = CommandClient(self._handle_command)
+        self.cmd_client.start()
 
     # ── 테마 ──────────────────────────────────────────────────────────────────
 
@@ -98,6 +115,25 @@ class SettingsApp:
                   background=[("active", ACCENT_DARK),
                               ("disabled", "#c7c9d1")],
                   foreground=[("disabled", "#ffffff")])
+        # 위험 액션 (kill switch reset 등) — 빨간 액센트
+        style.configure("Danger.TButton", background=RED,
+                        foreground="#ffffff", bordercolor=RED,
+                        padding=(10, 6), font=("Segoe UI", 9, "bold"))
+        style.map("Danger.TButton",
+                  background=[("active", "#991b1b")])
+        # Notebook 탭 톤
+        style.configure("TNotebook", background=BG, borderwidth=0)
+        style.configure("TNotebook.Tab", background="#e9eaee", foreground=TEXT,
+                        padding=(14, 6))
+        style.map("TNotebook.Tab",
+                  background=[("selected", PANEL)],
+                  foreground=[("selected", ACCENT_DARK)])
+        # Treeview (주문/사이클 표) 톤
+        style.configure("Treeview", background=PANEL, fieldbackground=PANEL,
+                        foreground=TEXT, bordercolor=BORDER, borderwidth=1,
+                        rowheight=22, font=("Segoe UI", 9))
+        style.configure("Treeview.Heading", background="#eef0f3",
+                        foreground=TEXT, font=("Segoe UI", 9, "bold"))
 
     # ── UI 구성 ───────────────────────────────────────────────────────────────
 
@@ -113,6 +149,16 @@ class SettingsApp:
         self.hero_sub = tk.Label(self.hero, text="", bg=SLATE, fg="#e5e7eb",
                                  font=("Segoe UI", 9))
         self.hero_sub.pack(pady=(0, 14))
+
+        # Kill switch 배너 — 활성 시에만 표시
+        self.ks_banner = tk.Frame(self.root, bg=RED)
+        self.ks_label = tk.Label(self.ks_banner, text="", bg=RED, fg="#ffffff",
+                                  font=("Segoe UI", 10, "bold"))
+        self.ks_label.pack(side="left", padx=12, pady=8)
+        self.btn_ks_reset = ttk.Button(self.ks_banner, text="Kill Switch 해제",
+                                        style="Danger.TButton",
+                                        command=self._reset_killswitch)
+        self.btn_ks_reset.pack(side="right", padx=12, pady=6)
 
         # ① KIS 자격증명
         self.kf = ttk.LabelFrame(self.root, text="① KIS 모의투자 자격증명")
@@ -165,16 +211,109 @@ class SettingsApp:
         self.cycle_msg = ttk.Label(self.af, style="Muted.TLabel", text="")
         self.cycle_msg.pack(anchor="w", padx=12, pady=(2, 8))
 
-        # 활동 로그
-        lf = ttk.LabelFrame(self.root, text="활동 로그")
-        lf.pack(fill="both", expand=True, **pad)
-        self.log_text = tk.Text(lf, height=8, font=("Consolas", 8),
+        # 거래 모니터링 — Notebook: 주문 현황 / 주문 내역 / 사이클 로그 / 슬리피지 / 활동 로그
+        self.nb = ttk.Notebook(self.root)
+        self.nb.pack(fill="both", expand=True, padx=12, pady=(4, 4))
+
+        self._build_tab_pending()
+        self._build_tab_orders()
+        self._build_tab_cycles()
+        self._build_tab_slippage()
+        self._build_tab_log()
+
+        ttk.Button(self.root, text="새로고침", command=self.refresh_status).pack(
+            anchor="e", padx=14, pady=(0, 10))
+
+    # ── Notebook 탭들 ─────────────────────────────────────────────────────────
+
+    def _make_tree(self, parent, columns: list[tuple[str, str, int]]) -> ttk.Treeview:
+        """(id, heading, width) 컬럼 리스트로 Treeview 생성."""
+        frame = ttk.Frame(parent)
+        frame.pack(fill="both", expand=True, padx=8, pady=8)
+        tree = ttk.Treeview(frame, columns=[c[0] for c in columns],
+                             show="headings", height=10)
+        for cid, head, w in columns:
+            tree.heading(cid, text=head)
+            tree.column(cid, width=w, anchor="w")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        return tree
+
+    def _build_tab_pending(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text="주문 현황")
+        ttk.Label(f, style="Muted.TLabel", wraplength=700, justify="left",
+                  text="KIS에 제출되어 아직 체결되지 않은 주문입니다. "
+                       "동시호가에 들어간 주문은 9시 시초가에 일괄 체결됩니다."
+                  ).pack(anchor="w", padx=12, pady=(8, 0))
+        self.tv_pending = self._make_tree(f, [
+            ("time", "제출시각", 90), ("side", "방향", 60),
+            ("symbol", "종목", 80), ("name", "이름", 100),
+            ("qty", "주문수량", 70), ("filled", "체결", 60),
+            ("remain", "잔량", 60), ("limit", "지정가", 90),
+            ("order_no", "주문번호", 110),
+        ])
+
+    def _build_tab_orders(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text="주문 내역")
+        ttk.Label(f, style="Muted.TLabel",
+                  text="최근 100건의 주문 이벤트 — 제출 / 체결 / 취소 / 거부 모두."
+                  ).pack(anchor="w", padx=12, pady=(8, 0))
+        self.tv_orders = self._make_tree(f, [
+            ("time", "시각", 130), ("event", "상태", 70),
+            ("side", "방향", 50), ("symbol", "종목", 80),
+            ("qty", "수량", 60), ("limit", "지정가", 80),
+            ("fill", "체결가", 80), ("strategy", "전략", 110),
+            ("reason", "사유", 110),
+        ])
+
+    def _build_tab_cycles(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text="사이클 로그")
+        ttk.Label(f, style="Muted.TLabel",
+                  text="자동매매 사이클 단위 의사결정 요약 — 무엇을 왜 매수/매도/스킵했는지."
+                  ).pack(anchor="w", padx=12, pady=(8, 0))
+        self.tv_cycles = self._make_tree(f, [
+            ("time", "시각", 140), ("bought", "매수", 50),
+            ("sold", "매도", 50), ("gap", "갭스킵", 55),
+            ("signal", "신호X", 55), ("rejected", "거부", 55),
+            ("ks", "killswitch", 90), ("equity", "평가금액", 120),
+        ])
+        # 선택 시 상세 표시
+        self.tv_cycles.bind("<<TreeviewSelect>>", self._show_cycle_detail)
+        self.cycle_detail = tk.Text(f, height=8, font=("Consolas", 9),
+                                     state="disabled", wrap="word", bg=PANEL,
+                                     fg=TEXT, relief="solid", borderwidth=1,
+                                     highlightthickness=0)
+        self.cycle_detail.pack(fill="x", padx=8, pady=(0, 8))
+
+    def _build_tab_slippage(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text="슬리피지")
+        ttk.Label(f, style="Muted.TLabel", wraplength=700, justify="left",
+                  text="의도가 vs 체결가의 차이(bps). 양수 = 불리한 체결. "
+                       "20bps = 0.20%. 백테스트 가정(10bps default)과 비교 가능."
+                  ).pack(anchor="w", padx=12, pady=(8, 4))
+        self.slip_summary = ttk.Label(f, style="Muted.TLabel", text="",
+                                       font=("Segoe UI", 10, "bold"))
+        self.slip_summary.pack(anchor="w", padx=12, pady=(0, 8))
+        self.tv_slip = self._make_tree(f, [
+            ("time", "시각", 140), ("side", "방향", 60),
+            ("symbol", "종목", 80), ("intended", "의도가", 100),
+            ("fill", "체결가", 100), ("bps", "슬리피지(bps)", 110),
+        ])
+
+    def _build_tab_log(self):
+        f = ttk.Frame(self.nb)
+        self.nb.add(f, text="활동 로그")
+        self.log_text = tk.Text(f, height=8, font=("Consolas", 8),
                                 state="disabled", wrap="none",
                                 bg=PANEL, fg=TEXT, relief="solid",
                                 borderwidth=1, highlightthickness=0)
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(10, 4))
-        ttk.Button(lf, text="새로고침", command=self.refresh_status).pack(
-            anchor="e", padx=12, pady=(0, 10))
 
     def _labeled_entry(self, parent, label, show=None):
         ttk.Label(parent, text=label).pack(anchor="w", padx=12, pady=(6, 1))
@@ -193,9 +332,14 @@ class SettingsApp:
         kis = secrets_store.load_kis()
         dev = secrets_store.load_device_token()
         running = bool(self.scheduler and self.scheduler.running)
+        ks = killswitch.load()
+        ks_active = bool(ks.get("active"))
 
         # 히어로 — 전체 상태 한 줄
-        if not kis or not dev:
+        if ks_active:
+            self._set_hero("⚠ Kill Switch 활성",
+                           "자동매매 중단 — 사용자가 해제해야 재개됩니다", RED)
+        elif not kis or not dev:
             missing = []
             if not kis:
                 missing.append("KIS 자격증명")
@@ -209,6 +353,15 @@ class SettingsApp:
         else:
             self._set_hero("준비 완료 · 중지됨",
                            "‘자동매매 시작’을 누르면 가동됩니다", SLATE)
+
+        # Kill switch 배너
+        if ks_active:
+            self.ks_label.configure(
+                text=f"Kill Switch 발동: {ks.get('reason', '')}  "
+                     f"(since {(ks.get('since') or '')[:19]})")
+            self.ks_banner.pack(fill="x", padx=12, pady=(0, 4))
+        else:
+            self.ks_banner.pack_forget()
 
         # 단계 헤더에 진행 상태 표시
         self.kf.configure(
@@ -234,6 +387,169 @@ class SettingsApp:
                 text=f"최근 평가금액 {eq[-1]['value']:,}원 · 보유 {len(led)}종목"
                      f" · {eq[-1]['date']}")
         self._load_log_tail()
+        self._refresh_pending()
+        self._refresh_orders()
+        self._refresh_cycles()
+        self._refresh_slippage()
+
+    # ── Notebook 탭 데이터 갱신 ──────────────────────────────────────────────
+
+    @staticmethod
+    def _fmt_ts(iso: str) -> str:
+        return (iso or "").replace("T", " ")[:19]
+
+    def _refresh_pending(self):
+        self.tv_pending.delete(*self.tv_pending.get_children())
+        local = _read_json(PENDING_ORDERS_PATH, {})
+        for p in local.values():
+            self.tv_pending.insert("", "end", values=(
+                self._fmt_ts(p.get("submitted_ts_iso", "")) or "",
+                "매수" if p.get("side") == "buy" else "매도",
+                p.get("symbol", ""), "",
+                p.get("qty", ""),
+                p.get("filled_so_far", 0),
+                int(p.get("qty", 0)) - int(p.get("filled_so_far", 0)),
+                f"{p.get('limit_price', 0):,}" if p.get("limit_price") else "—",
+                p.get("order_no", ""),
+            ))
+
+    def _refresh_orders(self):
+        self.tv_orders.delete(*self.tv_orders.get_children())
+        for o in order_log.read_orders(100):
+            self.tv_orders.insert("", "end", values=(
+                self._fmt_ts(o.get("ts", "")),
+                o.get("event", ""),
+                "매수" if o.get("side") == "buy" else "매도",
+                o.get("symbol", ""),
+                o.get("qty", ""),
+                f"{o.get('limit_price') or 0:,.0f}" if o.get("limit_price") else "—",
+                f"{o.get('fill_price') or 0:,.0f}" if o.get("fill_price") else "—",
+                o.get("strategy", ""),
+                o.get("reason", ""),
+            ))
+
+    def _refresh_cycles(self):
+        self.tv_cycles.delete(*self.tv_cycles.get_children())
+        for c in order_log.read_cycles(20):
+            s = c.get("summary", {})
+            self.tv_cycles.insert("", "end", values=(
+                self._fmt_ts(c.get("ts", "")),
+                s.get("n_bought", 0), s.get("n_sold", 0),
+                s.get("n_skip_gap", 0), s.get("n_skip_signal", 0),
+                s.get("n_rejected", 0),
+                "ON" if s.get("kill_switch") else "OFF",
+                f"{s.get('equity_post', 0):,.0f}",
+            ), tags=(json_dumps(c),))
+        self.cycle_detail.config(state="normal")
+        self.cycle_detail.delete("1.0", "end")
+        self.cycle_detail.insert("1.0", "사이클 행을 클릭하면 상세 의사결정이 표시됩니다.")
+        self.cycle_detail.config(state="disabled")
+
+    def _show_cycle_detail(self, _event):
+        sel = self.tv_cycles.selection()
+        if not sel:
+            return
+        tags = self.tv_cycles.item(sel[0], "tags")
+        if not tags:
+            return
+        c = json_loads(tags[0])
+        lines = [f"[{self._fmt_ts(c.get('ts', ''))}] 사이클 상세"]
+        for d in c.get("decisions", []):
+            sym = d.get("symbol") or "-"
+            lines.append(f"  · {d.get('action','?')} | {sym} | "
+                         f"{d.get('strategy_name','')} | {d.get('reason','')}")
+        text = "\n".join(lines)
+        self.cycle_detail.config(state="normal")
+        self.cycle_detail.delete("1.0", "end")
+        self.cycle_detail.insert("1.0", text)
+        self.cycle_detail.config(state="disabled")
+
+    def _refresh_slippage(self):
+        s = order_log.slippage_stats()
+        if s["n"] == 0:
+            self.slip_summary.configure(text="아직 측정된 체결이 없습니다.")
+        else:
+            self.slip_summary.configure(
+                text=f"표본 {s['n']}건 · 평균 {s['avg_bps']} bps · "
+                     f"중앙값 {s['p50_bps']} bps · p95 {s['p95_bps']} bps "
+                     f"· 최대 {s['max_bps']} bps")
+        self.tv_slip.delete(*self.tv_slip.get_children())
+        for r in s.get("recent", []):
+            self.tv_slip.insert("", "end", values=(
+                self._fmt_ts(r.get("ts", "")),
+                "매수" if r.get("side") == "buy" else "매도",
+                r.get("symbol", ""),
+                f"{r.get('intended', 0):,.0f}",
+                f"{r.get('fill', 0):,.0f}",
+                f"{r.get('bps', 0):+.1f}",
+            ))
+
+    def _reset_killswitch(self):
+        if not messagebox.askyesno(
+                "Kill Switch 해제",
+                "Kill Switch를 해제하면 다음 사이클부터 자동매매가 재개됩니다.\n"
+                "발동 사유가 충분히 해소됐는지 확인했습니까?"):
+            return
+        killswitch.reset()
+        self.refresh_status()
+
+    # ── 웹에서 발행한 명령 처리 ───────────────────────────────────────────────
+
+    def _handle_command(self, cmd: dict) -> dict:
+        """SSE/폴링으로 도착한 명령 처리. 반환값은 ack의 result로 전송."""
+        t = cmd.get("type")
+        params = cmd.get("params") or {}
+        import logging
+        log = logging.getLogger("localapp.gui.cmd")
+        log.info("명령 수신: %s %s", t, params)
+
+        if t == "RUN_CYCLE_NOW":
+            from .runner import run_cycle
+            payload = run_cycle(use_mock=secrets_store.load_kis() is None)
+            # GUI는 다음 자동 갱신에서 반영
+            self.root.after(100, self.refresh_status)
+            return {"balance": payload.get("balance"),
+                    "n_decisions": len(payload.get("decisions", []))}
+
+        if t == "PAUSE_AUTO":
+            self.auto_paused = True
+            if self.scheduler and self.scheduler.running:
+                self.scheduler.pause()
+            self.root.after(100, self.refresh_status)
+            return {"paused": True}
+
+        if t == "RESUME_AUTO":
+            self.auto_paused = False
+            if self.scheduler and self.scheduler.running:
+                self.scheduler.resume()
+            self.root.after(100, self.refresh_status)
+            return {"paused": False}
+
+        if t == "LIQUIDATE_ALL":
+            killswitch.activate("웹 명령: LIQUIDATE_ALL")
+            from .runner import run_cycle
+            payload = run_cycle(use_mock=secrets_store.load_kis() is None)
+            self.root.after(100, self.refresh_status)
+            return {"liquidated_positions": len(payload.get("positions", []))}
+
+        if t == "CANCEL_ORDER":
+            order_no = params.get("order_no")
+            symbol = params.get("symbol", "")
+            qty = int(params.get("qty", 0))
+            if not order_no:
+                return {"error": "order_no 누락"}
+            if secrets_store.load_kis() is None:
+                return {"error": "KIS 자격증명 없음"}
+            from .kis_broker import KisBroker
+            r = KisBroker().cancel(order_no, symbol, qty)
+            return r
+
+        if t == "RESET_KILL_SWITCH":
+            killswitch.reset()
+            self.root.after(100, self.refresh_status)
+            return {"reset": True}
+
+        return {"error": f"미지원 명령 타입: {t}"}
 
     def _load_log_tail(self):
         from .config import APP_DIR
@@ -358,6 +674,8 @@ class SettingsApp:
         else:
             if self.scheduler and self.scheduler.running:
                 self.scheduler.shutdown(wait=False)
+            if hasattr(self, "cmd_client") and self.cmd_client:
+                self.cmd_client.stop()
             self.root.destroy()
 
     def run(self):
