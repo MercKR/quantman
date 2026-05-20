@@ -35,6 +35,16 @@ _state = {
 }
 
 
+def get_master_list() -> list[dict]:
+    """캐시된 KIS 마스터 전 종목 — [{symbol, name, market, kind}, ...]."""
+    with _lock:
+        return [{"symbol": code,
+                  "name": meta.get("name", ""),
+                  "market": meta.get("market", ""),
+                  "kind": meta.get("kind", "stock")}
+                for code, meta in _state["by_symbol"].items()]
+
+
 def _download_mst(url: str, timeout: int = 30) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "quant-platform-server"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -47,6 +57,14 @@ def _download_mst(url: str, timeout: int = 30) -> bytes:
 
 
 def _parse_master(raw: bytes, market: str) -> list[dict]:
+    """KOSPI/KOSDAQ .mst 한 줄에서 단축코드·한글명 추출 + 종목 유형 추정.
+
+    KIS 마스터 메타의 정확한 컬럼 사양은 한투 공식 sample 코드를 봐야 정밀화 가능.
+    현재는 코드 패턴 기반 단순 분류:
+      - F-prefix 9자리: 펀드 (KIS order-cash 불가) → 제외
+      - meta[1]='B': 채권성 상품 → 자동매매 부적합 → 제외
+      - 그 외: 'stock' (KIS API는 ETF/ETN도 'J' 시장구분으로 호환)
+    """
     meta_len = _META_LEN.get(market)
     if meta_len is None:
         raise ValueError(f"알 수 없는 시장: {market}")
@@ -56,9 +74,22 @@ def _parse_master(raw: bytes, market: str) -> list[dict]:
             continue
         code = row[0:9].rstrip()
         name = row[21:len(row) - meta_len].strip()
+        meta = row[-meta_len:]
+        meta_byte1 = meta[1] if len(meta) >= 2 else ""
         if not code or not code[:6].isalnum():
             continue
-        out.append({"symbol": code, "name": name, "market": market})
+        # 펀드(F-prefix 9자리) — order-cash 매수 불가
+        if len(code) == 9 and code.startswith("F"):
+            continue
+        # 채권성 상품 — 자동매매 부적합 (호가 없음, 매매단위 큼)
+        if meta_byte1 == "B":
+            continue
+        # 종목 유형: meta[1] S=주식, E=ETF/ETN, R=REITs/신주 등. 자동매매 매수 흐름은 동일.
+        kind_map = {"S": "stock", "E": "etf_etn", "R": "reits"}
+        kind = kind_map.get(meta_byte1, "stock")
+        out.append({
+            "symbol": code, "name": name, "market": market, "kind": kind,
+        })
     return out
 
 
@@ -72,7 +103,10 @@ def refresh() -> dict:
             raw = _download_mst(url)
             rows = _parse_master(raw, market)
             for r in rows:
-                by_symbol[r["symbol"]] = {"name": r["name"], "market": market}
+                by_symbol[r["symbol"]] = {
+                    "name": r["name"], "market": market,
+                    "kind": r.get("kind", "stock"),
+                }
             n_per[market] = len(rows)
             any_success = True
             log.info("KIS 마스터 [%s] %d개 갱신", market, len(rows))

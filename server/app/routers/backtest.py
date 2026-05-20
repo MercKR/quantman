@@ -21,27 +21,43 @@ router = APIRouter(tags=["backtest"])
 
 @router.get("/symbols")
 def list_symbols(user: User = Depends(get_current_user)):
-    """전략 빌더용 — 심볼별 사용 가능한 지표 컬럼.
+    """전략 빌더용 — 두 집합의 union을 반환:
+    1) KIS 마스터의 모든 매수 가능 종목 (trade_symbol 후보, tradable=True)
+    2) 서버 dataset의 종목 (조건 평가/지표용, has indicators)
 
-    `tradable=True` 판정: 서버가 매일 KIS 공식 마스터(.mst)에서 다운로드한
-    KOSPI+KOSDAQ 화이트리스트와 교집합. 사용자 추가 행동 불필요.
-    서버 부팅 직후 캐시가 비어 있을 짧은 순간엔 has_master=False로 응답.
+    교집합인 종목은 둘 다 (tradable + indicators), 나머지는 한 쪽만.
     """
     data = get_dataset()
     indic_cols = set(qc.get_all_indicator_columns())
 
-    master_set = kis_master_cache.get_master_set()
-    has_master = len(master_set) > 0
+    master_list = kis_master_cache.get_master_list()
+    has_master = len(master_list) > 0
+    master_by_code = {m["symbol"]: m for m in master_list}
 
     out = []
+    seen: set[str] = set()
+
+    def _category(market: str, kind: str) -> str:
+        """카테고리 라벨 — 시장 + 유형 결합."""
+        kind_label = {"stock": "주식", "etf_etn": "ETF/ETN",
+                       "reits": "REITs"}.get(kind, "주식")
+        return f"국내{kind_label} ({market})"
+
+    # 1) dataset 종목 (지표 평가 가능). 마스터에도 있으면 tradable.
     for sym, df in sorted(data.items()):
         cols = [c for c in df.columns if c in indic_cols]
         has_ohlc = {"Open", "Close"}.issubset(df.columns)
-        tradable = has_master and sym in master_set and has_ohlc
+        in_master = sym in master_by_code
+        meta = master_by_code.get(sym, {})
+        kind = meta.get("kind", "stock")
         out.append({
             "symbol": sym,
-            "category": qc.symbol_category(sym),
-            "tradable": tradable,
+            "name": meta.get("name", ""),
+            "category": (_category(meta.get("market", ""), kind) if in_master
+                          else qc.symbol_category(sym)),
+            "tradable": in_master and has_ohlc,
+            "has_backtest_data": has_ohlc,
+            "kind": kind if in_master else None,
             "rows": len(df),
             "indicators": [{
                 "key": c,
@@ -51,6 +67,24 @@ def list_symbols(user: User = Depends(get_current_user)):
                 "compare_group": qc.get_indicator_compare_group(c),
             } for c in cols],
         })
+        seen.add(sym)
+
+    # 2) 마스터에는 있지만 dataset에 없는 종목 — 라이브 매매만 가능 (지표 없음)
+    for code, meta in master_by_code.items():
+        if code in seen:
+            continue
+        kind = meta.get("kind", "stock")
+        out.append({
+            "symbol": code,
+            "name": meta.get("name", ""),
+            "category": _category(meta.get("market", ""), kind),
+            "tradable": True,
+            "has_backtest_data": False,
+            "kind": kind,
+            "rows": 0,
+            "indicators": [],
+        })
+
     return {"symbols": out, "has_master": has_master,
             "master_status": kis_master_cache.get_status()}
 

@@ -484,10 +484,16 @@ class Trader:
                     atr_val = 0.0
                     if sdf is not None and "atr_14" in sdf.columns and len(sdf):
                         atr_val = float(sdf["atr_14"].iloc[-1] or 0.0)
-                    capital = equity_now if equity_now > 0 else float(cash)
-                    qty = _atr_qty(capital, atr_val, policy, cur)
-                    # 잔고 한도
-                    qty = min(qty, int(float(cash) // cur))
+                    if atr_val > 0:
+                        capital = equity_now if equity_now > 0 else float(cash)
+                        qty = _atr_qty(capital, atr_val, policy, cur)
+                        # 잔고 한도
+                        qty = min(qty, int(float(cash) // cur))
+                    else:
+                        # ATR 계산 불가 (백테스트 데이터 없는 종목) → pct_cash 자동 fallback
+                        log.info("[%s] ATR 데이터 없음 — pct_cash 모드로 fallback",
+                                 strat.trade_symbol)
+                        qty = int(float(cash) * strat.amount_pct / 100.0 // cur)
                 else:
                     qty = int(float(cash) * strat.amount_pct / 100.0 // cur)
 
