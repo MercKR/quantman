@@ -26,6 +26,7 @@ export default function Backtest() {
   const [tab, setTab] = useState<TabKey>("build");
 
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
+  const [hasMaster, setHasMaster] = useState<boolean>(true);
   const [name, setName] = useState("새 전략");
   const [tradeSymbol, setTradeSymbol] = useState("");
   const [buy, setBuy] = useState<ConditionGroup>({ conditions: [], logic: "AND" });
@@ -58,6 +59,7 @@ export default function Backtest() {
   useEffect(() => {
     api.symbols().then((r) => {
       setSymbols(r.symbols);
+      setHasMaster(r.has_master);
       const first = r.symbols.find((s) => s.tradable && s.indicators.length);
       if (first) {
         setTradeSymbol(first.symbol);
@@ -207,7 +209,8 @@ export default function Backtest() {
 
       {tab === "build" && (
         <BuildTab
-          symbols={symbols} name={name} setName={setName}
+          symbols={symbols} hasMaster={hasMaster}
+          name={name} setName={setName}
           tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
           buy={buy} setBuy={setBuy}
           sell={sell} setSell={setSell}
@@ -248,7 +251,8 @@ export default function Backtest() {
 // ── 탭 1: 전략 구성 ───────────────────────────────────────────────────────────
 
 function BuildTab(props: {
-  symbols: SymbolInfo[]; name: string; setName: (v: string) => void;
+  symbols: SymbolInfo[]; hasMaster: boolean;
+  name: string; setName: (v: string) => void;
   tradeSymbol: string; setTradeSymbol: (v: string) => void;
   buy: ConditionGroup; setBuy: (v: ConditionGroup) => void;
   sell: ConditionGroup; setSell: (v: ConditionGroup) => void;
@@ -264,7 +268,7 @@ function BuildTab(props: {
   analysis: AnalysisResult | null;
 }) {
   const {
-    symbols, name, setName, tradeSymbol, setTradeSymbol,
+    symbols, hasMaster, name, setName, tradeSymbol, setTradeSymbol,
     buy, setBuy, sell, setSell, exits, setRule,
     buyAmountPct, setBuyAmountPct, sellAmountPct, setSellAmountPct,
     capital, setCapital, forwardDays, setForwardDays,
@@ -275,6 +279,21 @@ function BuildTab(props: {
 
   return (
     <>
+      {!hasMaster && (
+        <div className="panel" style={{
+          borderLeft: "4px solid var(--amber)",
+          background: "var(--amber-soft)",
+        }}>
+          <strong style={{ color: "var(--amber)" }}>
+            ⚠ KIS 종목마스터가 아직 동기화되지 않았습니다
+          </strong>
+          <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
+            로컬앱 ② 패널에서 <strong>"KIS 종목마스터 sync"</strong> 버튼을 누르거나,
+            아직 페어링 전이라면 페어링을 완료하세요. sync 완료 후 "매수할 종목"
+            목록이 채워집니다.
+          </p>
+        </div>
+      )}
       <div className="panel">
         <h3>1. 매수 대상</h3>
         <div className="row">

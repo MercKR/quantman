@@ -45,7 +45,7 @@ export const api = {
     }),
   me: () => req<{ id: number; email: string; created_at: string }>("/auth/me"),
 
-  symbols: () => req<{ symbols: SymbolInfo[] }>("/symbols"),
+  symbols: () => req<{ symbols: SymbolInfo[]; has_master: boolean }>("/symbols"),
 
   listStrategies: () => req<StrategyRow[]>("/strategies"),
   createStrategy: (definition: StrategyDef, run_mode: string) =>

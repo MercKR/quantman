@@ -78,6 +78,7 @@ export default function SymbolPicker({ symbols, value, tradableOnly, onChange }:
 
   const list = symbols.filter((s) => s.indicators.length > 0
     && (!tradableOnly || s.tradable));
+  const empty = tradableOnly && list.length === 0 && symbols.length > 0;
 
   return (
     <span className="chip-wrap" ref={ref}>
@@ -87,18 +88,28 @@ export default function SymbolPicker({ symbols, value, tradableOnly, onChange }:
       </button>
       {open && (
         <div className="popover">
-          <input
-            className="pop-search" placeholder="종목 검색…" autoFocus
-            value={search} onChange={(e) => setSearch(e.target.value)}
-          />
-          <div className="op-label">종목</div>
-          <CategoryList
-            items={list.map((s) => ({ key: s.symbol, label: s.symbol, cat: s.category }))}
-            order={SYMBOL_CAT_ORDER}
-            selected={value}
-            search={search}
-            onPick={(k) => { onChange(k); setOpen(false); }}
-          />
+          {empty ? (
+            <div className="cat-empty" style={{ padding: 16, lineHeight: 1.6 }}>
+              매수 가능 종목 목록이 비어 있습니다.<br/>
+              로컬앱에서 <strong>KIS 종목마스터 sync</strong>를 실행하세요
+              (페어링 직후 자동 실행, 또는 로컬앱 ② 패널의 수동 버튼).
+            </div>
+          ) : (
+            <>
+              <input
+                className="pop-search" placeholder="종목 검색…" autoFocus
+                value={search} onChange={(e) => setSearch(e.target.value)}
+              />
+              <div className="op-label">종목</div>
+              <CategoryList
+                items={list.map((s) => ({ key: s.symbol, label: s.symbol, cat: s.category }))}
+                order={SYMBOL_CAT_ORDER}
+                selected={value}
+                search={search}
+                onPick={(k) => { onChange(k); setOpen(false); }}
+              />
+            </>
+          )}
         </div>
       )}
     </span>
