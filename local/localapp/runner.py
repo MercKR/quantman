@@ -9,21 +9,16 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
-from pathlib import Path
 
 import quant_core as qc
 
 from .broker import Broker, MockBroker
-from .config import APP_DIR, PENDING_PATH
+from .config import PENDING_PATH
 from .logging_setup import setup_logging
-from .sync_client import pull_strategies, push_snapshot, push_tradable_symbols
+from .sync_client import pull_strategies, push_snapshot
 from .trader import Trader
 
 log = logging.getLogger("localapp.runner")
-
-# KIS 종목마스터를 마지막으로 push한 날짜를 기록. 같은 날 중복 push 방지.
-_MASTER_STAMP = APP_DIR / ".kis_master_pushed.txt"
 
 
 def _price_fn(dataset: dict):
@@ -56,34 +51,10 @@ def _flush_pending() -> None:
         log.warning("보류 스냅샷 재전송 실패 (다음 사이클 재시도): %s", e)
 
 
-def _sync_kis_master_if_due() -> None:
-    """KIS 종목마스터를 받아 플랫폼에 push. 같은 날 두 번 이상은 스킵."""
-    today = date.today().isoformat()
-    if _MASTER_STAMP.exists():
-        try:
-            if _MASTER_STAMP.read_text(encoding="utf-8").strip() == today:
-                return
-        except Exception:
-            pass
-    try:
-        from .kis_master import fetch_all_tradable
-        rows = fetch_all_tradable()
-        if not rows:
-            log.warning("KIS 종목마스터: 받은 행이 없어 push 스킵")
-            return
-        res = push_tradable_symbols(rows)
-        _MASTER_STAMP.write_text(today, encoding="utf-8")
-        log.info("KIS 종목마스터 push 완료 — %s개 (서버 ok=%s)",
-                 res.get("n", len(rows)), res.get("ok"))
-    except Exception as e:
-        log.warning("KIS 종목마스터 sync 실패 (오늘 안에 재시도 가능): %s", e)
-
-
 def run_cycle(use_mock: bool = False) -> dict:
     """1회 모의투자 사이클을 실행하고 동기화 스냅샷을 반환한다."""
     setup_logging()
     _flush_pending()
-    _sync_kis_master_if_due()
 
     try:
         strategies = pull_strategies()

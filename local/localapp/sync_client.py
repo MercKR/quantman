@@ -35,17 +35,3 @@ def pull_strategies() -> list[dict]:
     return r.json()
 
 
-def push_tradable_symbols(symbols: list[dict]) -> dict:
-    """KIS 종목마스터를 플랫폼에 push. 사용자별 화이트리스트로 전체 교체된다.
-
-    `symbols`: [{"symbol": ..., "name": ..., "market": ...}, ...]
-    """
-    payload = {"symbols": [
-        {"symbol": s["symbol"], "name": s.get("name", ""),
-         "market": s.get("market", "")}
-        for s in symbols
-    ]}
-    r = requests.post(f"{PLATFORM_URL}/sync/tradable_symbols",
-                      headers=_headers(), json=payload, timeout=60)
-    r.raise_for_status()
-    return r.json()

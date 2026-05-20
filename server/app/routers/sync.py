@@ -11,13 +11,11 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 from fastapi import APIRouter, Depends
-from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from ..db import get_session
 from ..deps import get_current_device, get_current_user
-from ..models import (Device, Strategy, SyncSnapshot, TradableSymbol, User,
-                      UserSettings)
+from ..models import Device, Strategy, SyncSnapshot, User, UserSettings
 from ..schemas import (StrategyOut, SyncPushIn, SyncSnapshotOut,
                        TradableSymbolsSyncIn)
 
@@ -116,26 +114,17 @@ def pull_strategies(
                         updated_at=s.updated_at) for s in rows]
 
 
-@router.post("/tradable_symbols")
+@router.post("/tradable_symbols", deprecated=True)
 def push_tradable_symbols(
     body: TradableSymbolsSyncIn,
     device: Device = Depends(get_current_device),
-    session: Session = Depends(get_session),
 ):
-    """로컬앱이 KIS 종목마스터를 push. 사용자 단위로 전체 교체(snapshot 방식).
+    """[Deprecated] 서버가 KIS 마스터를 직접 캐싱하므로 로컬앱 push 불필요.
 
-    /symbols API가 이 화이트리스트와 데이터셋 교집합으로 tradable=True를 판정.
+    구버전 로컬앱 호환을 위해 200 OK를 반환하지만 아무것도 저장하지 않는다.
     """
-    session.exec(delete(TradableSymbol)
-                 .where(TradableSymbol.user_id == device.user_id))
-    now = datetime.now(timezone.utc)
-    for s in body.symbols:
-        if not s.symbol:
-            continue
-        session.add(TradableSymbol(user_id=device.user_id, symbol=s.symbol,
-                                    name=s.name, market=s.market, updated_at=now))
-    session.commit()
-    return {"ok": True, "n": len(body.symbols)}
+    return {"ok": True, "n": 0, "deprecated": True,
+            "note": "서버가 KIS 공식 마스터를 매일 06:00 KST 자동 갱신합니다."}
 
 
 # ── 서버 → 웹 (JWT 인증) ───────────────────────────────────────────────────────

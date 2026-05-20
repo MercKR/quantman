@@ -285,12 +285,11 @@ function BuildTab(props: {
           background: "var(--amber-soft)",
         }}>
           <strong style={{ color: "var(--amber)" }}>
-            ⚠ KIS 종목마스터가 아직 동기화되지 않았습니다
+            ⏳ KIS 종목마스터를 준비 중입니다
           </strong>
           <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
-            로컬앱 ② 패널에서 <strong>"KIS 종목마스터 sync"</strong> 버튼을 누르거나,
-            아직 페어링 전이라면 페어링을 완료하세요. sync 완료 후 "매수할 종목"
-            목록이 채워집니다.
+            서버가 KIS 공식 마스터를 다운로드 중입니다 (보통 수 초). 잠시 후
+            페이지를 새로고침해주세요. 사용자 추가 행동은 필요하지 않습니다.
           </p>
         </div>
       )}

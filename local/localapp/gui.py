@@ -78,11 +78,6 @@ class SettingsApp:
         self.cmd_client = CommandClient(self._handle_command)
         self.cmd_client.start()
 
-        # 페어링 상태면 앱 시작 직후 백그라운드로 KIS 마스터를 1회 sync.
-        # 자동매매를 시작하지 않은 사용자도 웹의 '매수할 종목'이 정확해진다.
-        if secrets_store.load_device_token():
-            self.root.after(800, lambda: self._sync_kis_master_async())
-
     # ── 테마 ──────────────────────────────────────────────────────────────────
 
     def _apply_theme(self):
@@ -193,16 +188,9 @@ class SettingsApp:
         self.pair_code.pack(anchor="w", padx=12, pady=2)
         self.pair_msg = ttk.Label(self.pf, style="Muted.TLabel", text="")
         self.pair_msg.pack(anchor="w", padx=12, pady=2)
-        pair_row = ttk.Frame(self.pf)
-        pair_row.pack(fill="x", padx=12, pady=10)
-        self.btn_pair = ttk.Button(pair_row, text="기기 페어링 시작",
+        self.btn_pair = ttk.Button(self.pf, text="기기 페어링 시작",
                                    style="Accent.TButton", command=self._pair)
-        self.btn_pair.pack(side="right")
-        self.btn_master = ttk.Button(pair_row, text="KIS 종목마스터 sync",
-                                      command=self._manual_master_sync)
-        self.btn_master.pack(side="right", padx=(0, 8))
-        self.master_msg = ttk.Label(self.pf, style="Muted.TLabel", text="")
-        self.master_msg.pack(anchor="w", padx=12, pady=(0, 6))
+        self.btn_pair.pack(anchor="e", padx=12, pady=10)
 
         # ③ 자동매매
         self.af = ttk.LabelFrame(self.root, text="③ 자동매매")
@@ -587,38 +575,6 @@ class SettingsApp:
                 self.root.after(0, lambda: on_done(None, e))
         threading.Thread(target=worker, daemon=True).start()
 
-    # ── KIS 종목마스터 sync ──────────────────────────────────────────────────
-
-    def _manual_master_sync(self):
-        """GUI '② 플랫폼 계정 연결' 패널의 'KIS 종목마스터 sync' 버튼 핸들러."""
-        if not secrets_store.load_device_token():
-            self.master_msg.config(text="먼저 기기 페어링이 필요합니다.")
-            return
-        self.btn_master.config(state="disabled")
-        self.master_msg.config(text="KIS 마스터 다운로드 중...")
-        self._sync_kis_master_async(
-            on_done=lambda msg: (self.btn_master.config(state="normal"),
-                                  self.master_msg.config(text=msg)))
-
-    def _sync_kis_master_async(self, on_done=None):
-        """KIS 마스터(KOSPI+KOSDAQ)를 백그라운드로 다운/파싱해 서버에 push."""
-        def work():
-            from . import kis_master
-            from .sync_client import push_tradable_symbols
-            rows = kis_master.fetch_all_tradable()
-            if not rows:
-                return ("실패", "KIS 마스터 다운로드 실패 (네트워크 또는 KIS 서버)")
-            res = push_tradable_symbols(rows)
-            return ("성공", f"종목 {res.get('n', len(rows))}개 sync 완료")
-        def done(result, e):
-            if e:
-                msg = f"KIS 마스터 sync 실패: {e}"
-            else:
-                _status, msg = result
-            if on_done:
-                on_done(msg)
-        self._run_bg(work, done)
-
     # ── 동작 ──────────────────────────────────────────────────────────────────
 
     def _save_kis(self):
@@ -662,11 +618,8 @@ class SettingsApp:
                     self.pair_msg.config(text=f"페어링 실패: {e}")
                 else:
                     self.pair_code.config(text="")
-                    self.pair_msg.config(text="페어링 완료. KIS 종목마스터 sync 중...")
+                    self.pair_msg.config(text="페어링 완료.")
                     self.refresh_status()
-                    # 페어링 직후 KIS 마스터를 1회 sync — 웹의 '매수할 종목'이 즉시 정확해짐
-                    self._sync_kis_master_async(
-                        on_done=lambda msg: self.pair_msg.config(text=f"페어링 완료. {msg}"))
 
             self._run_bg(poll, polled)
 

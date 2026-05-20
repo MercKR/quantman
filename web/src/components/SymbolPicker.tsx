@@ -90,9 +90,9 @@ export default function SymbolPicker({ symbols, value, tradableOnly, onChange }:
         <div className="popover">
           {empty ? (
             <div className="cat-empty" style={{ padding: 16, lineHeight: 1.6 }}>
-              매수 가능 종목 목록이 비어 있습니다.<br/>
-              로컬앱에서 <strong>KIS 종목마스터 sync</strong>를 실행하세요
-              (페어링 직후 자동 실행, 또는 로컬앱 ② 패널의 수동 버튼).
+              매수 가능 종목 목록을 준비 중입니다.<br/>
+              서버가 KIS 공식 마스터를 다운로드 중입니다.
+              잠시 후 다시 시도해주세요.
             </div>
           ) : (
             <>

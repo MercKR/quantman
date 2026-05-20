@@ -2,21 +2,43 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from contextlib import asynccontextmanager
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import kis_master_cache
 from .config import settings
 from .db import create_db_and_tables
 from .routers import (auth, backtest, commands, market, portfolio,
                        settings as settings_router, strategies, sync)
 
+_log = logging.getLogger("app.main")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
-    yield
+
+    # KIS 종목마스터 — 시작 시 1회 다운로드 (백그라운드, 부팅 차단 방지)
+    threading.Thread(target=kis_master_cache.refresh, daemon=True).start()
+
+    # 매일 06:00 KST 자동 갱신
+    scheduler = BackgroundScheduler(timezone="Asia/Seoul")
+    scheduler.add_job(kis_master_cache.refresh,
+                       CronTrigger(hour=6, minute=0),
+                       id="kis_master_refresh", replace_existing=True)
+    scheduler.start()
+    _log.info("KIS 마스터 갱신 cron 시작 (매일 06:00 KST)")
+    app.state.scheduler = scheduler
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="퀀트 플랫폼 API", version="0.2.0", lifespan=lifespan)

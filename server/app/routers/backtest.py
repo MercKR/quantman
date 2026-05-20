@@ -5,12 +5,13 @@ from __future__ import annotations
 import quant_core as qc
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
-from sqlmodel import Session, select
+from sqlmodel import Session
 
+from .. import kis_master_cache
 from ..data_cache import get_dataset
 from ..db import get_session
 from ..deps import get_current_user
-from ..models import BacktestRun, TradableSymbol, User
+from ..models import BacktestRun, User
 from ..schemas import (AnalysisIn, BacktestIn, BacktestRunOut,
                        BacktestRunSummary)
 from ..serialize import serialize_analysis, serialize_backtest
@@ -19,21 +20,17 @@ router = APIRouter(tags=["backtest"])
 
 
 @router.get("/symbols")
-def list_symbols(user: User = Depends(get_current_user),
-                 session: Session = Depends(get_session)):
+def list_symbols(user: User = Depends(get_current_user)):
     """전략 빌더용 — 심볼별 사용 가능한 지표 컬럼.
 
-    `tradable=True` 판정: 로컬앱이 push한 KIS 종목마스터에 존재해야 한다.
-    마스터가 sync되지 않은 사용자는 `tradable=False`로 응답하고 클라이언트가
-    "마스터 sync 필요" 상태를 사용자에게 명시적으로 알린다.
+    `tradable=True` 판정: 서버가 매일 KIS 공식 마스터(.mst)에서 다운로드한
+    KOSPI+KOSDAQ 화이트리스트와 교집합. 사용자 추가 행동 불필요.
+    서버 부팅 직후 캐시가 비어 있을 짧은 순간엔 has_master=False로 응답.
     """
     data = get_dataset()
     indic_cols = set(qc.get_all_indicator_columns())
 
-    master_rows = session.exec(
-        select(TradableSymbol.symbol).where(TradableSymbol.user_id == user.id)
-    ).all()
-    master_set = {s for s in master_rows}
+    master_set = kis_master_cache.get_master_set()
     has_master = len(master_set) > 0
 
     out = []
@@ -54,7 +51,8 @@ def list_symbols(user: User = Depends(get_current_user),
                 "compare_group": qc.get_indicator_compare_group(c),
             } for c in cols],
         })
-    return {"symbols": out, "has_master": has_master}
+    return {"symbols": out, "has_master": has_master,
+            "master_status": kis_master_cache.get_status()}
 
 
 @router.post("/backtest/run")
