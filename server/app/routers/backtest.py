@@ -41,7 +41,14 @@ def list_symbols(user: User = Depends(get_current_user)):
         """카테고리 라벨 — 시장 + 유형 결합."""
         kind_label = {"stock": "주식", "etf_etn": "ETF/ETN",
                        "reits": "REITs"}.get(kind, "주식")
-        return f"국내{kind_label} ({market})"
+        region = {
+            "KOSPI": "국내", "KOSDAQ": "국내",
+            "NAS": "미국 NASDAQ", "NYS": "미국 NYSE", "AMS": "미국 AMEX",
+            "TSE": "일본", "HKS": "홍콩",
+        }.get(market, "")
+        if market in ("KOSPI", "KOSDAQ"):
+            return f"국내{kind_label} ({market})"
+        return f"{region} {kind_label}".strip()
 
     # 1) dataset 종목 (지표 평가 가능). 마스터에도 있으면 tradable.
     for sym, df in sorted(data.items()):

@@ -4,7 +4,12 @@ export interface IndicatorInfo {
   compare_group?: string; // 지표↔지표 비교 호환 그룹 키 (pct/rsi/price/...)
 }
 export interface SymbolInfo {
-  symbol: string; category: string; tradable: boolean; rows: number;
+  symbol: string;
+  name?: string;                    // KIS 마스터의 한글명 (있을 때)
+  category: string;
+  tradable: boolean;                // KIS 매수 가능 종목 (마스터에 존재)
+  has_backtest_data?: boolean;      // 서버 dataset에 OHLC 보유 — 백테스트 가능
+  rows: number;
   indicators: IndicatorInfo[];
 }
 

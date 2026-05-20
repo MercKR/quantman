@@ -192,12 +192,20 @@ button.sm { padding: 5px 10px; font-size: 13px; }
   font-size: 10px; color: var(--muted); font-weight: 700;
   padding: 5px 9px 3px; background: var(--bg);
   position: sticky; top: 0;
+  display: flex; justify-content: space-between; align-items: baseline;
 }
+.cat-head-n { font-weight: 500; opacity: 0.7; }
 .cat-item {
-  display: block; width: 100%; text-align: left;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 6px; width: 100%; text-align: left;
   padding: 6px 10px; font: inherit; font-size: 13px;
   background: none; border: none; cursor: pointer; color: var(--text);
 }
+.cat-item-badge {
+  font-size: 9px; padding: 1px 6px; border-radius: 999px;
+  background: var(--bg); color: var(--muted); flex-shrink: 0;
+}
+.cat-item.sel .cat-item-badge { background: rgba(255,255,255,0.2); color: #fff; }
 .cat-item:hover { background: var(--bg); }
 .cat-item.sel { background: var(--accent); color: #fff; }
 .cat-empty {

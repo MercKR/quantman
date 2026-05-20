@@ -115,8 +115,36 @@ class KisBroker:
             "positions": positions,
         }
 
+    # ── 시장 라우팅 ──────────────────────────────────────────────────────────
+
+    def _detect_market(self, symbol: str) -> str:
+        """종목 코드 형식으로 시장 추정.
+
+        - 6자리 숫자/알파넘 → 국내 (KOSPI/KOSDAQ, KIS J 시장구분)
+        - 4자리 숫자 → 일본 TSE
+        - 5자리 숫자 → 홍콩 HKS
+        - 영문 1-5자 → 미국 (티커, NAS/NYS/AMS는 거래소별 마스터 필요해 NAS로 가정)
+        """
+        s = symbol.upper()
+        if len(s) >= 6 and s[:6].isalnum() and not s.isalpha():
+            return "DOMESTIC"
+        if s.isdigit():
+            if len(s) == 4:
+                return "TSE"
+            if len(s) == 5:
+                return "HKS"
+        if s.isalpha() and 1 <= len(s) <= 5:
+            return "NAS"     # 미국 거래소 — 실거래 시 정확한 거래소는 마스터에서 조회 필요
+        return "DOMESTIC"     # 안전한 기본값
+
     def price(self, symbol: str) -> float:
-        # 시세 조회는 실전 도메인 사용 (모의투자 도메인은 시세 API 미지원)
+        """현재가 조회 — 시장에 따라 다른 endpoint."""
+        market = self._detect_market(symbol)
+        if market == "DOMESTIC":
+            return self._price_domestic(symbol)
+        return self._price_overseas(symbol, market)
+
+    def _price_domestic(self, symbol: str) -> float:
         r = requests.get(
             f"{self.quote_base}/uapi/domestic-stock/v1/quotations/inquire-price",
             headers=self._headers("FHKST01010100"), timeout=10,
@@ -124,13 +152,38 @@ class KisBroker:
         body = _kis_check(r)
         return float(body.get("output", {}).get("stck_prpr", 0))
 
+    def _price_overseas(self, symbol: str, market: str) -> float:
+        # KIS overseas 시장 코드: NAS/NYS/AMS = 실시간(NASD/NYSE/AMEX) 또는 지연(NAS/NYS/AMS).
+        # 우선 지연 시세(별도 신청 불필요) 사용.
+        excd_map = {"NAS": "NAS", "NYS": "NYS", "AMS": "AMS",
+                     "TSE": "TSE", "HKS": "HKS"}
+        excd = excd_map.get(market, "NAS")
+        r = requests.get(
+            f"{self.quote_base}/uapi/overseas-price/v1/quotations/price",
+            headers=self._headers("HHDFS00000300"), timeout=10,
+            params={"AUTH": "", "EXCD": excd, "SYMB": symbol})
+        body = _kis_check(r)
+        last = body.get("output", {}).get("last", "0")
+        try:
+            return float(last)
+        except (TypeError, ValueError):
+            return 0.0
+
     # ── 주문 ──────────────────────────────────────────────────────────────────
 
     def _submit(self, symbol: str, qty: int, side: str,
                 ord_dvsn: str, unit_price: int) -> dict:
-        """ord_dvsn: 00=지정가, 01=시장가. unit_price는 지정가일 때만 의미.
+        """주문 라우팅 — 시장에 따라 국내/해외 endpoint."""
+        market = self._detect_market(symbol)
+        if market == "DOMESTIC":
+            return self._submit_domestic(symbol, qty, side, ord_dvsn, unit_price)
+        return self._submit_overseas(symbol, qty, side, ord_dvsn, unit_price, market)
 
-        반환: {success, message, order_no, filled_qty(=0, 미체결 시작), msg_cd}
+    def _submit_domestic(self, symbol: str, qty: int, side: str,
+                          ord_dvsn: str, unit_price: int) -> dict:
+        """국내주식 주문 — order-cash endpoint.
+
+        ord_dvsn: 00=지정가, 01=시장가
         """
         if side == "buy":
             tr = "VTTC0802U" if self.virtual else "TTTC0802U"
@@ -151,6 +204,62 @@ class KisBroker:
             "msg_cd": d.get("msg_cd", ""),
             "order_no": d.get("output", {}).get("ODNO", ""),
             "ord_branch": d.get("output", {}).get("KRX_FWDG_ORD_ORGNO", ""),
+            "filled_qty": 0,
+        }
+
+    # 해외 매수/매도 TR_ID 매핑
+    # ord_dvsn은 무시 (해외는 지정가만 지원, 시장가 별도 ORD_DVSN 코드)
+    _OVERSEAS_TR = {
+        # (market, side, virtual): TR_ID
+        ("NAS", "buy",  True): "VTTT1002U", ("NAS", "buy",  False): "JTTT1002U",
+        ("NAS", "sell", True): "VTTT1001U", ("NAS", "sell", False): "JTTT1001U",
+        ("NYS", "buy",  True): "VTTT1002U", ("NYS", "buy",  False): "JTTT1002U",
+        ("NYS", "sell", True): "VTTT1001U", ("NYS", "sell", False): "JTTT1001U",
+        ("AMS", "buy",  True): "VTTT1002U", ("AMS", "buy",  False): "JTTT1002U",
+        ("AMS", "sell", True): "VTTT1001U", ("AMS", "sell", False): "JTTT1001U",
+        ("TSE", "buy",  True): "VTTS0308U", ("TSE", "buy",  False): "TTTS0308U",
+        ("TSE", "sell", True): "VTTS0307U", ("TSE", "sell", False): "TTTS0307U",
+        ("HKS", "buy",  True): "VTTS1002U", ("HKS", "buy",  False): "TTTS1002U",
+        ("HKS", "sell", True): "VTTS1001U", ("HKS", "sell", False): "TTTS1001U",
+    }
+    _OVERSEAS_EXCD = {
+        "NAS": "NASD", "NYS": "NYSE", "AMS": "AMEX",
+        "TSE": "TKSE", "HKS": "SEHK",
+    }
+
+    def _submit_overseas(self, symbol: str, qty: int, side: str,
+                          ord_dvsn: str, unit_price: int, market: str) -> dict:
+        """해외주식 주문 — overseas-stock/v1/trading/order endpoint.
+
+        해외주식은 기본적으로 지정가. unit_price=0이면 호출 거부될 수 있어
+        시장가 모드에서는 현재가 조회 후 사용.
+        """
+        tr = self._OVERSEAS_TR.get((market, side, self.virtual))
+        if tr is None:
+            return {"success": False, "message": f"미지원 시장: {market}",
+                    "msg_cd": "", "order_no": "", "filled_qty": 0}
+        if unit_price <= 0:
+            # 시장가 의도 → 현재가로 대체 (해외는 지정가 강제)
+            unit_price = int(self._price_overseas(symbol, market)) or 1
+        excd = self._OVERSEAS_EXCD.get(market, "NASD")
+        body = {
+            "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_cd,
+            "OVRS_EXCG_CD": excd,
+            "PDNO": symbol,
+            "ORD_QTY": str(qty),
+            "OVRS_ORD_UNPR": str(unit_price),
+            "ORD_SVR_DVSN_CD": "0",
+            "ORD_DVSN": "00",       # 해외는 지정가 (00) 기본
+        }
+        r = requests.post(f"{self.base}/uapi/overseas-stock/v1/trading/order",
+                          headers=self._headers(tr), timeout=15, json=body)
+        d = _kis_check(r)
+        return {
+            "success": d.get("rt_cd") == "0",
+            "message": d.get("msg1", ""),
+            "msg_cd": d.get("msg_cd", ""),
+            "order_no": d.get("output", {}).get("ODNO", ""),
+            "ord_branch": "",
             "filled_qty": 0,
         }
 
