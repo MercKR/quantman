@@ -95,6 +95,28 @@ class BacktestIn(BaseModel):
     initial_capital: float = 10_000_000.0
 
 
+class BacktestRunOut(BaseModel):
+    """백테스트 단일 실행 내역."""
+    id: int
+    name: str
+    initial_capital: float
+    start: Optional[str] = None
+    end: Optional[str] = None
+    created_at: datetime
+    definition: dict[str, Any]
+    result: dict[str, Any]
+
+
+class BacktestRunSummary(BaseModel):
+    """목록용 요약 — definition/trades 제외, 핵심 지표만."""
+    id: int
+    name: str
+    created_at: datetime
+    initial_capital: float
+    metrics: dict[str, Any]
+    success: bool
+
+
 class AnalysisIn(BaseModel):
     conditions: list[dict[str, Any]]
     logic: str = "AND"
@@ -114,6 +136,19 @@ class SyncSnapshotOut(BaseModel):
     payload: dict[str, Any]
     received_at: datetime
     device_id: int
+
+
+# ── 종목마스터 sync ───────────────────────────────────────────────────────────
+
+class TradableSymbolIn(BaseModel):
+    symbol: str
+    name: str = ""
+    market: str = ""
+
+
+class TradableSymbolsSyncIn(BaseModel):
+    """로컬앱이 KIS 종목마스터를 push할 때 사용. 받는 즉시 전체 교체(snapshot)."""
+    symbols: list[TradableSymbolIn]
 
 
 # ── 명령 큐 ───────────────────────────────────────────────────────────────────

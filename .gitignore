@@ -25,6 +25,7 @@ cycles.jsonl
 killswitch.json
 slippage.json
 pending_orders.json
+.kis_master_pushed.txt
 
 # 빌드 산출물
 dist/

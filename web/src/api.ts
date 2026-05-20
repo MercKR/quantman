@@ -1,5 +1,6 @@
 import type {
-  AnalysisResult, BacktestResult, CommandRow, CommandType, DeviceRow,
+  AnalysisResult, BacktestResult, BacktestRunDetail, BacktestRunSummary,
+  CommandRow, CommandType, DeviceRow,
   StrategyDef, StrategyRow, SymbolInfo, SyncSnapshot,
 } from "./types";
 
@@ -70,6 +71,11 @@ export const api = {
   }) => req<AnalysisResult>("/analysis/run", {
     method: "POST", body: JSON.stringify(body),
   }),
+
+  listBacktestRuns: () => req<BacktestRunSummary[]>("/backtest/runs"),
+  getBacktestRun: (id: number) => req<BacktestRunDetail>(`/backtest/runs/${id}`),
+  deleteBacktestRun: (id: number) =>
+    req<{ ok: boolean }>(`/backtest/runs/${id}`, { method: "DELETE" }),
 
   devices: () => req<DeviceRow[]>("/auth/devices"),
   revokeDevice: (id: number) =>

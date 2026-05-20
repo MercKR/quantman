@@ -91,8 +91,25 @@ button.sm { padding: 5px 10px; font-size: 13px; }
   background: var(--bg); border: 1px solid var(--border);
   border-radius: 6px; padding: 3px 6px;
 }
-.logic-toggle { display: inline-flex; gap: 4px; margin: 6px 0 10px; }
+.logic-toggle { display: inline-flex; gap: 4px; }
 .logic-toggle button { padding: 4px 12px; font-size: 13px; }
+
+/* 조건 사이 AND/OR 라벨 (구분선 + 가운데 텍스트) */
+.logic-sep {
+  display: flex; align-items: center; gap: 10px;
+  margin: 2px 6px 6px;
+}
+.logic-sep-line { flex: 1; height: 1px; background: var(--border); }
+.logic-sep-label {
+  font-size: 11px; color: var(--muted); font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+/* 빌더 하단 — AND/OR 토글 + 조건 추가 버튼 */
+.builder-foot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 8px;
+}
 
 /* 조건 칩 + 팝오버 */
 .chip-wrap { position: relative; display: inline-block; }
@@ -141,6 +158,31 @@ button.sm { padding: 5px 10px; font-size: 13px; }
 .op-field.hist-row { flex-wrap: wrap; }
 .op-field label { font-size: 12px; color: var(--muted); }
 .popover .op-field input { width: 64px; }
+.op-label-sub {
+  color: var(--muted); font-weight: 400; font-size: 10px;
+  margin-left: 4px;
+}
+
+/* 상수 입력 + 단위 힌트 */
+.op-field.op-const { flex-direction: column; align-items: stretch; gap: 4px; }
+.op-field.op-const label { font-weight: 600; }
+.op-field.op-const input { width: 100%; }
+.op-hint { font-size: 11px; color: var(--muted); }
+
+/* 이력통계 토글 (지표 탭 안에 옵션으로 통합) */
+.hist-toggle {
+  flex-direction: column; align-items: stretch; gap: 6px;
+  padding: 8px 9px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px;
+  margin-top: 10px;
+}
+.hist-toggle-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text); cursor: pointer;
+}
+.hist-toggle-row input[type="checkbox"] {
+  width: 14px; height: 14px; cursor: pointer;
+}
 
 .cat-list {
   max-height: 154px; overflow-y: auto;
@@ -161,6 +203,57 @@ button.sm { padding: 5px 10px; font-size: 13px; }
 .cat-empty {
   padding: 12px; color: var(--muted); font-size: 12px; text-align: center;
 }
+
+/* 백테스트 페이지 탭 */
+.tabs {
+  display: flex; gap: 4px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  background: none; border: none; color: var(--muted);
+  padding: 9px 16px; font-size: 14px; font-weight: 600;
+  border-radius: 8px 8px 0 0; cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tab:hover { background: var(--bg); color: var(--text); }
+.tab.active {
+  color: var(--accent); border-bottom-color: var(--accent);
+  background: none;
+}
+
+/* 매수 조건 / 매도 조건 패널 내부 sub-heading */
+.sub-h {
+  font-size: 13px; font-weight: 700; color: var(--text);
+  margin: 0 0 6px;
+}
+
+/* 매수액/매도액 입력 */
+.amount-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px; margin-top: 14px;
+}
+.amount-row label {
+  font-size: 13px; color: var(--text); font-weight: 600;
+  margin: 0; flex-shrink: 0;
+}
+.amount-row input {
+  width: 80px; padding: 5px 8px;
+}
+
+/* 결과 리포트 - 저장 버튼 영역 */
+.save-row {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+/* 실행 내역 표에서 전략명 링크 버튼 */
+.link-btn {
+  background: none; border: none; color: var(--accent);
+  font: inherit; font-weight: 600; cursor: pointer; padding: 0;
+}
+.link-btn:hover { text-decoration: underline; }
 
 /* 청산 규칙 리스트 */
 .rule-list { display: flex; flex-direction: column; gap: 5px; }

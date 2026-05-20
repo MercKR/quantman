@@ -392,3 +392,48 @@ def get_all_indicator_columns() -> list[str]:
 
 def get_indicator_label(col: str) -> str:
     return INDICATOR_META.get(col, {}).get("label", col)
+
+
+# 비교 호환 그룹 — 같은 그룹 안에서만 지표↔지표 비교가 의미가 있다.
+# (백분율과 0-100 RSI를 비교하면 무의미하게 항상 참/거짓이 되어 fool-proof 차단)
+# rsi_14는 0-100 무차원이므로 자기 그룹으로 분리. bb_pct는 0-1 무차원.
+# 비교를 위한 카테고리 키. unit 문자열만으로는 모자라서 별도 분류.
+COMPARE_GROUP: dict[str, str] = {
+    # 백분율 (%) — 수익률·괴리율·변동성·이익률 등 부호 있는 %
+    "pct_change_1d": "pct", "pct_change_5d": "pct", "pct_change_20d": "pct",
+    "pct_change_252d": "pct", "log_return_1d": "pct", "momentum_12_1m": "pct",
+    "ma_dev_20d": "pct", "ma_dev_60d": "pct", "ma_dev_200d": "pct",
+    "ma_gap_20_60": "pct", "high_dev_20d": "pct",
+    "bb_width": "pct", "atr_14_pct": "pct",
+    "realized_vol_20d": "pct", "realized_vol_60d": "pct",
+    "gross_margin": "pct", "gross_margin_trend": "pct", "op_margin": "pct",
+    "roic": "pct", "cash_conversion": "pct", "fcf_yield": "pct",
+    # 가격 (원) — 절대 가격 레벨
+    "price_level": "price",
+    # 0-100 무차원 (RSI 류)
+    "rsi_14": "rsi",
+    # 0-1 무차원 (Bollinger %B)
+    "bb_pct": "bbpct",
+    # 불리언/플래그 (0 or 1)
+    "rsi_bear_div": "flag",
+    # 일수
+    "streak": "days",
+    # 배수 (x)
+    "volume_ratio": "mult", "net_debt_ebitda": "mult",
+    "ev_ebitda": "mult", "ev_sales": "mult",
+    "trailing_pe": "mult", "pb_ratio": "mult", "peg": "mult",
+    # 표준편차 (Z)
+    "zscore_20d": "z", "zscore_60d": "z", "altman_z": "z",
+    # 거래대금 (원·큰 값)
+    "adv_20d": "money",
+}
+
+
+def get_indicator_unit(col: str) -> str:
+    """지표의 단위 문자열 ('%', '', 'x', '일' 등). INDICATOR_META에서 가져옴."""
+    return INDICATOR_META.get(col, {}).get("unit", "")
+
+
+def get_indicator_compare_group(col: str) -> str:
+    """지표끼리 비교가 의미 있는 그룹 키. 다른 그룹끼리는 비교 차단."""
+    return COMPARE_GROUP.get(col, "other")

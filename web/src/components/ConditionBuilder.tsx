@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type {
-  Condition, ConditionGroup, ModifierKind, Op, Operand, OperandKind,
+  Condition, ConditionGroup, IndicatorInfo, ModifierKind, Op, Operand,
   Stat, SymbolInfo,
 } from "../types";
 import { CategoryList, SYMBOL_CAT_ORDER, usePopoverDismiss } from "./SymbolPicker";
@@ -34,11 +34,34 @@ const STAT_LABEL: Record<string, string> =
 const INDICATOR_GROUP_ORDER =
   ["가격·수익률", "모멘텀", "이동평균", "변동성·기술적", "통계", "거래량", "펀더멘털", "기타"];
 
+// 비교 그룹별 사용자에게 보여줄 힌트 (상수 입력 시 placeholder/범위 안내)
+const COMPARE_GROUP_HINTS: Record<string, { range: string; tip: string }> = {
+  pct:   { range: "-100 ~ +100",  tip: "%로 입력 (예: 1.5 = 1.5%)" },
+  price: { range: "0 이상",        tip: "원 단위 가격" },
+  rsi:   { range: "0 ~ 100",       tip: "RSI 값 (보통 30=과매도, 70=과매수)" },
+  bbpct: { range: "0 ~ 1",         tip: "0=하단, 0.5=중심, 1=상단" },
+  flag:  { range: "0 또는 1",       tip: "0=거짓, 1=참" },
+  days:  { range: "음수=연속하락, 양수=연속상승", tip: "일수 (정수)" },
+  mult:  { range: "0 이상",        tip: "배수 (예: 1.5 = 1.5배)" },
+  z:     { range: "보통 -3 ~ +3", tip: "표준편차 단위" },
+  money: { range: "원",            tip: "거래대금(원)" },
+  other: { range: "",              tip: "" },
+};
+
 // ── 헬퍼 ──────────────────────────────────────────────────────────────────────
 
-function indLabel(symbols: SymbolInfo[], sym?: string, key?: string): string {
+function findIndicator(symbols: SymbolInfo[], sym?: string, key?: string):
+    IndicatorInfo | undefined {
   return symbols.find((s) => s.symbol === sym)
-    ?.indicators.find((i) => i.key === key)?.label ?? key ?? "";
+    ?.indicators.find((i) => i.key === key);
+}
+
+function indLabel(symbols: SymbolInfo[], sym?: string, key?: string): string {
+  return findIndicator(symbols, sym, key)?.label ?? key ?? "";
+}
+
+function compareGroupOf(symbols: SymbolInfo[], sym?: string, key?: string): string {
+  return findIndicator(symbols, sym, key)?.compare_group ?? "other";
 }
 
 function operandSummary(o: Operand | undefined, symbols: SymbolInfo[]): string {
@@ -75,8 +98,19 @@ export default function ConditionBuilder({ symbols, group, onChange }: Props) {
   }
 
   function update(i: number, patch: Partial<Condition>) {
-    const conditions = group.conditions.map((c, idx) =>
-      idx === i ? { ...c, ...patch } : c);
+    const conditions = group.conditions.map((c, idx) => {
+      if (idx !== i) return c;
+      const next = { ...c, ...patch };
+      // 좌측이 바뀌었고 우측이 지표/이력통계이며 새 좌측과 호환 그룹이 다르면 → 상수 0으로 reset
+      if (patch.left && (next.right?.kind === "indicator" || next.right?.kind === "history")) {
+        const lg = compareGroupOf(symbols, next.left.symbol, next.left.indicator);
+        const rg = compareGroupOf(symbols, next.right.symbol, next.right.indicator);
+        if (lg !== "other" && rg !== "other" && lg !== rg) {
+          next.right = { kind: "constant", value: 0 };
+        }
+      }
+      return next;
+    });
     onChange({ ...group, conditions });
   }
 
@@ -114,80 +148,100 @@ export default function ConditionBuilder({ symbols, group, onChange }: Props) {
 
   return (
     <div>
-      {group.conditions.length > 1 && (
-        <div className="logic-toggle">
-          {(["AND", "OR"] as const).map((lg) => (
-            <button
-              key={lg} type="button"
-              className={group.logic === lg ? "" : "ghost"}
-              onClick={() => onChange({ ...group, logic: lg })}
-            >
-              {lg === "AND" ? "모두 만족 (AND)" : "하나라도 만족 (OR)"}
-            </button>
-          ))}
-        </div>
-      )}
+      {group.conditions.map((c, i) => {
+        const leftGroup = compareGroupOf(symbols, c.left.symbol, c.left.indicator);
+        return (
+          <div key={i}>
+            <div className="sentence">
+              <ModifierChip
+                value={c.modifier ?? null}
+                onChange={(m) => update(i, { modifier: m })}
+              />
+              <OperandChip
+                symbols={symbols} value={c.left} allowConstant={false}
+                onChange={(o) => update(i, { left: o })}
+              />
+              <span className="txt">가(이)</span>
 
-      {group.conditions.map((c, i) => (
-        <div className="sentence" key={i}>
-          <OperandChip
-            symbols={symbols} value={c.left} allowConstant={false}
-            onChange={(o) => update(i, { left: o })}
-          />
-          <span className="txt">가(이)</span>
+              {c.op === "between" ? (
+                <RangeInline
+                  value={Array.isArray(c.right?.value) ? (c.right!.value as number[]) : [0, 0]}
+                  hintGroup={leftGroup}
+                  onChange={(v) => update(i, { right: { kind: "constant", value: v } })}
+                />
+              ) : (
+                <OperandChip
+                  symbols={symbols}
+                  value={c.right ?? { kind: "constant", value: 0 }}
+                  allowConstant
+                  compatGroup={leftGroup}
+                  onChange={(o) => update(i, { right: o })}
+                />
+              )}
 
-          {c.op === "between" ? (
-            <RangeInline
-              value={Array.isArray(c.right?.value) ? (c.right!.value as number[]) : [0, 0]}
-              onChange={(v) => update(i, { right: { kind: "constant", value: v } })}
-            />
-          ) : (
-            <OperandChip
-              symbols={symbols}
-              value={c.right ?? { kind: "constant", value: 0 }}
-              allowConstant
-              onChange={(o) => update(i, { right: o })}
-            />
-          )}
-
-          <select className="op-select" value={c.op}
-                  onChange={(e) => setOp(i, e.target.value as Op)}>
-            {OP_GROUPS.map((g) => (
-              <optgroup key={g.label} label={g.label}>
-                {g.ops.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
+              <select className="op-select" value={c.op}
+                      onChange={(e) => setOp(i, e.target.value as Op)}>
+                {OP_GROUPS.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.ops.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </optgroup>
                 ))}
-              </optgroup>
+              </select>
+
+              <button
+                type="button" className="ghost sm" style={{ marginLeft: "auto" }}
+                onClick={() => remove(i)}
+              >
+                삭제
+              </button>
+            </div>
+
+            {/* 조건 사이의 AND/OR 라벨 (마지막 조건엔 표시 안 함) */}
+            {i < group.conditions.length - 1 && (
+              <div className="logic-sep">
+                <span className="logic-sep-line" />
+                <span className="logic-sep-label">
+                  {group.logic === "AND" ? "그리고 (AND)" : "또는 (OR)"}
+                </span>
+                <span className="logic-sep-line" />
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* 마지막 조건 아래에 AND/OR 토글 + 조건 추가 버튼 한 줄 */}
+      <div className="builder-foot">
+        {group.conditions.length > 1 && (
+          <div className="logic-toggle">
+            {(["AND", "OR"] as const).map((lg) => (
+              <button
+                key={lg} type="button"
+                className={group.logic === lg ? "" : "ghost"}
+                onClick={() => onChange({ ...group, logic: lg })}
+              >
+                {lg === "AND" ? "모두 만족 (AND)" : "하나라도 만족 (OR)"}
+              </button>
             ))}
-          </select>
-
-          <ModifierChip
-            value={c.modifier ?? null}
-            onChange={(m) => update(i, { modifier: m })}
-          />
-
-          <button
-            type="button" className="ghost sm" style={{ marginLeft: "auto" }}
-            onClick={() => remove(i)}
-          >
-            삭제
-          </button>
-        </div>
-      ))}
-
-      <button type="button" className="ghost sm" onClick={add}>
-        + 조건 추가
-      </button>
+          </div>
+        )}
+        <button type="button" className="ghost sm" onClick={add}>
+          + 조건 추가
+        </button>
+      </div>
     </div>
   );
 }
 
 // ── 피연산자 칩 + 팝오버 ───────────────────────────────────────────────────────
 
-function OperandChip({ symbols, value, allowConstant, onChange }: {
+function OperandChip({ symbols, value, allowConstant, compatGroup, onChange }: {
   symbols: SymbolInfo[];
   value: Operand;
   allowConstant: boolean;
+  compatGroup?: string;            // 우측 피연산자에서, 좌측과 호환되는 지표만 노출
   onChange: (o: Operand) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -203,7 +257,9 @@ function OperandChip({ symbols, value, allowConstant, onChange }: {
         <div className="popover">
           <OperandEditor
             symbols={symbols} value={value}
-            allowConstant={allowConstant} onChange={onChange}
+            allowConstant={allowConstant}
+            compatGroup={compatGroup}
+            onChange={onChange}
           />
         </div>
       )}
@@ -211,10 +267,11 @@ function OperandChip({ symbols, value, allowConstant, onChange }: {
   );
 }
 
-function OperandEditor({ symbols, value, allowConstant, onChange }: {
+function OperandEditor({ symbols, value, allowConstant, compatGroup, onChange }: {
   symbols: SymbolInfo[];
   value: Operand;
   allowConstant: boolean;
+  compatGroup?: string;
   onChange: (o: Operand) => void;
 }) {
   const symList = symbols.filter((s) => s.indicators.length > 0);
@@ -222,55 +279,86 @@ function OperandEditor({ symbols, value, allowConstant, onChange }: {
     symbols.find((s) => s.symbol === sym)?.indicators ?? [];
   const [search, setSearch] = useState("");
 
-  function setKind(k: OperandKind) {
+  // 지표/숫자 2개 탭만 유지. "이력통계"는 지표 탭의 "최근 N일" 토글로 통합.
+  const tabKind: "indicator" | "constant" =
+    value.kind === "constant" ? "constant" : "indicator";
+
+  function setTab(k: "indicator" | "constant") {
     if (k === "constant") { onChange({ kind: "constant", value: 0 }); return; }
     const sym = value.symbol ?? symList[0]?.symbol ?? "";
     const inds = indicatorsOf(sym);
     const ind = inds.some((i) => i.key === value.indicator)
       ? value.indicator : inds[0]?.key ?? "";
-    if (k === "indicator") {
-      onChange({ kind: "indicator", symbol: sym, indicator: ind });
-    } else {
-      onChange({ kind: "history", symbol: sym, indicator: ind,
-                 stat: value.stat ?? "mean", window: value.window ?? 20,
-                 percentile: value.percentile });
-    }
+    onChange({ kind: "indicator", symbol: sym, indicator: ind });
   }
 
   function pickSymbol(sym: string) {
-    const inds = indicatorsOf(sym);
+    const inds = indicatorsOf(sym).filter((i) =>
+      !compatGroup || compatGroup === "other"
+        || (i.compare_group ?? "other") === compatGroup);
     const ind = inds.some((i) => i.key === value.indicator)
       ? value.indicator : inds[0]?.key ?? "";
-    onChange({ ...value, symbol: sym, indicator: ind });
+    onChange({ ...value, kind: value.kind === "constant" ? "indicator" : value.kind,
+                symbol: sym, indicator: ind });
   }
 
-  const kind = value.kind;
+  function pickIndicator(key: string) {
+    onChange({ ...value, kind: value.kind === "constant" ? "indicator" : value.kind,
+                indicator: key });
+  }
+
+  function toggleHistory(enabled: boolean) {
+    if (enabled) {
+      onChange({ kind: "history",
+                  symbol: value.symbol, indicator: value.indicator,
+                  stat: value.stat ?? "mean", window: value.window ?? 20,
+                  percentile: value.percentile });
+    } else {
+      onChange({ kind: "indicator",
+                  symbol: value.symbol, indicator: value.indicator });
+    }
+  }
+
+  // 좌측과 호환되는 지표만 노출 (compatGroup이 있을 때)
+  const symHasCompat = (s: SymbolInfo) => {
+    if (!compatGroup || compatGroup === "other") return s.indicators.length > 0;
+    return s.indicators.some((i) =>
+      (i.compare_group ?? "other") === compatGroup);
+  };
+
+  const visibleSymbols = symList.filter(symHasCompat);
+  const visibleIndicators = indicatorsOf(value.symbol).filter((i) =>
+    !compatGroup || compatGroup === "other"
+      || (i.compare_group ?? "other") === compatGroup);
+
+  const constVal = typeof value.value === "number" ? value.value : 0;
+  const hint = COMPARE_GROUP_HINTS[compatGroup ?? "other"] ?? COMPARE_GROUP_HINTS.other;
 
   return (
     <div className="op-editor">
-      <div className="seg">
-        <button type="button" className={kind === "indicator" ? "on" : ""}
-                onClick={() => setKind("indicator")}>지표</button>
-        {allowConstant && (
-          <button type="button" className={kind === "constant" ? "on" : ""}
-                  onClick={() => setKind("constant")}>숫자</button>
-        )}
-        <button type="button" className={kind === "history" ? "on" : ""}
-                onClick={() => setKind("history")}>이력통계</button>
-      </div>
-
-      {kind === "constant" && (
-        <div className="op-field">
-          <label>값</label>
-          <input
-            type="number" step="any" autoFocus
-            value={typeof value.value === "number" ? value.value : 0}
-            onChange={(e) => onChange({ kind: "constant", value: Number(e.target.value) })}
-          />
+      {allowConstant && (
+        <div className="seg">
+          <button type="button" className={tabKind === "indicator" ? "on" : ""}
+                  onClick={() => setTab("indicator")}>지표</button>
+          <button type="button" className={tabKind === "constant" ? "on" : ""}
+                  onClick={() => setTab("constant")}>숫자</button>
         </div>
       )}
 
-      {(kind === "indicator" || kind === "history") && (
+      {tabKind === "constant" && (
+        <div className="op-field op-const">
+          <label>값</label>
+          <input
+            type="number" step="any" autoFocus
+            value={constVal}
+            placeholder={hint.range}
+            onChange={(e) => onChange({ kind: "constant", value: Number(e.target.value) })}
+          />
+          {hint.tip && <div className="op-hint">{hint.tip}</div>}
+        </div>
+      )}
+
+      {tabKind === "indicator" && (
         <>
           <input
             className="pop-search" placeholder="종목 검색…" autoFocus
@@ -278,44 +366,69 @@ function OperandEditor({ symbols, value, allowConstant, onChange }: {
           />
           <div className="op-label">종목</div>
           <CategoryList
-            items={symList.map((s) => ({ key: s.symbol, label: s.symbol, cat: s.category }))}
+            items={visibleSymbols.map((s) =>
+              ({ key: s.symbol, label: s.symbol, cat: s.category }))}
             order={SYMBOL_CAT_ORDER}
             selected={value.symbol}
             search={search}
             onPick={pickSymbol}
           />
-          <div className="op-label">지표</div>
-          <CategoryList
-            items={indicatorsOf(value.symbol).map((i) =>
-              ({ key: i.key, label: i.label, cat: i.group }))}
-            order={INDICATOR_GROUP_ORDER}
-            selected={value.indicator}
-            onPick={(key) => onChange({ ...value, indicator: key })}
-          />
-          {kind === "history" && (
-            <div className="op-field hist-row">
-              <label>최근</label>
-              <input
-                type="number" min={1} value={value.window ?? 20}
-                onChange={(e) => onChange({ ...value, window: Number(e.target.value) })}
-              />
-              <span className="txt">일</span>
-              <select
-                value={value.stat ?? "mean"}
-                onChange={(e) => onChange({ ...value, stat: e.target.value as Stat })}
-              >
-                {STAT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-              {value.stat === "percentile" && (
-                <input
-                  type="number" min={0} max={100} title="백분위(%)"
-                  value={value.percentile ?? 50}
-                  onChange={(e) => onChange({ ...value, percentile: Number(e.target.value) })}
+
+          {value.symbol && (
+            <>
+              <div className="op-label">지표 <span className="op-label-sub">({value.symbol})</span></div>
+              {visibleIndicators.length === 0 ? (
+                <div className="cat-empty">
+                  {compatGroup && compatGroup !== "other"
+                    ? "이 종목엔 호환되는 지표가 없습니다"
+                    : "지표가 없습니다"}
+                </div>
+              ) : (
+                <CategoryList
+                  items={visibleIndicators.map((i) =>
+                    ({ key: i.key, label: i.label, cat: i.group }))}
+                  order={INDICATOR_GROUP_ORDER}
+                  selected={value.indicator}
+                  onPick={pickIndicator}
                 />
               )}
-            </div>
+
+              {value.indicator && (
+                <div className="op-field hist-toggle">
+                  <label className="hist-toggle-row">
+                    <input type="checkbox"
+                          checked={value.kind === "history"}
+                          onChange={(e) => toggleHistory(e.target.checked)} />
+                    <span>최근 N일 ___ 으로 비교</span>
+                  </label>
+                  {value.kind === "history" && (
+                    <div className="op-field hist-row">
+                      <label>최근</label>
+                      <input
+                        type="number" min={1} value={value.window ?? 20}
+                        onChange={(e) => onChange({ ...value, window: Number(e.target.value) })}
+                      />
+                      <span className="txt">일</span>
+                      <select
+                        value={value.stat ?? "mean"}
+                        onChange={(e) => onChange({ ...value, stat: e.target.value as Stat })}
+                      >
+                        {STAT_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                      {value.stat === "percentile" && (
+                        <input
+                          type="number" min={0} max={100} title="백분위(%)"
+                          value={value.percentile ?? 50}
+                          onChange={(e) => onChange({ ...value, percentile: Number(e.target.value) })}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </>
       )}
@@ -324,24 +437,26 @@ function OperandEditor({ symbols, value, allowConstant, onChange }: {
 }
 
 /** between 연산자용 [min ~ max] 입력. */
-function RangeInline({ value, onChange }: {
+function RangeInline({ value, hintGroup, onChange }: {
   value: number[];
+  hintGroup?: string;
   onChange: (v: number[]) => void;
 }) {
   const lo = value[0] ?? 0;
   const hi = value[1] ?? 0;
+  const hint = COMPARE_GROUP_HINTS[hintGroup ?? "other"] ?? COMPARE_GROUP_HINTS.other;
   return (
     <span className="operand">
-      <input type="number" step="any" value={lo}
+      <input type="number" step="any" value={lo} placeholder={hint.range}
              onChange={(e) => onChange([Number(e.target.value), hi])} />
       <span className="txt">~</span>
-      <input type="number" step="any" value={hi}
+      <input type="number" step="any" value={hi} placeholder={hint.range}
              onChange={(e) => onChange([lo, Number(e.target.value)])} />
     </span>
   );
 }
 
-/** 수식어(지속성·최근성) 칩. */
+/** 수식어(지속성·최근성) 칩. 문장 맨 앞에 위치한다. */
 function ModifierChip({ value, onChange }: {
   value: { kind: ModifierKind; days: number } | null;
   onChange: (m: { kind: ModifierKind; days: number } | null) => void;
@@ -356,15 +471,16 @@ function ModifierChip({ value, onChange }: {
   }
   return (
     <span className="modifier">
+      <input type="number" min={1} value={value.days}
+             onChange={(e) => onChange({ ...value, days: Number(e.target.value) })} />
+      <span className="txt">일</span>
       <select value={value.kind}
               onChange={(e) => onChange({ ...value, kind: e.target.value as ModifierKind })}>
         <option value="streak">연속</option>
-        <option value="within">최근</option>
+        <option value="within">내</option>
       </select>
-      <input type="number" min={1} value={value.days}
-             onChange={(e) => onChange({ ...value, days: Number(e.target.value) })} />
-      <span className="txt">{value.kind === "streak" ? "일 연속" : "일 내"}</span>
       <button type="button" className="x-btn" onClick={() => onChange(null)}>×</button>
     </span>
   );
 }
+

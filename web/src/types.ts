@@ -1,4 +1,8 @@
-export interface IndicatorInfo { key: string; label: string; group: string }
+export interface IndicatorInfo {
+  key: string; label: string; group: string;
+  unit?: string;          // 표시 단위 (%, x, 일, 원 등)
+  compare_group?: string; // 지표↔지표 비교 호환 그룹 키 (pct/rsi/price/...)
+}
 export interface SymbolInfo {
   symbol: string; category: string; tradable: boolean; rows: number;
   indicators: IndicatorInfo[];
@@ -42,7 +46,8 @@ export interface StrategyDef {
   buy: ConditionGroup;
   sell?: ConditionGroup | null;
   exit_rules: ExitRules;
-  amount_pct: number;
+  amount_pct: number;              // 자본 대비 매수 비율 (%)
+  sell_amount_pct?: number;        // 매도 시 보유분 청산 비율 (%) — 100=전량
   fill?: string;
 }
 
@@ -57,6 +62,28 @@ export interface BacktestResult {
   equity?: { date: string; value: number | null }[];
   benchmark?: { date: string; value: number | null }[];
   trades?: Record<string, string | number | null>[];
+  run_id?: number;
+  run_created_at?: string;
+}
+
+export interface BacktestRunSummary {
+  id: number;
+  name: string;
+  created_at: string;
+  initial_capital: number;
+  metrics: Record<string, number | null>;
+  success: boolean;
+}
+
+export interface BacktestRunDetail {
+  id: number;
+  name: string;
+  initial_capital: number;
+  start?: string | null;
+  end?: string | null;
+  created_at: string;
+  definition: StrategyDef;
+  result: BacktestResult;
 }
 
 export interface AnalysisResult {
