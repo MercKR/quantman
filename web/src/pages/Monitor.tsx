@@ -71,7 +71,12 @@ export default function Monitor() {
     } finally { setBusy(false); }
   }
 
-  const p = snap?.payload;
+  const paired = devices.length > 0;
+  // Phase 42-3 — 페어링 해제 시 옛 snapshot(킬스위치·잔고·포지션 등)을
+  // 노출하지 않는다. paired=false 분기에서 PairingOnboarding이 표시되므로
+  // 본 데이터는 어차피 가려지지만, kill switch banner 같은 page-level
+  // 영역까지 stale 데이터를 reflect하지 않도록 source에서 차단.
+  const p = paired ? snap?.payload : undefined;
   const ks = p?.kill_switch;
   const summary = p?.cycle_summary;
   const slip = p?.slippage;
@@ -80,8 +85,6 @@ export default function Monitor() {
   const cycles = p?.recent_cycles ?? [];
   const positions = p?.positions ?? [];
   const equityNow = p?.balance?.total_eval;
-
-  const paired = devices.length > 0;
   const actionDisabled = busy || !paired;
   const pairTooltip = paired ? undefined : "기기 페어링 후 활성화됩니다";
 
@@ -100,8 +103,8 @@ export default function Monitor() {
       {/* 시장 컨텍스트 */}
       <MarketBar ctx={market} />
 
-      {/* Phase 31 — 내일 매매 미리보기 */}
-      <NextDayPreviewPanel />
+      {/* Phase 31 — 내일 매매 미리보기 (페어링 후에만 의미) */}
+      {paired && <NextDayPreviewPanel />}
 
       {/* Kill switch banner */}
       {ks?.active && (

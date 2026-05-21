@@ -58,7 +58,11 @@ export default function Dashboard() {
   );
   const otherModeCount = strategies.length - filteredStrategies.length;
 
-  const payload = snap?.payload ?? {};
+  // Phase 42-3 — 페어링 해제 상태에서는 옛 snapshot(잔고·포지션·킬스위치 등)을
+  // 표시하지 않는다. 페어링하지 않았는데 보유 종목·"킬스위치 정상" 라벨이 보이면
+  // 사용자가 자기 계정·매매 상태를 오인할 수 있음.
+  const effectiveSnap = connected ? snap : null;
+  const payload = effectiveSnap?.payload ?? {};
   const bal = payload.balance;
   const positions = payload.positions ?? [];
   const equity = payload.equity ?? [];
@@ -410,8 +414,8 @@ export default function Dashboard() {
           />
           <SysRow
             label="킬스위치"
-            value={ks?.active ? `활성 (${ks.reason})` : "정상"}
-            status={ks?.active ? "bad" : "ok"}
+            value={!connected ? "—" : (ks?.active ? `활성 (${ks.reason})` : "정상")}
+            status={!connected ? undefined : (ks?.active ? "bad" : "ok")}
           />
           <SysRow
             label="평균 슬리피지"
