@@ -151,6 +151,8 @@ class UserSettingsIO(BaseModel):
     max_drawdown_pct: Optional[float] = None
     # Phase 38.5 — preview 연속 누락 알림 임계값
     preview_missing_alert_threshold: int = 3
+    # Phase 40 — KIS ↔ ledger 정합성 drift 알림 토글
+    alert_on_reconcile_drift: bool = True
 
 
 class TradableSymbolIn(BaseModel):
