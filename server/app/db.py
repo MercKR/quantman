@@ -5,8 +5,31 @@ from sqlalchemy import text
 
 from .config import settings
 
-_connect_args = {"check_same_thread": False} if settings.DB_URL.startswith("sqlite") else {}
-engine = create_engine(settings.DB_URL, echo=False, connect_args=_connect_args)
+_is_sqlite = settings.DB_URL.startswith("sqlite")
+_is_postgres = settings.DB_URL.startswith("postgresql")
+
+# Phase 42-1 — Postgres 연결 안정화.
+# Railway·기타 호스팅 proxy가 idle connection을 끊으면 SQLAlchemy pool에 들어 있던
+# socket이 stale → 다음 요청에서 `psycopg.errors.ProtocolViolation: server conn crashed?`
+# traceback. pool_pre_ping(매 사용 전 ping)·pool_recycle(주기적 재생성)·OS keepalives
+# 3중 방어로 차단. SQLite는 pool 없으므로 적용 불필요.
+if _is_sqlite:
+    _connect_args = {"check_same_thread": False}
+    _engine_kwargs: dict = {}
+elif _is_postgres:
+    _connect_args = {
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    }
+    _engine_kwargs = {"pool_pre_ping": True, "pool_recycle": 300}
+else:
+    _connect_args = {}
+    _engine_kwargs = {}
+
+engine = create_engine(settings.DB_URL, echo=False,
+                       connect_args=_connect_args, **_engine_kwargs)
 
 
 def _migrate() -> None:
