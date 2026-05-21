@@ -37,6 +37,11 @@ build_rel/
 Output/
 *.zip
 
+# 자동 갱신 데이터 캐시 — 서버 cron이 fetch하므로 git 저장 불필요.
+# ticker_db.json·user_stocks.json은 작은 metadata라 tracked 유지.
+core/data/*.parquet
+core/data/fundamentals/*.parquet
+
 # 웹
 node_modules/
 
