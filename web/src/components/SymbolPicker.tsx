@@ -92,22 +92,27 @@ export function CategoryList({ items, order, selected, search, onPick }: {
 
 /** 종목 선택 칩 — 클릭 시 탭 + 검색 팝오버가 열린다.
  *
- * tradableOnly=true (매수 대상): KIS 매수 가능 종목 + 자동선정 프리셋
+ * tradableOnly=true (매수 대상): KIS 매수 가능 종목 + 자동 선택 프리셋
  * tradableOnly=false (매수 조건): 백테스트 데이터 있는 종목 (분류별 탭)
  */
-export default function SymbolPicker({ symbols, value, tradableOnly, onChange }: {
+export default function SymbolPicker({
+  symbols, value, tradableOnly, lockMode, onChange,
+}: {
   symbols: SymbolInfo[];
   value: string;
   tradableOnly?: boolean;
+  /** "screener" → 자동 선택 패널 고정, "manual" → 수동만. 미지정 시 내부 토글 표시. */
+  lockMode?: "manual" | "screener";
   onChange: (sym: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss<HTMLSpanElement>(open, setOpen);
 
-  // 자동선정 모드는 매수 대상에서만 활성
+  // 자동 선택 모드는 매수 대상에서만 활성
   const screenerKey = parseScreenerKey(value);
-  const [mode, setMode] = useState<"manual" | "screener">(
+  const [innerMode, setMode] = useState<"manual" | "screener">(
     screenerKey ? "screener" : "manual");
+  const mode = lockMode ?? innerMode;
   const [presets, setPresets] = useState<ScreenerPreset[]>([]);
 
   useEffect(() => {
@@ -123,7 +128,7 @@ export default function SymbolPicker({ symbols, value, tradableOnly, onChange }:
 
   const tabOrder = tradableOnly ? TRADABLE_TAB_ORDER : OPERAND_TAB_ORDER;
 
-  // chip 라벨 — 종목명·자동선정 모두 표시
+  // chip 라벨 — 종목명·자동 선택 모두 표시
   const sel = value && !screenerKey
     ? symbols.find((s) => s.symbol === value) : undefined;
   const screenerPreset = screenerKey
@@ -141,7 +146,7 @@ export default function SymbolPicker({ symbols, value, tradableOnly, onChange }:
       </button>
       {open && (
         <div className="popover popover-wide">
-          {tradableOnly && (
+          {tradableOnly && !lockMode && (
             <div className="seg" style={{ marginBottom: 10 }}>
               <button type="button"
                       className={mode === "manual" ? "on" : ""}
@@ -151,7 +156,7 @@ export default function SymbolPicker({ symbols, value, tradableOnly, onChange }:
               <button type="button"
                       className={mode === "screener" ? "on" : ""}
                       onClick={() => setMode("screener")}>
-                자동선정
+                자동 선택
               </button>
             </div>
           )}
@@ -188,7 +193,7 @@ export default function SymbolPicker({ symbols, value, tradableOnly, onChange }:
   );
 }
 
-/** 자동선정 패널 — 프리셋 카드 그리드. 카드 펼치면 매칭 종목 미리보기. */
+/** 자동 선택 패널 — 프리셋 카드 그리드. 카드 펼치면 매칭 종목 미리보기. */
 function ScreenerPanel({ presets, selectedKey, onPick }: {
   presets: ScreenerPreset[];
   selectedKey: string | null;

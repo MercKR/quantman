@@ -19,6 +19,14 @@ export type OperandKind = "indicator" | "constant" | "history";
 export type Stat = "min" | "max" | "mean" | "percentile" | "lag";
 export type ModifierKind = "streak" | "within";
 
+/** Phase 41 — Operand.symbol에 이 sentinel을 넣으면 "각 매수 대상 종목" placeholder.
+ *  평가 엔진이 current_symbol로 치환. 빌더 좌변 종목 드롭다운 첫 옵션. */
+export const SELF_SYMBOL = "__SELF__";
+export const SELF_LABEL = "[이 종목]";
+export function isSelfRef(op?: Operand | null): boolean {
+  return op?.symbol === SELF_SYMBOL;
+}
+
 export interface Operand {
   kind: OperandKind;
   symbol?: string;
@@ -45,15 +53,69 @@ export interface ExitRules {
   trail_pct?: number | null;
 }
 
+/** Phase 32 — 매도 규칙 통합. 익절/손절/트레일링/보유기간/매도 조건이 한 객체.
+ *  먼저 트리거되는 규칙으로 매도. */
+export interface SellRules {
+  take_profit?: number | null;        // %
+  stop_loss?: number | null;          // % (음수)
+  trail_pct?: number | null;          // %
+  trail_atr_mult?: number | null;     // × ATR_14
+  hold_days?: number | null;          // 보유 일수
+  conditions?: Condition[];           // 자유 매도 조건 (dataset 평가)
+  logic?: Logic;
+  sell_amount_pct?: number;           // 100=전량 매도
+}
+
+/** 체결 정책 — 모든 필드 optional, null/undefined는 글로벌 default 적용.
+ *  Backend: quant_core.exec_defaults.DEFAULT_EXECUTION과 병합. */
+export interface ExecutionPolicy {
+  sizing_mode?: "pct_cash" | "atr_risk";  // pct_cash=amount_pct 사용, atr_risk=ATR 변동성 기반
+  atr_risk_pct?: number;                  // atr_risk 모드: 트레이드당 자본의 N% 위험
+  atr_mult?: number;                      // ATR × 이 배수 = 1주당 손절폭
+  max_position_pct?: number;              // 단일 종목 비중 상한 (자본 %)
+  daily_loss_limit_pct?: number;          // 일일 손실 한도 (킬스위치 트리거)
+  max_drawdown_pct?: number;              // 누적 손실 한도 (자본 고점 대비)
+  buy_tolerance_pct?: number;             // 매수 지정가 = 전일 종가 × (1 + N%) — 갭상승 허용 범위
+  sell_tolerance_pct?: number;            // 매도 지정가 = 전일 종가 × (1 - N%) — 갭하락 허용 범위 (Phase 38.9)
+  // Phase 39 — 백테스트 비용 가정. 실매매(모의/실전) 영향 없음.
+  bt_commission_bps?: number;             // 편도 수수료 (bps). 25 = 0.25%
+  bt_slippage_bps?: number;               // 편도 슬리피지 (bps). 10 = 0.10%
+  bt_gap_extra_cost?: boolean;            // 갭일 추가 비용 산입 여부 (갭의 절반)
+  bt_gap_threshold_pct?: number;          // 이 % 이상 갭이면 추가 비용 발생
+}
+
+/** 사이징·리스크 default — exec_defaults.py와 동기. UI placeholder 및 신규 전략 default로 사용. */
+export const EXECUTION_DEFAULTS: Required<ExecutionPolicy> = {
+  sizing_mode: "atr_risk",
+  atr_risk_pct: 1.0,
+  atr_mult: 2.0,
+  max_position_pct: 10.0,
+  daily_loss_limit_pct: 3.0,
+  max_drawdown_pct: 20.0,
+  buy_tolerance_pct: 1.0,
+  sell_tolerance_pct: 2.0,
+  // Phase 39
+  bt_commission_bps: 25,
+  bt_slippage_bps: 10,
+  bt_gap_extra_cost: true,
+  bt_gap_threshold_pct: 1.0,
+};
+
 export interface StrategyDef {
   name: string;
   trade_symbol: string;
   buy: ConditionGroup;
+  /** Phase 32 — 매도/청산 통합. 신규 전략은 이 필드만 사용. */
+  sell_rules?: SellRules;
+  /** [DEPRECATED — backend _migrate_legacy가 sell_rules로 흡수] */
   sell?: ConditionGroup | null;
-  exit_rules: ExitRules;
-  amount_pct: number;              // 자본 대비 매수 비율 (%)
-  sell_amount_pct?: number;        // 매도 시 보유분 청산 비율 (%) — 100=전량
-  screener_limit?: number;         // 자동선정 시 동시 보유 한도 (기본 1)
+  /** [DEPRECATED] */
+  exit_rules?: ExitRules;
+  /** [DEPRECATED — sell_rules.sell_amount_pct로 통합] */
+  sell_amount_pct?: number;
+  amount_pct: number;              // 자본 대비 매수 비율 (%) — sizing_mode=pct_cash일 때만 사용
+  screener_limit?: number;         // 자동 선택 시 동시 보유 한도 (기본 5)
+  execution?: ExecutionPolicy | null;
   fill?: string;
 }
 
@@ -237,11 +299,100 @@ export interface SyncSnapshot {
     rejection_reasons?: { reasons: RejectionReason[] };
     drawdown?: DrawdownState;
     health?: LocalHealth;
+    // Phase 31 — 내일 매매 미리보기
+    next_day_preview?: NextDayPreview;
+    // Phase 40 — KIS 잔고 ↔ ledger 정합성
+    reconciliation?: ReconciliationResult;
   };
   received_at: string; device_id: number;
 }
 
-// ── 종목 자동선정 (Screener) ─────────────────────────────────────────────────
+/** Phase 40 — KIS 잔고 ↔ ledger drift 점검 결과 */
+export interface ReconciliationResult {
+  ledger_orphans: {
+    symbol: string; ledger_total_qty: number; kis_qty: number;
+    shortfall: number;
+    ledger_sids: { sid: string; qty: number }[];
+  }[];
+  external_extras: {
+    symbol: string; kis_qty: number; ledger_total_qty: number;
+    excess: number; in_ledger: boolean;
+  }[];
+  in_sync: string[];
+  checked_at: string;
+  ledger_symbol_count: number;
+  kis_symbol_count: number;
+  applied?: {
+    sid: string; symbol: string; old_qty: number; new_qty: number;
+    removed_qty: number; fully_closed: boolean;
+  }[];
+  external_extras_count?: number;
+  has_drift?: boolean;
+  error?: string;
+}
+
+/** 내일 매매 미리보기 — 각 데이터 cron 후 서버가 평가해 sync snapshot에 merge */
+export interface NextDayPreview {
+  generated_at: string;
+  data_source: string;          // cron 식별자 — 'dataset_global', 'krx_2nd' 등
+  available: boolean;
+  reason?: string;              // available=false일 때 사유
+  summary?: {
+    n_buy_candidates: number;
+    est_total_buy_amount: number;
+    n_holding: number;
+    cash: number;
+  };
+  by_strategy?: PreviewByStrategy[];
+  exit_candidates?: PreviewExit[];
+}
+
+export interface PreviewSignalDetail {
+  label: string;
+  passed: boolean | null;
+  reason?: string | null;
+}
+export interface PreviewPerSymbolEval {
+  passed: boolean;
+  summary: string;
+  details: PreviewSignalDetail[];
+}
+export interface PreviewByStrategy {
+  strategy_id: number;
+  strategy_name: string;
+  trade_symbol: string;
+  run_mode: string;
+  signal_passed: boolean;
+  candidates: PreviewBuyCandidate[];
+  skipped: { symbol?: string; reason: string }[];
+  // Phase 41 — 공통/종목별 신호 평가 결과
+  signal_details?: PreviewSignalDetail[];      // 공통 조건 결과
+  signal_summary?: string;                      // 공통 조건 한 줄 요약
+  per_symbol_details?: Record<string, PreviewPerSymbolEval>;
+}
+
+export interface PreviewBuyCandidate {
+  symbol: string;
+  name: string;
+  qty: number;
+  prev_close: number;
+  est_limit_price: number;
+  est_total: number;
+  sizing_mode: string;
+  data_as_of: string | null;
+}
+
+export interface PreviewExit {
+  symbol: string;
+  name: string;
+  qty: number;
+  entry_price: number;
+  prev_close: number;
+  return_pct: number;
+  peak_price: number;
+}
+
+// ── 종목 자동 선택 (Screener) ─────────────────────────────────────────────────
 
 export interface ScreenerPreset {
   key: string;          // "marcap_top" 등
@@ -260,15 +411,32 @@ export interface ScreenerMatch {
   volume: number | null;
 }
 
-/** 매수 대상이 자동선정 모드인지 — trade_symbol이 "screener:..."로 시작. */
+/** 매수 대상이 자동 선택 모드인지 — trade_symbol이 "screener:..."로 시작. */
 export function parseScreenerKey(tradeSymbol: string): string | null {
   return tradeSymbol.startsWith("screener:")
     ? tradeSymbol.slice("screener:".length) : null;
 }
 
+/** trade_symbol을 모드와 종목 코드 배열로 파싱.
+ *  - "screener:marcap_top" → { mode: "screener", symbols: ["marcap_top"] }  (preset key)
+ *  - "005930,000660,035420" → { mode: "manual", symbols: [3개] }
+ *  자동 선택과 수동 다중은 혼합 불가 — UI에서 모드 토글로 제어. */
+export function parseTradeSymbols(tradeSymbol: string): {
+  mode: "screener" | "manual";
+  symbols: string[];
+} {
+  const s = (tradeSymbol ?? "").trim();
+  if (s.startsWith("screener:")) {
+    return { mode: "screener", symbols: [s.slice("screener:".length)] };
+  }
+  const parts = s.split(",").map((p) => p.trim()).filter(Boolean);
+  return { mode: "manual", symbols: parts };
+}
+
 export type CommandType =
   | "RUN_CYCLE_NOW" | "PAUSE_AUTO" | "RESUME_AUTO"
-  | "LIQUIDATE_ALL" | "CANCEL_ORDER" | "RESET_KILL_SWITCH";
+  | "LIQUIDATE_ALL" | "CANCEL_ORDER" | "RESET_KILL_SWITCH"
+  | "RECONCILE_NOW";   // Phase 40 — 수동 잔고 정합성 점검
 
 export interface CommandRow {
   id: number; device_id: number; type: CommandType;

@@ -1,16 +1,49 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../auth";
+import { useMode } from "../mode";
 
 const NAV = [
-  { to: "/", label: "대시보드" },
-  { to: "/backtest", label: "백테스트" },
+  { to: "/", label: "개요" },
+  { to: "/backtest", label: "전략 만들기" },
   { to: "/strategies", label: "내 전략" },
-  { to: "/monitor", label: "자동매매 모니터" },
-  { to: "/pair", label: "기기 연결" },
+  { to: "/monitor", label: "트레이딩" },
+  { to: "/settings", label: "설정" },
 ];
+
+function ModeToggle() {
+  const { mode, setMode, isLive } = useMode();
+  const onLive = () => {
+    if (mode === "live") return;
+    const ok = window.confirm(
+      "실전 모드로 전환합니다.\n실제 계좌의 자금이 자동매매에 사용됩니다.\n계속하시겠습니까?",
+    );
+    if (ok) setMode("live");
+  };
+  return (
+    <div className={"mode-toggle" + (isLive ? " live" : "")} role="tablist" aria-label="거래 모드">
+      <button
+        role="tab"
+        aria-selected={mode === "paper"}
+        className={mode === "paper" ? "on" : ""}
+        onClick={() => setMode("paper")}
+      >
+        모의
+      </button>
+      <button
+        role="tab"
+        aria-selected={mode === "live"}
+        className={mode === "live" ? "on" : ""}
+        onClick={onLive}
+      >
+        <span className="live-dot" aria-hidden /> 실전
+      </button>
+    </div>
+  );
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { email, logout } = useAuth();
+  const { isLive } = useMode();
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -31,7 +64,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <button className="ghost sm" onClick={logout}>로그아웃</button>
         </div>
       </aside>
-      <main className="main">{children}</main>
+      <main className="main">
+        <header className={"topbar" + (isLive ? " live" : "")}>
+          <div className="topbar-left">
+            {isLive && <span className="live-badge">LIVE</span>}
+          </div>
+          <div className="topbar-right">
+            <ModeToggle />
+          </div>
+        </header>
+        <div className="main-inner">{children}</div>
+      </main>
     </div>
   );
 }

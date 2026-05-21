@@ -7,6 +7,7 @@ import Backtest from "./pages/Backtest";
 import Strategies from "./pages/Strategies";
 import Monitor from "./pages/Monitor";
 import Pair from "./pages/Pair";
+import Settings from "./pages/Settings";
 
 export default function App() {
   const { email, ready } = useAuth();
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="/backtest" element={<Backtest />} />
         <Route path="/strategies" element={<Strategies />} />
         <Route path="/monitor" element={<Monitor />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/pair" element={<Pair />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

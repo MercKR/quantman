@@ -3,8 +3,19 @@ import type {
   Condition, ConditionGroup, IndicatorInfo, ModifierKind, Op, Operand,
   Stat, SymbolInfo,
 } from "../types";
+import { SELF_SYMBOL, SELF_LABEL, isSelfRef } from "../types";
 import { CategoryList, usePopoverDismiss } from "./SymbolPicker";
 import TabbedSymbolList from "./TabbedSymbolList";
+
+/** Phase 41 — [이 종목] placeholder가 어떤 종목의 지표를 노출할지 결정.
+ *  KR 개별종목 첫 항목의 indicators를 사용 (compute_all 결과는 KR 종목 간 동일).
+ *  KR 종목이 없으면 첫 가용 종목으로 fallback. */
+function _selfIndicators(symbols: SymbolInfo[]): IndicatorInfo[] {
+  const stock = symbols.find(
+    (s) => s.category === "개별종목" && s.indicators.length > 0)
+    ?? symbols.find((s) => s.indicators.length > 0);
+  return stock?.indicators ?? [];
+}
 
 const OPERAND_TAB_ORDER = [
   "자산", "변동성", "금리·환율", "신용", "거시지표", "심리", "개별종목",
@@ -57,6 +68,10 @@ const COMPARE_GROUP_HINTS: Record<string, { range: string; tip: string }> = {
 
 function findIndicator(symbols: SymbolInfo[], sym?: string, key?: string):
     IndicatorInfo | undefined {
+  // Phase 41 — SELF_SYMBOL은 KR 개별종목 indicators fallback
+  if (sym === SELF_SYMBOL) {
+    return _selfIndicators(symbols).find((i) => i.key === key);
+  }
   return symbols.find((s) => s.symbol === sym)
     ?.indicators.find((i) => i.key === key);
 }
@@ -75,11 +90,12 @@ function operandSummary(o: Operand | undefined, symbols: SymbolInfo[]): string {
     if (Array.isArray(o.value)) return `${o.value[0]} ~ ${o.value[1]}`;
     return o.value != null ? String(o.value) : "0";
   }
+  const symLabel = o.symbol === SELF_SYMBOL ? SELF_LABEL : (o.symbol ?? "");
   const lbl = indLabel(symbols, o.symbol, o.indicator);
   if (o.kind === "history") {
-    return `${o.symbol ?? ""} ${lbl} ${o.window ?? 20}일 ${STAT_LABEL[o.stat ?? "mean"]}`;
+    return `${symLabel} ${lbl} ${o.window ?? 20}일 ${STAT_LABEL[o.stat ?? "mean"]}`;
   }
-  return `${o.symbol ?? ""} · ${lbl}`;
+  return `${symLabel} · ${lbl}`;
 }
 
 // ── 메인 ──────────────────────────────────────────────────────────────────────
@@ -132,15 +148,20 @@ export default function ConditionBuilder({ symbols, group, onChange }: Props) {
   }
 
   function add() {
-    const sym = symList[0]?.symbol ?? "";
+    // Phase 41 — 새 조건 기본 좌변은 [이 종목] (가장 일반적 사용 패턴)
+    // 시장 트리거가 필요하면 사용자가 좌변 칩에서 명시적 종목 선택.
+    const selfInds = _selfIndicators(symbols);
+    const sym = SELF_SYMBOL;
+    const ind = (selfInds.find((i) => i.key.includes("rsi"))
+                  ?? selfInds[0])?.key ?? "";
     onChange({
       ...group,
       conditions: [
         ...group.conditions,
         {
-          left: { kind: "indicator", symbol: sym, indicator: defaultIndicator(sym) },
+          left: { kind: "indicator", symbol: sym, indicator: ind },
           op: "<",
-          right: { kind: "constant", value: 0 },
+          right: { kind: "constant", value: 30 },
           modifier: null,
         },
       ],
@@ -302,8 +323,11 @@ function OperandEditor({ symbols, value, allowConstant, compatGroup, onChange }:
   onChange: (o: Operand) => void;
 }) {
   const symList = symbols.filter((s) => s.indicators.length > 0);
+  // Phase 41 — SELF_SYMBOL은 KR 개별종목 indicators fallback
   const indicatorsOf = (sym?: string) =>
-    symbols.find((s) => s.symbol === sym)?.indicators ?? [];
+    sym === SELF_SYMBOL
+      ? _selfIndicators(symbols)
+      : symbols.find((s) => s.symbol === sym)?.indicators ?? [];
 
   // 지표/숫자 2개 탭만 유지. "이력통계"는 지표 탭의 "최근 N일" 토글로 통합.
   const tabKind: "indicator" | "constant" =
@@ -388,11 +412,23 @@ function OperandEditor({ symbols, value, allowConstant, compatGroup, onChange }:
         <>
           {/* Step 1: 종목 선택 (탭 기반) */}
           <div className="op-label">① 종목 선택</div>
+          {/* Phase 41 — [이 종목] placeholder — 우변에도 동일 옵션 */}
+          <div className="self-option">
+            <button type="button"
+                    className={"self-option-btn"
+                      + (isSelfRef(value) ? " on" : "")}
+                    onClick={() => pickSymbol(SELF_SYMBOL)}>
+              <strong>{SELF_LABEL}</strong>
+              <span className="muted small">
+                — 각 매수 대상 종목에 자동 적용
+              </span>
+            </button>
+          </div>
           <TabbedSymbolList
             items={visibleSymbols.map((s) =>
               ({ key: s.symbol, label: s.symbol, cat: s.category }))}
             order={OPERAND_TAB_ORDER}
-            selected={value.symbol}
+            selected={isSelfRef(value) ? "" : value.symbol}
             placeholder="종목 검색…"
             emptyMessage="호환되는 종목이 없습니다."
             onPick={pickSymbol}
@@ -404,7 +440,8 @@ function OperandEditor({ symbols, value, allowConstant, compatGroup, onChange }:
               <div className="op-label" style={{ marginTop: 14 }}>
                 ② 지표 선택
                 <span className="op-label-sub">
-                  ({value.symbol} · {visibleIndicators.length}개 지원)
+                  ({value.symbol === SELF_SYMBOL ? SELF_LABEL : value.symbol}
+                  · {visibleIndicators.length}개 지원)
                 </span>
               </div>
               {visibleIndicators.length === 0 ? (
@@ -515,12 +552,18 @@ function LeftSymbolChip({ symbols, operand, onChange }: {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss<HTMLSpanElement>(open, setOpen);
   const symList = symbols.filter((s) => s.indicators.length > 0);
+  const isSelf = isSelfRef(operand);
   const sel = symbols.find((s) => s.symbol === operand.symbol);
-  const label = sel?.name ? `${sel.symbol} ${sel.name}`
+  // Phase 41 — SELF_SYMBOL이면 [이 종목] 라벨로 표시
+  const label = isSelf ? SELF_LABEL
+    : sel?.name ? `${sel.symbol} ${sel.name}`
     : operand.symbol || "종목 선택";
 
   function pickSymbol(sym: string) {
-    const inds = symbols.find((s) => s.symbol === sym)?.indicators ?? [];
+    // Phase 41 — SELF_SYMBOL은 KR 개별종목 indicators fallback
+    const inds = sym === SELF_SYMBOL
+      ? _selfIndicators(symbols)
+      : symbols.find((s) => s.symbol === sym)?.indicators ?? [];
     const ind = inds.some((i) => i.key === operand.indicator)
       ? operand.indicator : inds[0]?.key ?? "";
     onChange({ ...operand, symbol: sym, indicator: ind });
@@ -529,11 +572,24 @@ function LeftSymbolChip({ symbols, operand, onChange }: {
 
   return (
     <span className="chip-wrap" ref={ref}>
-      <button type="button" className="chip" onClick={() => setOpen((v) => !v)}>
+      <button type="button"
+              className={"chip" + (isSelf ? " chip-self" : "")}
+              onClick={() => setOpen((v) => !v)}>
         {label}<span className="chip-caret">▾</span>
       </button>
       {open && (
         <div className="popover popover-wide">
+          {/* Phase 41 — [이 종목] placeholder는 첫 옵션으로 강조 노출 */}
+          <div className="self-option">
+            <button type="button"
+                    className={"self-option-btn" + (isSelf ? " on" : "")}
+                    onClick={() => pickSymbol(SELF_SYMBOL)}>
+              <strong>{SELF_LABEL}</strong>
+              <span className="muted small">
+                — 각 매수 대상 종목에 자동 적용
+              </span>
+            </button>
+          </div>
           <TabbedSymbolList
             items={symList.map((s) => ({
               key: s.symbol,
@@ -541,7 +597,7 @@ function LeftSymbolChip({ symbols, operand, onChange }: {
               cat: s.category,
             }))}
             order={OPERAND_TAB_ORDER}
-            selected={operand.symbol}
+            selected={isSelf ? "" : operand.symbol}
             placeholder="종목 검색…"
             onPick={pickSymbol}
           />
@@ -559,7 +615,10 @@ function LeftIndicatorChip({ symbols, operand, onChange }: {
 }) {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss<HTMLSpanElement>(open, setOpen);
-  const inds = symbols.find((s) => s.symbol === operand.symbol)?.indicators ?? [];
+  // Phase 41 — SELF_SYMBOL은 KR 개별종목 indicators fallback
+  const inds = operand.symbol === SELF_SYMBOL
+    ? _selfIndicators(symbols)
+    : symbols.find((s) => s.symbol === operand.symbol)?.indicators ?? [];
   const found = inds.find((i) => i.key === operand.indicator);
   const baseLabel = found?.label ?? operand.indicator ?? "지표 선택";
   const histSuffix = operand.kind === "history"
@@ -600,7 +659,8 @@ function LeftIndicatorChip({ symbols, operand, onChange }: {
               <div className="op-label">
                 지표 선택
                 <span className="op-label-sub">
-                  ({operand.symbol} · {inds.length}개 지원)
+                  ({operand.symbol === SELF_SYMBOL ? SELF_LABEL : operand.symbol}
+                  · {inds.length}개 지원)
                 </span>
               </div>
               <CategoryList

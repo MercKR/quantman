@@ -1,6 +1,6 @@
 import type {
   AnalysisResult, BacktestResult, BacktestRunDetail, BacktestRunSummary,
-  CommandRow, CommandType, DeviceRow, MarketContext, PortfolioRisk,
+  CommandRow, CommandType, DeviceRow, MarketContext, NextDayPreview, PortfolioRisk,
   ScreenerMatch, ScreenerPreset,
   StrategyDef, StrategyRow, SymbolInfo, SyncSnapshot, UserSettingsIO,
 } from "./types";
@@ -110,10 +110,15 @@ export const api = {
   putSettings: (s: UserSettingsIO) =>
     req<UserSettingsIO>("/settings", { method: "PUT", body: JSON.stringify(s) }),
 
-  // Phase 17~ — 종목 자동선정 (스크리너)
+  // Phase 17~ — 종목 자동 선택 (스크리너)
   listScreenerPresets: () =>
     req<{ presets: ScreenerPreset[] }>("/screener/presets"),
   runScreenerPreset: (key: string) =>
     req<{ preset: string; count: number; matches: ScreenerMatch[] }>(
       `/screener/preset/${key}/run`, { method: "POST" }),
+
+  // Phase 31 — 내일 매매 미리보기
+  getNextDayPreview: () => req<NextDayPreview>("/preview/next-day"),
+  regenerateNextDayPreview: () =>
+    req<NextDayPreview>("/preview/regenerate", { method: "POST" }),
 };
