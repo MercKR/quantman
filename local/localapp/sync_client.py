@@ -265,7 +265,7 @@ def upload_single_parquet(file_path: Path, category: str = "price") -> bool:
     return False
 
 
-def push_local_dataset(local_data_dir: Path, max_workers: int = 4) -> dict:
+def push_local_dataset(local_data_dir: Path, max_workers: int = 2) -> dict:
     """로컬에 축적된 parquet 파일들을 서버의 영구 저장소로 업로드 (네이버 차단 완벽 우회).
 
     로컬의 가격 데이터 및 펀더멘털 데이터를 비교하여 서버에 없거나 로컬 데이터가 더 최신인 경우 업로드합니다.
