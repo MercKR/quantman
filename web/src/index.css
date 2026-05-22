@@ -822,11 +822,13 @@ thead th { color: var(--muted); font-weight: 600; }
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 .screener-card-title {
-  flex: 1; text-align: left; background: none; border: none; padding: 0;
-  font: inherit; cursor: pointer; color: var(--text);
-  display: flex; align-items: center; gap: 6px;
+  flex: 1; text-align: left; color: var(--text);
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
 }
 .screener-card-title strong { font-size: 13px; }
+.screener-card-actions { display: flex; align-items: center; gap: 4px; }
+.screener-card-actions button { padding: 3px 8px; }
+.screener-card-actions .danger { color: var(--red); }
 .screener-card-caret { color: var(--muted); font-size: 10px; }
 .screener-card-desc {
   margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.5;
@@ -844,14 +846,35 @@ thead th { color: var(--muted); font-weight: 600; }
   display: flex; justify-content: space-between; gap: 8px;
 }
 
-/* 스크리너 커스터마이징 (기준 직접 조정) */
-.screener-customizer {
-  margin-top: 12px; padding: 12px; border: 1px solid var(--border);
-  border-radius: 8px; background: var(--bg);
-  display: flex; flex-direction: column; gap: 8px;
+/* 자동 선택 세트 — 통합 팝오버 */
+.screener-panel-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border);
 }
-.screener-customizer-head {
+.screener-active-banner {
+  font-size: 12px; color: var(--text);
+  background: var(--accent-soft); border: 1px solid var(--accent);
+  border-radius: 6px; padding: 6px 10px;
+}
+.screener-section-h {
+  font-size: 11px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px;
+}
+
+/* 세트 룰 편집기 */
+.screener-editor {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 380px; overflow-y: auto;
+}
+.screener-editor-head {
   display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.screener-editor-name { display: flex; flex-direction: column; gap: 4px; }
+.screener-editor-name label { margin: 0; font-size: 12px; }
+.screener-editor-foot {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-top: 8px; border-top: 1px solid var(--border);
 }
 .screener-rule {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
@@ -864,9 +887,6 @@ thead th { color: var(--muted); font-weight: 600; }
 }
 .screener-sort label { margin: 0; }
 .screener-sort input { width: 64px; }
-.screener-preview-actions {
-  display: flex; align-items: center; gap: 10px; margin-top: 4px;
-}
 
 /* 자동 선택 리밸런싱 토글 */
 .rebalance-row {

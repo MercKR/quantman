@@ -198,7 +198,23 @@ def _refresh_global_dataset() -> None:
             time.sleep(0.3)   # yfinance rate limit 완화
 
     data_cache.invalidate()
+    # 미국 스크리너 metrics 재빌드 (방금 갱신된 S&P500 OHLCV + 기존 시총 캐시)
+    try:
+        from . import us_metrics_cache
+        us_metrics_cache.refresh()
+    except Exception:
+        _log.exception("us_metrics 갱신 실패 (미국 스크리너 영향)")
     _trigger_preview("dataset_global")
+
+
+def _refresh_us_market_caps() -> None:
+    """미국 S&P500 시가총액(fast_info) 주1회 수집 후 metrics 재빌드.
+
+    분기 변동성이 낮은 시총은 매일 받을 필요가 없어 주말 1회만 갱신.
+    """
+    from . import us_metrics_cache
+    us_metrics_cache.refresh_market_caps(timeout_each=0.2)
+    us_metrics_cache.refresh()
 
 
 def _refresh_kr_dataset() -> None:
@@ -243,6 +259,13 @@ def _refresh_kr_dataset() -> None:
                     continue
                 overseas_new.append({"code": code, "name": meta.get("name", "")})
 
+    # 2b. S&P500 큐레이션 유니버스 시드 (미국 자동선택 스테이지1) — yf 코드(대시) 변환
+    for c in data_fetcher.load_sp500():
+        sym = (c.get("symbol") or "").strip()
+        if sym:
+            overseas_new.append({"code": sym.replace(".", "-"),
+                                  "name": c.get("name", "")})
+
     existing_overseas = data_fetcher.load_managed_overseas()
     data_fetcher.save_managed_overseas(existing_overseas + overseas_new)
 
@@ -262,6 +285,20 @@ def _initial_dataset_refresh():
         _log.exception("dataset 초기 갱신 중 예외 — 정시 cron 재시도")
 
 
+def _initial_us_market_caps():
+    """시작 시 1회 미국 시가총액 부트스트랩 (캐시 비어있을 때 첫 주 대기 방지).
+    dataset 초기 갱신 이후 충분히 지연."""
+    import time
+    try:
+        time.sleep(360)
+        from . import us_metrics_cache
+        if not us_metrics_cache._load_caps():
+            _log.info("미국 시가총액 초기 fetch 시작")
+            _refresh_us_market_caps()
+    except Exception:
+        _log.exception("미국 시가총액 초기 fetch 예외 — 주간 cron 재시도")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _log.info("lifespan 시작 — DB 초기화")
@@ -278,6 +315,8 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_initial_technical_refresh, daemon=True).start()
     _log.info("dataset 초기 갱신 thread 시작")
     threading.Thread(target=_initial_dataset_refresh, daemon=True).start()
+    _log.info("미국 시가총액 초기 fetch thread 시작")
+    threading.Thread(target=_initial_us_market_caps, daemon=True).start()
 
     # ── 매일 정기 갱신 (Phase 31 — 외부 publish 시각에 맞춰 재배치) ──────────
     # 각 cron은 _run_with_retry로 감싸 실패 시 backoff[5,15,30,60,120]분 재시도.
@@ -326,6 +365,12 @@ async def lifespan(app: FastAPI):
         lambda: _run_with_retry("dataset_kr", _refresh_kr_dataset, scheduler),
         CronTrigger(hour=18, minute=15),
         id="dataset_kr", replace_existing=True)
+
+    # 일요일 08:00 — 미국 S&P500 시가총액 (fast_info). 분기 변동 낮아 주1회.
+    scheduler.add_job(
+        lambda: _run_with_retry("us_market_caps", _refresh_us_market_caps, scheduler),
+        CronTrigger(day_of_week="sun", hour=8, minute=0),
+        id="us_market_caps", replace_existing=True)
 
     scheduler.start()
     _log.info("cron 시작: "

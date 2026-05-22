@@ -149,6 +149,38 @@ export function AlertSettings() {
         </div>
       </div>
 
+      <h4 style={{ marginTop: 20, marginBottom: 8 }}>미국 주식 거래</h4>
+      <div className="alert-form">
+        <div>
+          <label>매수여력 기준</label>
+          <select
+            value={s.us_buying_power_mode}
+            onChange={(e) => update("us_buying_power_mode",
+              e.target.value as UserSettingsIO["us_buying_power_mode"])}
+          >
+            <option value="integrated">통합증거금 (원화 담보로 미국 주문)</option>
+            <option value="usd_cash">USD 예수금 한정 (보수적)</option>
+          </select>
+          <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
+            통합증거금: 달러 예수금이 없어도 원화를 담보로 미국 주식을 매수합니다
+            (환율 변동 노출 발생). USD 예수금 한정: 보유한 달러 범위 내에서만 매수.
+          </span>
+        </div>
+        <div className="warn-box" style={{
+          marginTop: 4, padding: "10px 12px", borderRadius: 8,
+          background: "rgba(240,180,0,0.10)", border: "1px solid rgba(240,180,0,0.4)",
+          fontSize: 13, lineHeight: 1.6,
+        }}>
+          <strong>⚠ 미국 실시간 손절 안내</strong><br/>
+          미국 종목의 <b>장중 실시간 손절·익절·트레일링</b>은 KIS <b>해외 실시간 시세
+          신청</b>이 있어야 동작합니다. 신청 방법: HTS(eFriend Plus/Force)
+          <b> [7781] 시세신청(실시간)</b> 또는 MTS 고객센터 &gt; 거래신청 &gt; 해외주식 &gt;
+          해외 실시간 시세 신청.<br/>
+          <b>신청하지 않으면</b> 미국 종목은 장 마감 후 사이클에서만 청산이 평가되어,
+          <b> 장중 실시간 매도가 제공되지 않습니다.</b> (국내 주식은 별도 신청 불필요)
+        </div>
+      </div>
+
       <h4 style={{ marginTop: 20, marginBottom: 8 }}>알림 (Discord / Slack webhook)</h4>
       <div className="alert-form">
         <div>

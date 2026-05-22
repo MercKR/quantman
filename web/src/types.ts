@@ -150,6 +150,8 @@ export interface ScreenerSpecIO {
   sort?: { field: string; order: "asc" | "desc" } | null;
   markets?: string[];
   limit?: number;
+  /** 표시용 이름 (커스텀/내 세트). 백엔드 parse_spec은 무시. */
+  label?: string;
 }
 export interface ScreenerField {
   key: string; label: string; unit: string; group: string;
@@ -225,6 +227,8 @@ export interface CycleSummary {
   n_rejected?: number; n_unfilled?: number; n_errors?: number;
   kill_switch?: boolean;
   equity_pre?: number; equity_post?: number;
+  // 미국 해외 실시간 시세 미신청 — 장중 실시간 손절 미제공 (P8)
+  us_realtime_unavailable?: boolean;
 }
 
 export interface CycleRow {
@@ -321,6 +325,9 @@ export interface UserSettingsIO {
   preview_missing_alert_threshold: number;
   // Phase 40 — KIS ↔ ledger 정합성 drift 알림
   alert_on_reconcile_drift: boolean;
+  // 미국 매수여력 모드: "integrated"(통합증거금, KRW 담보·FX 노출) |
+  // "usd_cash"(USD 예수금 한정, 보수적)
+  us_buying_power_mode: "integrated" | "usd_cash";
 }
 
 export interface SyncSnapshot {
@@ -443,6 +450,15 @@ export interface ScreenerPreset {
   title: string;        // "시가총액 상위"
   desc: string;
   spec?: ScreenerSpecIO; // 편집 시작점 — 프리셋의 룰 (presets 엔드포인트가 포함)
+}
+
+/** 계정에 저장된 사용자 정의 세트. */
+export interface ScreenerUserPreset {
+  id: number;
+  name: string;
+  spec: ScreenerSpecIO;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ScreenerMatch {

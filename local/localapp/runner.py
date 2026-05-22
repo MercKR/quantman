@@ -93,8 +93,12 @@ def _wait_for_order_ws() -> None:
                  "시초가 체결 통보는 REST 폴링으로 반영됨 (push 지연 가능)")
 
 
-def run_cycle() -> dict:
-    """1회 자동매매 사이클을 실행하고 동기화 스냅샷을 반환한다."""
+def run_cycle(market: str = "KRX") -> dict:
+    """1회 자동매매 사이클을 실행하고 동기화 스냅샷을 반환한다.
+
+    market: 이번 사이클이 다룰 시장 그룹('KRX' 또는 'US'). 스케줄러가 각 시장의
+    정규장 시각에 맞춰 호출한다. 청산·진입은 해당 시장 종목만 처리.
+    """
     setup_logging()
     _flush_pending()
 
@@ -134,7 +138,7 @@ def run_cycle() -> dict:
     # Phase 38.7/38.10 — 사용자 위험 한도. 실패 시 빈 dict → default fallback.
     risk_limits = pull_risk_limits()
     payload = trader.cycle(strategies, dataset, buy_candidates=buy_candidates,
-                             risk_limits=risk_limits)
+                             risk_limits=risk_limits, market=market)
     if preview_missing:
         payload.setdefault("cycle_summary", {})["preview_missing"] = True
 
@@ -151,22 +155,24 @@ def run_cycle() -> dict:
     return payload
 
 
-def run_post_close_settlement() -> dict:
-    """장 마감 후(15:35) 미체결 정리 + 잔고 reconcile + 잔고 스냅샷 push.
+def run_post_close_settlement(market: str = "KRX") -> dict:
+    """장 마감 후 미체결 정리 + 잔고 reconcile + 잔고 스냅샷 push.
+
+    market: 어느 시장 마감 후 정산인지(KRX/US) — 로깅용. _resolve_pending과
+    reconcile은 계좌 전체(국내+해외)를 대상으로 하므로 동작은 시장 무관.
 
     Phase 32: 정규장 마감 직후 KIS에 미체결 주문 상태 조회 → 자동 취소 확인
-    → ledger·pending 동기화 → 즉시 서버 push. 다음날 08:55까지 미체결 표시
-    오류 없이 정확.
+    → ledger·pending 동기화 → 즉시 서버 push.
 
-    Phase 40: ledger ↔ KIS 잔고 reconcile 실행 (15:35는 매매가 끝난 직후라
-    안전). HTS/MTS 수동 매도분을 ledger에서 자동 차감.
+    Phase 40: ledger ↔ KIS 잔고 reconcile 실행 (매매가 끝난 직후라 안전).
+    HTS/MTS 수동 매도분을 ledger에서 자동 차감.
     """
     from datetime import date
     setup_logging()
     _flush_pending()
 
     today = date.today().isoformat()
-    log.info("장 마감 후 settlement 시작 (15:35)")
+    log.info("장 마감 후 settlement 시작 (market=%s)", market)
     broker = make_broker()
     trader = Trader(broker)
 

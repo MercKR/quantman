@@ -43,6 +43,7 @@ core/data/*.parquet
 core/data/fundamentals/*.parquet
 core/data/managed_kr_stocks.json
 core/data/managed_overseas_stocks.json
+core/data/us_market_caps.json
 
 # 웹
 node_modules/

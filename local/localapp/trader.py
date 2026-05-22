@@ -47,6 +47,33 @@ def _policy(strat_def: dict) -> dict:
     return merged_execution(strat_def.get("execution") if strat_def else None)
 
 
+def _currency_of(symbol: str) -> str:
+    """결제 통화 — 미국 종목이면 USD, 그 외 KRW. 사이징·틱·잔고 단위 결정."""
+    from . import market_index
+    return "USD" if market_index.is_us(symbol) else "KRW"
+
+
+def _market_group_safe(symbol: str) -> str:
+    """시장 그룹('US'|'KRX') — 라우팅 불확실 시 국내 기본(안전)."""
+    from . import market_index
+    try:
+        return market_index.market_group_of(symbol)
+    except Exception:
+        return "KRX"
+
+
+def _unified_equity_krw(bal: dict) -> float:
+    """국내+해외 통합 자산(KRW) — kill switch·drawdown용 계좌 전체 equity.
+
+    국내 평가금액 + 외화 평가총액(KRW) + USD 예수금(KRW 환산).
+    """
+    dom = float(bal.get("total_eval", 0) or 0)
+    foreign = float(bal.get("foreign_eval_krw", 0) or 0)
+    usd_cash = float(bal.get("cash_usd", 0) or 0)
+    fx = float(bal.get("fx_usdkrw", 0) or 0)
+    return dom + foreign + usd_cash * fx
+
+
 def _gap_pct(prev_close: float, cur_price: float) -> float:
     """갭 % (양수 = 갭상승, 음수 = 갭하락)."""
     if prev_close <= 0:
@@ -126,6 +153,8 @@ class Trader:
         self.pending: dict[str, dict] = _load_json(PENDING_ORDERS_PATH, {})
         # 전략별 마지막 리밸런싱 일자 (sid → "YYYY-MM-DD") — 주기 게이팅
         self.rebalance_state: dict[str, str] = _load_json(REBALANCE_PATH, {})
+        # 미국 매수여력 모드 (cycle에서 risk_limits로 설정). 기본 통합증거금.
+        self._us_bp_mode: str = "integrated"
 
     # ── 영속화 ────────────────────────────────────────────────────────────────
 
@@ -219,7 +248,7 @@ class Trader:
         now = time.time()
         for order_no, p in list(self.pending.items()):
             try:
-                st = self.broker.order_status(order_no)
+                st = self.broker.order_status(order_no, p.get("symbol"))
             except Exception as e:
                 log.warning("주문상태 조회 실패 [%s]: %s", order_no, e)
                 continue
@@ -330,7 +359,7 @@ class Trader:
         if use_limit:
             limit = qc.round_to_tick(
                 ref_price * (1 + policy["buy_tolerance_pct"] / 100.0),
-                direction="up")
+                direction="up", currency=_currency_of(symbol))
             try:
                 r = self.broker.buy_limit(symbol, qty, limit)
             except Exception as e:
@@ -358,7 +387,7 @@ class Trader:
         tol = policy["sell_tolerance_pct"]
         if use_limit:
             limit = qc.round_to_tick(ref_price * (1 - tol / 100.0),
-                                      direction="down")
+                                      direction="down", currency=_currency_of(symbol))
             try:
                 r = self.broker.sell_limit(symbol, qty, limit)
             except Exception as e:
@@ -465,16 +494,43 @@ class Trader:
 
         policy = _policy(strat_def)
 
+        # 통화별 가용자금 결정.
+        #  - 미국: psamount(매수가능금액) — KIS 통합증거금을 반영한 USD 주문가능액.
+        #    USD 예수금이 0이어도 KRW 담보로 주문 가능하므로 예수금이 아니라
+        #    "주문가능액"을 기준으로 사이징한다. max_qty로 상한도 클램프.
+        #  - 국내: KRW 예수금.
+        # cash·capital·prev_close 단위를 종목 통화로 일치시킨다.
+        ccy = _currency_of(symbol)
+        max_cap = None
         try:
-            cash = self.broker.account_snapshot()["balance"]["cash"]
+            if ccy == "USD":
+                # 매수여력 모드 (사용자 설정): integrated=통합증거금(주문가능액) /
+                # usd_cash=USD 예수금 한정(보수적, FX 노출 없음).
+                mode = getattr(self, "_us_bp_mode", "integrated")
+                if mode == "usd_cash":
+                    bal = self.broker.account_snapshot()["balance"]
+                    cash = float(bal.get("cash_usd", 0) or 0)
+                    fx = float(bal.get("fx_usdkrw", 0) or 0)
+                else:   # integrated (기본)
+                    bp = self.broker.buying_power_usd(symbol, prev_close)
+                    cash = float(bp.get("usd_orderable", 0) or 0)
+                    fx = float(bp.get("fx_usdkrw", 0) or 0)
+                    max_cap = int(bp.get("max_qty", 0) or 0)
+                # equity_now는 KRW 통합자산 → USD 환산해 atr capital에 사용
+                capital = (equity_now / fx) if (fx > 0 and equity_now > 0) else cash
+            else:
+                # KRX 사이징은 국내 현금만 필요 — 해외 API 2건 skip (효율)
+                cash = float(self.broker.account_snapshot(
+                    overseas=False)["balance"]["cash"])
+                capital = equity_now if equity_now > 0 else cash
         except Exception as e:
-            log.error("잔고 조회 실패: %s", e)
+            log.error("가용자금 조회 실패 [%s]: %s", symbol, e)
             decisions.append(order_log.decision(
                 "error", strategy_id, strat_name, symbol,
-                f"잔고 조회 실패: {e}"))
+                f"가용자금 조회 실패: {e}"))
             return False
 
-        # 사이징 — 전일 종가 기준
+        # 사이징 — 전일 종가 기준 (cash·prev_close 모두 종목 통화)
         if policy["sizing_mode"] == "atr_risk":
             atr_val = 0.0
             if "atr_14" in sdf.columns:
@@ -485,11 +541,14 @@ class Trader:
                     "ATR 데이터 없음 — atr_risk 모드 진입 불가 "
                     "(사이징을 자본 비율로 변경하거나 dataset 보강 필요)"))
                 return False
-            capital = equity_now if equity_now > 0 else float(cash)
             qty = _atr_qty(capital, atr_val, policy, prev_close)
-            qty = min(qty, int(float(cash) // prev_close))
+            qty = min(qty, int(cash // prev_close))
         else:
-            qty = int(float(cash) * strat.amount_pct / 100.0 // prev_close)
+            qty = int(cash * strat.amount_pct / 100.0 // prev_close)
+
+        # 미국: 주문가능수량(통합증거금 상한) 초과 방지
+        if max_cap is not None:
+            qty = min(qty, max_cap)
 
         if qty <= 0:
             decisions.append(order_log.decision(
@@ -507,12 +566,16 @@ class Trader:
     def _enter_from_preview(self, by_strategy: list[dict], strategies: list[dict],
                               dataset: dict, equity_now: float,
                               decisions: list[dict],
-                              sold_this_cycle: set[str]) -> None:
+                              sold_this_cycle: set[str],
+                              market: str = "KRX") -> None:
         """Phase 37: 서버 preview의 candidates 종목을 직접 발주.
 
         매수 신호 재평가는 skip (preview가 어제 18:15에 이미 평가).
         잔고·사이징은 _try_buy_one_symbol이 발주 직전 KIS 재조회로 재계산 →
         밤사이 수동 거래·입금 반영. 보유/한도·중복 진입 체크는 기존과 동일.
+
+        market: 이번 사이클 시장 그룹. 해당 시장 후보만 진입(미국 종목은 미국
+        정규장 사이클에서만 발주). 다른 시장 후보는 skip한다.
 
         candidates의 종목 코드는 신뢰하되 dataset에 없는 종목은 skip
         (방어적 — preview·dataset가 같은 서버 상태에서 만들어졌으면 일치).
@@ -581,6 +644,9 @@ class Trader:
                 symbol = c.get("symbol", "")
                 if not symbol:
                     continue
+                # 시장 배칭 — 이번 사이클 시장의 후보만 진입
+                if _market_group_safe(symbol) != market:
+                    continue
                 ledger_key = f"{sid}:{symbol}" if is_multi_key else sid
                 if ledger_key in self.ledger or ledger_key in sold_this_cycle:
                     continue
@@ -626,8 +692,13 @@ class Trader:
     def cycle(self, strategies: list[dict], dataset: dict,
               today: date | None = None,
               buy_candidates: list[dict] | None = None,
-              risk_limits: dict | None = None) -> dict:
+              risk_limits: dict | None = None,
+              market: str = "KRX") -> dict:
         """전략 목록을 1회 평가하고 매매한 뒤 동기화용 스냅샷을 반환한다.
+
+        market: 이번 사이클이 다룰 시장 그룹('KRX' 또는 'US'). 청산은 해당 시장
+        보유분만, 진입은 해당 시장 후보만 처리한다 — 시장별 정규장 시각에 맞춰
+        분리 실행하기 위함. kill switch·drawdown은 계좌 전체(통합 equity) 기준.
 
         buy_candidates(by_strategy 리스트, 비어있어도 list)가 신규 진입 source.
         Phase 38.4: 항상 preview 경로 — buy_candidates가 빈 리스트면 진입 0,
@@ -644,9 +715,10 @@ class Trader:
         self._resolve_pending(decisions)
 
         # ── 1. 자본·day_start 갱신, kill switch 평가 ──────────────────────
+        # equity는 계좌 전체 통합(국내+해외, KRW) — kill switch는 시장 무관 계좌 단위.
         try:
             snap_pre = self.broker.account_snapshot()
-            equity_now = float(snap_pre["balance"]["total_eval"])
+            equity_now = _unified_equity_krw(snap_pre["balance"])
         except Exception as e:
             log.error("잔고 조회 실패: %s", e)
             equity_now = 0.0
@@ -661,6 +733,8 @@ class Trader:
 
         # Phase 38.7 — 사용자 설정 우선, null이면 글로벌 default
         rl = risk_limits or {}
+        # 미국 매수여력 모드 (사용자 설정) — _try_buy_one_symbol 사이징에 반영
+        self._us_bp_mode = rl.get("us_buying_power_mode") or "integrated"
         daily_loss_limit_pct = (rl.get("kill_switch_daily_loss_pct")
                                   if rl.get("kill_switch_daily_loss_pct") is not None
                                   else global_policy["daily_loss_limit_pct"])
@@ -705,6 +779,10 @@ class Trader:
 
         sold_this_cycle: set[str] = set()
         for sid, pos in list(self.ledger.items()):
+            # 시장 배칭 — 이번 사이클 시장의 보유분만 청산 (미국 보유분은
+            # 미국 정규장 사이클에서만 매도, 그 반대도 동일).
+            if _market_group_safe(pos["symbol"]) != market:
+                continue
             try:
                 strat = qc.Strategy(**pos["definition"])
             except Exception as e:
@@ -764,7 +842,8 @@ class Trader:
                 f"(한도 -{max_drawdown_limit_pct:.1f}%)"))
         elif buy_candidates is not None:
             self._enter_from_preview(buy_candidates, strategies, dataset,
-                                       equity_now, decisions, sold_this_cycle)
+                                       equity_now, decisions, sold_this_cycle,
+                                       market=market)
 
         # ── 4. 미체결 짧게 대기 (시초가 동시호가 직후 대부분 잡힘) ───────
         self._wait_pending(global_policy["unfilled_timeout_sec"],

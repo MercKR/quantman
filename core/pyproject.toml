@@ -18,5 +18,14 @@ dependencies = [
     "requests>=2.31",
 ]
 
+[project.optional-dependencies]
+# 개발/빌드 전용 — 시장 세션 JSON 생성기(gen_market_sessions.py)에서만 사용.
+# 런타임(서버·로컬앱)은 생성된 JSON + stdlib zoneinfo만 쓰므로 번들 불필요.
+calendar-gen = ["exchange_calendars>=4.5"]
+
 [tool.setuptools]
 packages = ["quant_core"]
+
+[tool.setuptools.package-data]
+# 시장 세션 캘린더 + S&P500 유니버스 JSON을 패키지에 포함.
+quant_core = ["calendars/*.json", "universe/*.json"]

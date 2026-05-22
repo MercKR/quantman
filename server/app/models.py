@@ -90,6 +90,9 @@ class UserSettings(SQLModel, table=True):
     # Phase 40 — 잔고 정합성 (KIS ↔ ledger) drift 알림
     alert_on_reconcile_drift: bool = True
     last_alerted_reconcile: Optional[datetime] = None
+    # 미국 매수여력 모드: "integrated"=KIS 통합증거금(KRW 담보, FX 노출) /
+    # "usd_cash"=USD 예수금 한정(보수적, FX 노출 없음). 미국 종목 사이징에만 영향.
+    us_buying_power_mode: str = "integrated"
     updated_at: datetime = Field(default_factory=_now)
 
 
@@ -118,6 +121,20 @@ class TradableSymbol(SQLModel, table=True):
     symbol: str = Field(index=True)
     name: str = ""
     market: str = ""                 # KOSPI | KOSDAQ | 등등
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class ScreenerUserPreset(SQLModel, table=True):
+    """사용자가 직접 만든 자동 선택 '세트' — 계정에 저장되어 전략 간 재사용.
+
+    spec은 screener.parse_spec이 받는 ScreenerSpec dict. 시세성 데이터로만
+    동작하므로 안전정보 원칙에 위배되지 않는다(계좌·자격증명 없음).
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, foreign_key="user.id")
+    name: str
+    spec: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
 

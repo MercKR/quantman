@@ -38,6 +38,7 @@ def get_settings(user: User = Depends(get_current_user),
         max_drawdown_pct=s.max_drawdown_pct,
         preview_missing_alert_threshold=s.preview_missing_alert_threshold,
         alert_on_reconcile_drift=s.alert_on_reconcile_drift,
+        us_buying_power_mode=s.us_buying_power_mode,
     )
 
 
@@ -68,6 +69,12 @@ def put_settings(body: UserSettingsIO,
     s.max_drawdown_pct = body.max_drawdown_pct
     s.preview_missing_alert_threshold = max(1, int(body.preview_missing_alert_threshold))
     s.alert_on_reconcile_drift = body.alert_on_reconcile_drift
+    if body.us_buying_power_mode not in ("integrated", "usd_cash"):
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "us_buying_power_mode는 'integrated' 또는 'usd_cash'여야 합니다.")
+    s.us_buying_power_mode = body.us_buying_power_mode
     s.updated_at = datetime.now(timezone.utc)
     session.add(s)
     session.commit()

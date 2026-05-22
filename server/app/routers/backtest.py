@@ -65,8 +65,10 @@ def _build_symbols_payload() -> dict:
     for sym, df in sorted(data.items()):
         cols = [c for c in df.columns if c in indic_cols]
         has_ohlc = {"Open", "Close"}.issubset(df.columns)
-        in_master = sym in master_by_code
-        meta = master_by_code.get(sym, {})
+        # 클래스주 심볼로지: dataset은 대시(BRK-B), 마스터는 슬래시(BRK/B) →
+        # 정규화 조회해야 매칭(안 하면 Berkshire 등이 tradable=False가 됨).
+        meta = master_by_code.get(sym) or master_by_code.get(sym.replace("-", "/")) or {}
+        in_master = bool(meta)
         kind = meta.get("kind", "stock")
         out.append({
             "symbol": sym,
@@ -90,6 +92,11 @@ def _build_symbols_payload() -> dict:
     # 2) 마스터에는 있지만 dataset에 없는 종목 — 라이브 매매만 가능 (지표 없음)
     for code, meta in master_by_code.items():
         if code in seen:
+            continue
+        # §4.8: 미국은 데이터 보유분(S&P500, dataset)만 selectable로 노출한다.
+        # 마스터에만 있고 데이터 없는 미국 종목(~1만+)을 selectable로 두면
+        # 사용자가 골라도 자동매매가 skip_no_data로 조용히 건너뛰어 혼란 → 제외.
+        if meta.get("market") in ("NAS", "NYS", "AMS"):
             continue
         kind = meta.get("kind", "stock")
         out.append({

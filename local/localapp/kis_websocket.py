@@ -26,7 +26,11 @@ import websocket as ws_lib
 log = logging.getLogger("localapp.kis_websocket")
 
 TR_ID_PRICE_DOMESTIC = "H0STCNT0"   # 국내 주식 체결가 실시간
+TR_ID_PRICE_OVERSEAS = "HDFSCNT0"   # 해외 주식 체결가 (지연시세 — 무료·신청 불필요)
 SUBSCRIBE_MAX = 20                  # KIS 동시 구독 한도 (체결가+호가 합산)
+
+# 해외 지연시세 tr_key 접두 (실시간 D-prefix는 별도 시세신청 필요 → 지연 사용)
+_OVERSEAS_DELAYED_PREFIX = {"NAS": "BAQ", "NYS": "BAY", "AMS": "BAA"}
 
 
 class KisWebSocket:
@@ -48,6 +52,8 @@ class KisWebSocket:
         self.broker = broker
         self.on_tick = on_tick
         self._symbols: set[str] = set()
+        # 해외 tick의 SYMB(예: BRK/B) → 구독 시 원본 심볼(예: BRK.B) 역매핑
+        self._symb_to_orig: dict[str, str] = {}
         self._ws: ws_lib.WebSocketApp | None = None
         self._thread: threading.Thread | None = None
         self._stop_flag = False
@@ -57,7 +63,20 @@ class KisWebSocket:
 
     # ── 메시지 builder ────────────────────────────────────────────────────────
 
+    def _tr_for(self, symbol: str) -> tuple[str, str]:
+        """심볼 → (tr_id, tr_key). 미국은 해외 지연시세(HDFSCNT0 + BAQ/BAY/BAA+티커),
+        그 외는 국내(H0STCNT0 + 코드)."""
+        from . import market_index
+        exch = market_index.exchange_of(symbol)
+        prefix = _OVERSEAS_DELAYED_PREFIX.get(exch or "")
+        if prefix:
+            kt = market_index.kis_ticker_of(symbol)
+            self._symb_to_orig[kt] = symbol      # 역매핑 (tick SYMB → 원본)
+            return TR_ID_PRICE_OVERSEAS, prefix + kt
+        return TR_ID_PRICE_DOMESTIC, symbol
+
     def _sub_msg(self, symbol: str, sub: bool = True) -> str:
+        tr_id, tr_key = self._tr_for(symbol)
         return json.dumps({
             "header": {
                 "approval_key": self._approval_key,
@@ -65,7 +84,7 @@ class KisWebSocket:
                 "tr_type": "1" if sub else "2",   # 1=등록, 2=해지
                 "content-type": "utf-8",
             },
-            "body": {"input": {"tr_id": TR_ID_PRICE_DOMESTIC, "tr_key": symbol}},
+            "body": {"input": {"tr_id": tr_id, "tr_key": tr_key}},
         })
 
     # ── 콜백 ──────────────────────────────────────────────────────────────────
@@ -106,23 +125,32 @@ class KisWebSocket:
     def _parse_tick(self, message: str) -> None:
         """PIPE 구분 tick 메시지 파싱 → on_tick 콜백 호출.
 
-        형식: "0|H0STCNT0|<n_data>|<symbol>^<time>^<price>^...^..."
-        H0STCNT0의 1번째 field=종목코드, 3번째 field=현재가(체결가).
+        국내 H0STCNT0: "0|H0STCNT0|n|<코드>^<시간>^<현재가>^..." (field[0]=코드, [2]=현재가)
+        해외 HDFSCNT0: "0|HDFSCNT0|n|<RSYM>^<SYMB>^<소수>^...^<현재가>^..."
+          field[1]=SYMB(종목코드), field[11]=LAST(현재가). 지연시세 동일 레이아웃.
         """
         parts = message.split("|")
         if len(parts) < 4:
             return
         tr_id = parts[1]
-        if tr_id != TR_ID_PRICE_DOMESTIC:
+        fields = parts[3].split("^")
+
+        if tr_id == TR_ID_PRICE_DOMESTIC:
+            if len(fields) < 3:
+                return
+            symbol = fields[0]
+            price_str = fields[2]
+        elif tr_id == TR_ID_PRICE_OVERSEAS:
+            if len(fields) < 12:
+                return
+            symb = fields[1]
+            symbol = self._symb_to_orig.get(symb, symb)  # 원본 심볼로 환원
+            price_str = fields[11]
+        else:
             return
-        data_block = parts[3]
-        # 한 메시지에 여러 tick이 묶일 수도 있으나 보통 1건. caret 구분 field 분리.
-        fields = data_block.split("^")
-        if len(fields) < 3:
-            return
-        symbol = fields[0]
+
         try:
-            price = float(fields[2])
+            price = float(price_str)
         except (ValueError, IndexError):
             return
         if price <= 0:

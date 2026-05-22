@@ -47,6 +47,9 @@ V1_ALL_FIELDS = V1_NUMERIC_FIELDS | V1_CATEGORY_FIELDS | V1_BOOL_FIELDS
 
 SUPPORTED_OPS = {">", ">=", "<", "<=", "between", "in", "not_in"}
 
+KR_MARKETS = ("KOSPI", "KOSDAQ")
+US_MARKETS = ("NAS", "NYS", "AMS")       # 미국(스테이지1) — us_metrics_cache 소스
+
 ScreenerOp = Literal[">", ">=", "<", "<=", "between", "in", "not_in"]
 
 
@@ -115,8 +118,15 @@ def parse_spec(raw: dict) -> ScreenerSpec:
         raise ScreenerError("sort.order must be 'asc' or 'desc'")
 
     markets = raw.get("markets") or ["KOSPI", "KOSDAQ"]
-    if not isinstance(markets, list) or not all(m in ("KOSPI", "KOSDAQ") for m in markets):
-        raise ScreenerError("markets must be subset of ['KOSPI','KOSDAQ']")
+    valid = set(KR_MARKETS) | set(US_MARKETS)
+    if not isinstance(markets, list) or not markets or not all(m in valid for m in markets):
+        raise ScreenerError(f"markets must be subset of {sorted(valid)}")
+    is_us = all(m in US_MARKETS for m in markets)
+    is_kr = all(m in KR_MARKETS for m in markets)
+    if not (is_us or is_kr):
+        raise ScreenerError(
+            "markets는 국내(KOSPI/KOSDAQ) 또는 미국(NAS/NYS/AMS) 중 한쪽만 "
+            "선택할 수 있습니다 (통화·임계가 다름).")
 
     exclude = raw.get("exclude") or ["managed", "halt", "pref", "etf_etn", "reits"]
     if not isinstance(exclude, list):
@@ -126,7 +136,10 @@ def parse_spec(raw: dict) -> ScreenerSpec:
     if not (1 <= limit <= 100):
         raise ScreenerError("limit must be 1..100")
 
-    min_trade_value = float(raw.get("min_trade_value") or 500_000_000)
+    # 거래대금 최소 임계: 국내 5억원(KRW) / 미국 0(USD, S&P500은 이미 유동성 큐레이션)
+    default_mtv = 0.0 if is_us else 500_000_000.0
+    raw_mtv = raw.get("min_trade_value")
+    min_trade_value = float(raw_mtv) if raw_mtv is not None else default_mtv
 
     return ScreenerSpec(
         rules=rules, markets=markets, exclude=exclude,
@@ -178,10 +191,21 @@ def _universe_filter(metric: dict, spec: ScreenerSpec) -> bool:
 
 
 def run(spec: ScreenerSpec) -> list[dict]:
-    """스펙 평가 — 매칭 종목 [{symbol, name, market, ...주요 필드}, ...]."""
-    metrics = krx_cache.get_all_metrics()
-    if not metrics:
-        raise ScreenerError("KRX 스냅샷이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.")
+    """스펙 평가 — 매칭 종목 [{symbol, name, market, ...주요 필드}, ...].
+
+    markets가 미국(NAS/NYS/AMS)이면 us_metrics_cache, 국내면 krx_cache에서 평가.
+    parse_spec이 혼합을 막으므로 한쪽만 결정된다.
+    """
+    if all(m in US_MARKETS for m in spec.markets):
+        from . import us_metrics_cache
+        metrics = us_metrics_cache.get_all_metrics()
+        if not metrics:
+            raise ScreenerError(
+                "미국 종목 데이터가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요.")
+    else:
+        metrics = krx_cache.get_all_metrics()
+        if not metrics:
+            raise ScreenerError("KRX 스냅샷이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.")
 
     matched = []
     for m in metrics.values():

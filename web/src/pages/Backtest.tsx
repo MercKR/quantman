@@ -11,7 +11,6 @@ import type {
   ExecutionPolicy, RebalanceIO, ScreenerSpecIO, StrategyDef, SymbolInfo,
 } from "../types";
 import { EXECUTION_DEFAULTS, parseScreenerKey } from "../types";
-import ScreenerCustomizer from "../components/ScreenerCustomizer";
 
 type SizingMode = "pct_cash" | "atr_risk";
 
@@ -807,30 +806,26 @@ function BuyTargetPanel({
         </>
       ) : (
         <>
-          <label className="small muted">자동 선택 프리셋</label>
+          <label className="small muted">자동 선택 세트</label>
           <div>
             <SymbolPicker
               symbols={symbols} value={tradeSymbol} tradableOnly
               lockMode="screener"
-              onChange={(v) => { setTradeSymbol(v); setScreenerSpec(null); }}
+              onChange={setTradeSymbol}
+              screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
+              setScreenerLimit={setScreenerLimit}
             />
           </div>
-          <ScreenerCustomizer
-            tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
-            spec={screenerSpec} setSpec={setScreenerSpec}
-          />
         </>
       )}
 
-      {(buyMode === "screener" || manualSymbols.length > 1) && (
+      {buyMode === "manual" && manualSymbols.length > 1 && (
         <div className="amount-row" style={{ marginTop: 12 }}>
           <label>최대 동시 보유 종목 수</label>
           <input type="number" min={1} max={20} value={screenerLimit}
                  onChange={(e) => setScreenerLimit(Number(e.target.value))} />
           <span className="muted">
-            {buyMode === "screener"
-              ? `자동 선택 결과 상위 ${screenerLimit}종목까지 매수 (매수 조건 충족 시 미보유 슬롯 채움)`
-              : `선택한 ${manualSymbols.length}종목 중 최대 ${screenerLimit}개 동시 보유`}
+            {`선택한 ${manualSymbols.length}종목 중 최대 ${screenerLimit}개 동시 보유`}
           </span>
         </div>
       )}

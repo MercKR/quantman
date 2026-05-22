@@ -133,6 +133,15 @@ def _check_alerts(session: Session, user_id: int, payload: dict) -> None:
         s.last_alerted_preview_missing = None
         session.add(s); session.commit()
 
+    # 1d. 미국 실시간 시세 미신청 (장중 실시간 손절 미제공) — kind=us_realtime_unavailable
+    #     스냅샷에만 실려 세션당 1회 도착하므로 별도 cooldown 불필요.
+    if cs.get("us_realtime_unavailable"):
+        _post_webhook(
+            s.alert_webhook_url,
+            "⚠️ [Quant] 미국 실시간 시세 미수신 — 장중 실시간 손절(익절/손절/"
+            "트레일링) 미제공. KIS HTS [7781] 해외 실시간 시세 신청 필요. "
+            "(미신청 시 미국 종목은 장 마감 후 사이클에서만 청산 평가)")
+
     # 2. 일일 손실 임계 도달
     ks_start = ks.get("day_start_equity")
     bal = (payload or {}).get("balance") or {}
@@ -214,6 +223,8 @@ def pull_risk_limits(
         "kill_switch_daily_loss_pct": (
             s.kill_switch_daily_loss_pct if s else None),
         "max_drawdown_pct": s.max_drawdown_pct if s else None,
+        "us_buying_power_mode": (
+            s.us_buying_power_mode if s else "integrated"),
     }
 
 

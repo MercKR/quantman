@@ -65,6 +65,9 @@ def _migrate() -> None:
                     'ALTER TABLE "usersettings" ADD COLUMN IF NOT EXISTS alert_on_reconcile_drift BOOLEAN DEFAULT TRUE'))
                 conn.execute(text(
                     'ALTER TABLE "usersettings" ADD COLUMN IF NOT EXISTS last_alerted_reconcile TIMESTAMP'))
+                conn.execute(text(
+                    "ALTER TABLE \"usersettings\" ADD COLUMN IF NOT EXISTS "
+                    "us_buying_power_mode VARCHAR DEFAULT 'integrated'"))
             else:
                 # SQLite - user 테이블 보정
                 cols = [r[1] for r in conn.exec_driver_sql(
@@ -91,6 +94,8 @@ def _migrate() -> None:
                         conn.exec_driver_sql('ALTER TABLE "usersettings" ADD COLUMN alert_on_reconcile_drift BOOLEAN DEFAULT TRUE')
                     if "last_alerted_reconcile" not in us_cols:
                         conn.exec_driver_sql('ALTER TABLE "usersettings" ADD COLUMN last_alerted_reconcile TIMESTAMP')
+                    if "us_buying_power_mode" not in us_cols:
+                        conn.exec_driver_sql("ALTER TABLE \"usersettings\" ADD COLUMN us_buying_power_mode VARCHAR DEFAULT 'integrated'")
     except Exception as e:  # noqa: BLE001  — 마이그레이션 실패가 기동을 막지 않도록
         print(f"[migrate] 스키마 보정 건너뜀: {e}")
 

@@ -390,6 +390,33 @@ def save_managed_overseas(stocks: list[dict]) -> None:
         json.dumps(uniq, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# 패키지에 동봉된 S&P500 큐레이션 유니버스 (gen_sp500.py 생성)
+_SP500_PATH = Path(__file__).parent / "universe" / "sp500.json"
+
+
+def load_sp500() -> list[dict]:
+    """S&P500 구성종목 [{symbol(점형식), name}, ...]. 미국 자동선택 유니버스(스테이지1).
+
+    파일 없으면 빈 리스트(미국 스크리너 비활성, 그래도 수동 거래는 가능).
+    """
+    if not _SP500_PATH.exists():
+        return []
+    try:
+        return json.loads(_SP500_PATH.read_text(encoding="utf-8")).get(
+            "constituents", [])
+    except Exception:
+        return []
+
+
+def sp500_yf_codes() -> list[str]:
+    """S&P500 종목을 yfinance/dataset 코드(대시 형식: BRK-B)로 반환.
+
+    클래스주 점(.)을 yfinance 표기 대시(-)로 변환. 그 외는 그대로.
+    데이터 수집(managed_overseas)·dataset 키로 사용한다.
+    """
+    return [c["symbol"].replace(".", "-") for c in load_sp500() if c.get("symbol")]
+
+
 # ── Binance REST (비트코인) ───────────────────────────────────────────────────
 
 def fetch_bitcoin() -> pd.DataFrame:

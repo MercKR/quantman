@@ -84,17 +84,34 @@ _TICK_TABLE = [
 
 
 def tick_size(price: float) -> int:
-    """가격대별 호가단위 반환."""
+    """가격대별 호가단위 반환 (KRW)."""
     for upper, tick in _TICK_TABLE:
         if price < upper:
             return tick
     return 1_000
 
 
-def round_to_tick(price: float, direction: str = "nearest") -> int:
-    """KIS 호가단위로 라운딩. direction: up | down | nearest."""
+def round_to_tick(price: float, direction: str = "nearest",
+                  currency: str = "KRW") -> float:
+    """호가단위로 라운딩. direction: up | down | nearest.
+
+    KRW: KIS 국내 호가단위(가격대별), 정수 반환.
+    USD: 미국 NMS 기본 $0.01 (1달러 이상). 소수 2자리 float 반환.
+    통화 미국이면 정수 절삭이 가격을 망가뜨리므로 반드시 float를 유지한다.
+    """
     if price <= 0:
         return 0
+    if currency == "USD":
+        # $1 미만은 $0.0001 틱이나, S&P500 대형주는 모두 $1 이상 → $0.01 고정.
+        import math
+        c = round(price * 100, 6)         # 부동소수 오차 흡수
+        if direction == "up":
+            cents = math.ceil(c)
+        elif direction == "down":
+            cents = math.floor(c)
+        else:
+            cents = round(c)
+        return round(cents / 100.0, 2)
     t = tick_size(price)
     if direction == "up":
         return int(((price + t - 1) // t) * t)

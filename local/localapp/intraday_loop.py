@@ -30,6 +30,7 @@ log = logging.getLogger("localapp.intraday_loop")
 # 모듈 전역 상태 — scheduler가 start/stop 호출
 _state = {
     "running": False,
+    "market": "KRX",          # 이번 loop이 다루는 시장 그룹 (KRX/US)
     "ws": None,
     "order_ws": None,         # Phase 33 — 체결 통보 WebSocket
     "manager": None,
@@ -37,8 +38,16 @@ _state = {
     "broker": None,
     "stop_flag": None,
     "sync_thread": None,
+    # 해외 실시간 시세 entitlement 감지 (US loop 전용)
+    "started_at": 0.0,
+    "us_subscribed": 0,       # 시작 시 구독한 미국 보유종목 수
+    "last_overseas_tick": 0.0,
 }
 _lock = threading.Lock()
+
+# US loop 시작 후 이 시간(초) 안에 해외 tick이 한 건도 없고 미국 보유가 있으면
+# 해외 실시간 시세 미신청으로 판정 → 사용자 고지 (실시간 손절 미제공).
+_US_REALTIME_GRACE_SEC = 120
 
 
 def _on_exec_event(trader: Trader, broker: Broker, evt: dict) -> None:
@@ -143,19 +152,73 @@ def _push_after_sell(broker: Broker, decisions: list[dict]) -> None:
         log.warning("intraday stop push 실패: %s", e)
 
 
-def start() -> dict:
+# 미국 실시간 시세 미신청 경고를 세션당 1회만 push하기 위한 플래그
+_us_realtime_warned = False
+
+
+def _check_us_realtime(broker: Broker, manager) -> None:
+    """미국 보유분이 있는데 grace 내내 해외 tick이 0이면 실시간 시세 미신청으로
+    판정 → 사용자에게 '실시간 손절 미제공' 1회 고지(서버 push). 세션당 1회.
+    """
+    global _us_realtime_warned
+    if _us_realtime_warned:
+        return
+    from . import market_index
+    now = time.time()
+    with _lock:
+        started = _state["started_at"]
+        last_tick = _state["last_overseas_tick"]
+    if now - started < _US_REALTIME_GRACE_SEC:
+        return
+    if last_tick > 0:
+        return                              # tick 수신됨 — 정상
+    us_held = [s for s in manager.held_symbols() if market_index.is_us(s)]
+    if not us_held:
+        return                              # 미국 보유 없음 — 감지 불가/불필요
+
+    _us_realtime_warned = True
+    log.warning("미국 실시간 시세 tick 미수신(%ds) — 해외 실시간 시세 미신청 추정. "
+                "실시간 손절 불가. KIS HTS [7781] 시세신청 필요.",
+                _US_REALTIME_GRACE_SEC)
+    try:
+        snap = broker.account_snapshot()
+        push_snapshot({
+            "balance": snap.get("balance", {}),
+            "positions": snap.get("positions", []),
+            "decisions": [],
+            "cycle_summary": {
+                "today": date.today().isoformat(),
+                "kind": "us_realtime_unavailable",
+                "us_realtime_unavailable": True,
+                "message": "미국 해외 실시간 시세가 수신되지 않습니다. KIS HTS "
+                           "[7781] 해외 실시간 시세 신청 전까지 미국 종목의 "
+                           "장중 실시간 손절(익절/손절/트레일링)이 제공되지 "
+                           "않습니다. (장 마감 후 사이클에서만 청산 평가)",
+            },
+        })
+    except Exception as e:
+        log.warning("us_realtime 경고 push 실패: %s", e)
+
+
+def start(market: str = "KRX") -> dict:
     """장중 stop loss 루프 시작. 별 thread에서 WebSocket 유지.
 
-    cycle 종료(09:10) 후 호출. 이미 실행 중이면 무동작.
+    market: 이번 loop이 추적할 시장 그룹('KRX'|'US'). 해당 시장 보유분만 구독·
+    손절한다. 미국은 KIS 해외 실시간 시세 신청(HTS [7781])이 있어야 tick이 흐르며,
+    미신청 시 구독은 되지만 데이터가 안 와 실시간 손절이 불가 → 감지해 고지한다.
+
+    cycle 종료 후 호출. 이미 실행 중이면 무동작.
     Phase 38.3: use_mock 제거 — KisBroker 전용.
     """
+    global _us_realtime_warned
     from .sync_client import pull_strategies
     with _lock:
         if _state["running"]:
             log.info("intraday_loop 이미 실행 중")
             return {"status": "already_running"}
 
-        log.info("intraday stop loop 시작")
+        _us_realtime_warned = False         # 세션마다 재감지
+        log.info("intraday stop loop 시작 (market=%s)", market)
         dataset = qc.load_dataset(with_indicators=True)
         broker = make_broker()
         trader = Trader(broker)
@@ -175,18 +238,34 @@ def start() -> dict:
         )
         manager.reset_daily()
 
-        ws = KisWebSocket(broker, on_tick=manager.on_tick)
+        from . import market_index
+
+        def _in_market(sym: str) -> bool:
+            try:
+                return market_index.market_group_of(sym) == market
+            except Exception:
+                return market == "KRX"
+
+        # 해외 tick 수신 시각 기록 (entitlement 감지용) 후 매니저로 전달
+        def _on_tick_detect(sym: str, price: float) -> None:
+            if market_index.is_us(sym):
+                with _lock:
+                    _state["last_overseas_tick"] = time.time()
+            manager.on_tick(sym, price)
+
+        ws = KisWebSocket(broker, on_tick=_on_tick_detect)
         try:
             ws.start()
         except Exception as e:
             log.error("WebSocket 시작 실패: %s", e)
             return {"status": "ws_start_failed", "error": str(e)}
 
-        # 초기 구독: 현재 보유 종목
-        held = manager.held_symbols()
+        # 초기 구독: 이번 시장의 보유 종목만
+        held = [s for s in manager.held_symbols() if _in_market(s)]
         if held:
             ws.subscribe(list(held))
-            log.info("초기 구독: %s (%d종목)", held, len(held))
+            log.info("[%s] 초기 구독: %s (%d종목)", market, held, len(held))
+        us_subscribed = len(held) if market == "US" else 0
 
         # Phase 33 — 체결 통보 WebSocket (HTS ID 설정된 경우만)
         order_ws = None
@@ -222,10 +301,13 @@ def start() -> dict:
         def _sync_loop():
             while not stop_flag.wait(60):
                 try:
-                    target = manager.held_symbols()
+                    target = {s for s in manager.held_symbols() if _in_market(s)}
                     result = ws.sync_subscriptions(target)
                     if result["added"] or result["removed"]:
-                        log.info("구독 sync: %s", result)
+                        log.info("[%s] 구독 sync: %s", market, result)
+                    # 미국 실시간 시세 entitlement 감지 — 보유 있는데 grace 내 tick 0이면 미신청
+                    if market == "US":
+                        _check_us_realtime(broker, manager)
                 except Exception as e:
                     log.warning("구독 sync 실패: %s", e)
 
@@ -234,12 +316,15 @@ def start() -> dict:
         sync_thread.start()
 
         _state.update({
-            "running": True, "ws": ws, "order_ws": order_ws,
+            "running": True, "market": market, "ws": ws, "order_ws": order_ws,
             "manager": manager,
             "trader": trader, "broker": broker,
             "stop_flag": stop_flag, "sync_thread": sync_thread,
+            "started_at": time.time(), "us_subscribed": us_subscribed,
+            "last_overseas_tick": 0.0,
         })
-        return {"status": "started", "initial_subscribed": len(held),
+        return {"status": "started", "market": market,
+                "initial_subscribed": len(held),
                 "order_ws_connected": order_ws.is_connected if order_ws else False}
 
 
@@ -284,12 +369,16 @@ def status() -> dict:
         if not _state["running"]:
             return {"running": False}
         order_ws = _state["order_ws"]
+        # 미국 실시간 시세 수신 여부 (US loop에서만 의미). 미수신 경고가 떴으면 False.
+        us_realtime_ok = not (_state["market"] == "US" and _us_realtime_warned)
         return {
             "running": True,
+            "market": _state["market"],
             "subscribed": len(_state["ws"]._symbols) if _state["ws"] else 0,
             "ws_connected": _state["ws"].is_connected if _state["ws"] else False,
             "order_ws_enabled": order_ws is not None,
             "order_ws_connected": order_ws.is_connected if order_ws else False,
+            "us_realtime_ok": us_realtime_ok,
             "n_triggered_today":
                 len(_state["manager"].decisions) if _state["manager"] else 0,
         }

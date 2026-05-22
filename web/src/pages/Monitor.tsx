@@ -134,6 +134,23 @@ export default function Monitor() {
         </div>
       )}
 
+      {/* 미국 실시간 시세 미신청 경고 — 장중 실시간 손절 미제공 */}
+      {summary?.us_realtime_unavailable && (
+        <div className="panel" style={{
+          borderLeft: "4px solid var(--amber, #f0b400)",
+          background: "rgba(240,180,0,0.10)", marginBottom: 14,
+        }}>
+          <div style={{ fontWeight: 700, color: "var(--amber, #c98a00)" }}>
+            ⚠ 미국 실시간 손절 미제공
+          </div>
+          <div className="muted" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.6 }}>
+            미국 해외 실시간 시세가 수신되지 않습니다. KIS HTS <b>[7781] 해외 실시간
+            시세 신청</b> 전까지 미국 종목의 장중 실시간 손절·익절·트레일링이
+            동작하지 않습니다(장 마감 후 사이클에서만 청산 평가). 국내 주식은 영향 없음.
+          </div>
+        </div>
+      )}
+
       {/* Action bar */}
       <div className="panel" style={{ display: "flex", flexWrap: "wrap",
                                          gap: 8, alignItems: "center" }}>

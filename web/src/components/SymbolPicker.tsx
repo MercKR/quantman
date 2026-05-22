@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { parseScreenerKey } from "../types";
-import type { ScreenerMatch, ScreenerPreset, SymbolInfo } from "../types";
+import type { ScreenerPreset, ScreenerSpecIO, SymbolInfo } from "../types";
+import ScreenerPanel from "./ScreenerPanel";
 import TabbedSymbolList from "./TabbedSymbolList";
 
 export const SYMBOL_CAT_ORDER = [
@@ -97,6 +98,7 @@ export function CategoryList({ items, order, selected, search, onPick }: {
  */
 export default function SymbolPicker({
   symbols, value, tradableOnly, lockMode, onChange,
+  screenerSpec, setScreenerSpec, setScreenerLimit,
 }: {
   symbols: SymbolInfo[];
   value: string;
@@ -104,6 +106,11 @@ export default function SymbolPicker({
   /** "screener" → 자동 선택 패널 고정, "manual" → 수동만. 미지정 시 내부 토글 표시. */
   lockMode?: "manual" | "screener";
   onChange: (sym: string) => void;
+  /** 자동 선택 커스텀 spec (screener:custom). 매수 대상에서만 전달. */
+  screenerSpec?: ScreenerSpecIO | null;
+  setScreenerSpec?: (s: ScreenerSpecIO | null) => void;
+  /** 세트 적용 시 최대 동시 보유 종목 수 = 세트의 상위 N개로 동기화. */
+  setScreenerLimit?: (n: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss<HTMLSpanElement>(open, setOpen);
@@ -114,11 +121,12 @@ export default function SymbolPicker({
     screenerKey ? "screener" : "manual");
   const mode = lockMode ?? innerMode;
   const [presets, setPresets] = useState<ScreenerPreset[]>([]);
+  const [asOf, setAsOf] = useState<string | null>(null);
 
   useEffect(() => {
     if (!tradableOnly || presets.length > 0) return;
     api.listScreenerPresets()
-      .then((r) => setPresets(r.presets))
+      .then((r) => { setPresets(r.presets); setAsOf(r.as_of); })
       .catch(() => {/* health 미공개도 무관 — UI는 manual 가능 */});
   }, [tradableOnly, presets.length]);
 
@@ -133,9 +141,12 @@ export default function SymbolPicker({
     ? symbols.find((s) => s.symbol === value) : undefined;
   const screenerPreset = screenerKey
     ? presets.find((p) => p.key === screenerKey) : null;
+  const screenerLabel = screenerKey === "custom"
+    ? (screenerSpec?.label || "맞춤 세트")
+    : (screenerPreset?.title ?? screenerKey);
   const chipLabel = !value ? "종목 선택"
     : screenerKey
-      ? `[자동] ${screenerPreset?.title ?? screenerKey}`
+      ? `[자동] ${screenerLabel}`
       : sel?.name ? `${value} ${sel.name}` : value;
 
   return (
@@ -169,8 +180,13 @@ export default function SymbolPicker({
           ) : mode === "screener" && tradableOnly ? (
             <ScreenerPanel
               presets={presets}
-              selectedKey={screenerKey}
-              onPick={(key) => { onChange(`screener:${key}`); setOpen(false); }}
+              asOf={asOf}
+              tradeSymbol={value}
+              setTradeSymbol={onChange}
+              spec={screenerSpec ?? null}
+              setSpec={setScreenerSpec ?? (() => {})}
+              setScreenerLimit={setScreenerLimit ?? (() => {})}
+              onClose={() => setOpen(false)}
             />
           ) : (
             <TabbedSymbolList
@@ -190,96 +206,6 @@ export default function SymbolPicker({
         </div>
       )}
     </span>
-  );
-}
-
-/** 자동 선택 패널 — 프리셋 카드 그리드. 카드 펼치면 매칭 종목 미리보기. */
-function ScreenerPanel({ presets, selectedKey, onPick }: {
-  presets: ScreenerPreset[];
-  selectedKey: string | null;
-  onPick: (key: string) => void;
-}) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [previews, setPreviews] = useState<Record<string, ScreenerMatch[]>>({});
-  const [loading, setLoading] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  function toggle(key: string) {
-    if (expanded === key) { setExpanded(null); return; }
-    setExpanded(key);
-    if (previews[key]) return;
-    setLoading(key); setErr(null);
-    api.runScreenerPreset(key)
-      .then((r) => setPreviews((p) => ({ ...p, [key]: r.matches })))
-      .catch((e) => setErr((e as Error).message))
-      .finally(() => setLoading(null));
-  }
-
-  if (presets.length === 0) {
-    return (
-      <div className="cat-empty" style={{ padding: 16, lineHeight: 1.6 }}>
-        프리셋 정보를 불러오는 중입니다…<br/>
-        <span style={{ fontSize: 11 }}>
-          서버 스크리너 데이터가 아직 준비되지 않았다면 잠시 후 다시 시도하세요.
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="screener-panel">
-      {err && <div className="error" style={{ fontSize: 12 }}>{err}</div>}
-      {presets.map((p) => {
-        const isExp = expanded === p.key;
-        const isSel = selectedKey === p.key;
-        const items = previews[p.key];
-        return (
-          <div key={p.key}
-               className={"screener-card" + (isSel ? " sel" : "")}>
-            <div className="screener-card-head">
-              <button type="button" className="screener-card-title"
-                      onClick={() => toggle(p.key)}>
-                <strong>{p.title}</strong>
-                <span className="screener-card-caret">{isExp ? "▾" : "▸"}</span>
-              </button>
-              <button type="button" className="ghost sm"
-                      onClick={() => onPick(p.key)}>
-                {isSel ? "선택됨" : "선택"}
-              </button>
-            </div>
-            <div className="screener-card-desc">{p.desc}</div>
-            {isExp && (
-              <div className="screener-preview">
-                {loading === p.key
-                  ? <span className="muted" style={{ fontSize: 12 }}>불러오는 중…</span>
-                  : items && items.length === 0
-                    ? <span className="muted" style={{ fontSize: 12 }}>매칭 종목 없음</span>
-                    : items
-                      ? <>
-                          <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
-                            매칭 {items.length}종목 (상위 5개)
-                          </div>
-                          <ul className="screener-preview-list">
-                            {items.slice(0, 5).map((m) => (
-                              <li key={m.symbol}>
-                                <span>{m.symbol} {m.name}</span>
-                                <span className="muted">
-                                  {m.pct_change_1d != null
-                                    ? `${m.pct_change_1d > 0 ? "+" : ""}${m.pct_change_1d.toFixed(2)}%`
-                                    : "—"}
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                        </>
-                      : null
-                }
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
   );
 }
 

@@ -153,6 +153,8 @@ class UserSettingsIO(BaseModel):
     preview_missing_alert_threshold: int = 3
     # Phase 40 — KIS ↔ ledger 정합성 drift 알림 토글
     alert_on_reconcile_drift: bool = True
+    # 미국 매수여력 모드: "integrated"(통합증거금) | "usd_cash"(USD 예수금 한정)
+    us_buying_power_mode: str = "integrated"
 
 
 class TradableSymbolIn(BaseModel):

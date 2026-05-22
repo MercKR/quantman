@@ -1,7 +1,7 @@
 import type {
   AnalysisResult, BacktestResult, BacktestRunDetail, BacktestRunSummary,
   CommandRow, CommandType, DeviceRow, MarketContext, NextDayPreview, PortfolioRisk,
-  ScreenerField, ScreenerMatch, ScreenerPreset, ScreenerSpecIO,
+  ScreenerField, ScreenerMatch, ScreenerPreset, ScreenerSpecIO, ScreenerUserPreset,
   StrategyDef, StrategyRow, SymbolInfo, SyncSnapshot, UserSettingsIO,
 } from "./types";
 
@@ -121,6 +121,20 @@ export const api = {
   runScreenerCustom: (spec: ScreenerSpecIO) =>
     req<{ count: number; matches: ScreenerMatch[]; as_of: string | null }>(
       "/screener/run", { method: "POST", body: JSON.stringify(spec) }),
+
+  // 내 세트 (계정 저장 사용자 정의 세트) CRUD
+  listMyScreenerPresets: () =>
+    req<{ presets: ScreenerUserPreset[] }>("/screener/my-presets"),
+  createMyScreenerPreset: (name: string, spec: ScreenerSpecIO) =>
+    req<ScreenerUserPreset>("/screener/my-presets", {
+      method: "POST", body: JSON.stringify({ name, spec }),
+    }),
+  updateMyScreenerPreset: (id: number, name: string, spec: ScreenerSpecIO) =>
+    req<ScreenerUserPreset>(`/screener/my-presets/${id}`, {
+      method: "PUT", body: JSON.stringify({ name, spec }),
+    }),
+  deleteMyScreenerPreset: (id: number) =>
+    req<{ ok: boolean }>(`/screener/my-presets/${id}`, { method: "DELETE" }),
 
   // Phase 31 — 내일 매매 미리보기
   getNextDayPreview: () => req<NextDayPreview>("/preview/next-day"),
