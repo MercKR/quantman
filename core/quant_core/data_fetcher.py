@@ -209,6 +209,17 @@ def save_user_stocks(stocks: list[dict]):
 def fetch_yfinance(symbol_name: str, ticker: str, start: str = "2010-01-01") -> pd.DataFrame:
     existing = _load_existing(symbol_name)
     if not existing.empty:
+        last_date = existing.index[-1].date()
+        from datetime import timezone
+        now_utc = datetime.now(timezone.utc)
+        today_utc = now_utc.date()
+        # 이미 오늘 데이터(UTC)까지 다 있다면 yfinance 호출 스킵
+        if last_date >= today_utc:
+            return existing
+        # 마지막 데이터 날짜가 어제인데, 오늘 US 장 마감(20:00 UTC / 16:00 EDT) 전이라면 스킵
+        # (장 마감 전에는 오늘자 신규 일봉이 없거나 미완성이며, 무엇보다 yfinance timezone 버그를 완벽히 차단함)
+        if last_date >= today_utc - timedelta(days=1) and now_utc.hour < 20:
+            return existing
         start = (existing.index[-1] + timedelta(days=1)).strftime("%Y-%m-%d")
     try:
         df = yf.Ticker(ticker).history(start=start, auto_adjust=True)
@@ -271,10 +282,43 @@ def fetch_korean_stocks(codes: list[str], start: str = "2015-01-01",
     Returns:
         {code: DataFrame} — 성공한 것만
     """
+    import gc
+    from datetime import timezone
+
+    # KST 기준 마지막 마감된 거래일 구하기
+    tz_kst = timezone(timedelta(hours=9))
+    now_kst = datetime.now(tz_kst)
+    today_kst = now_kst.date()
+    market_closed = now_kst.time() >= datetime.strptime("15:40:00", "%H:%M:%S").time()
+
+    if today_kst.weekday() < 5:  # 월~금
+        if market_closed:
+            last_closed_market_date = today_kst
+        else:
+            days_to_subtract = 3 if today_kst.weekday() == 0 else 1
+            last_closed_market_date = today_kst - timedelta(days=days_to_subtract)
+    elif today_kst.weekday() == 5:  # 토요일
+        last_closed_market_date = today_kst - timedelta(days=1)  # 금요일
+    else:  # 일요일
+        last_closed_market_date = today_kst - timedelta(days=2)  # 금요일
+
     results: dict[str, pd.DataFrame] = {}
     n_ok = n_skip = n_fail = 0
     for i, code in enumerate(codes):
+        # 100개 단위 명시적 가비지 컬렉션 수행으로 메모리 누수 방지
+        if i > 0 and i % 100 == 0:
+            gc.collect()
+
         existing = _load_existing(code)
+        
+        # 지능형 최신 상태 체크 (이미 마지막 마감장 데이터까지 다 갖고 있다면 fdr 호출 스킵)
+        if not existing.empty:
+            last_date = existing.index[-1].date()
+            if last_date >= last_closed_market_date:
+                results[code] = existing
+                n_skip += 1
+                continue
+
         s = (existing.index[-1] + timedelta(days=1)).strftime("%Y-%m-%d") \
             if not existing.empty else start
         try:
