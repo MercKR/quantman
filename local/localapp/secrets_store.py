@@ -33,15 +33,25 @@ def load_kis() -> dict | None:
     return json.loads(raw) if raw else None
 
 
+_cached_device_token = None
+
+
 def save_device_token(token: str) -> None:
+    global _cached_device_token
     keyring.set_password(KEYRING_SERVICE, _DEVICE, token)
+    _cached_device_token = token
 
 
 def load_device_token() -> str | None:
-    return keyring.get_password(KEYRING_SERVICE, _DEVICE)
+    global _cached_device_token
+    if _cached_device_token is None:
+        _cached_device_token = keyring.get_password(KEYRING_SERVICE, _DEVICE)
+    return _cached_device_token
 
 
 def clear() -> None:
+    global _cached_device_token
+    _cached_device_token = None
     for key in (_KIS, _DEVICE):
         try:
             keyring.delete_password(KEYRING_SERVICE, key)

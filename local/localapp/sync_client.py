@@ -232,12 +232,13 @@ def sync_dataset(local_data_dir: Path) -> dict:
 
 # ── 로컬앱 → 서버 Parquet 데이터 동기화 업로드 ─────────────────────────────────────
 
-def upload_single_parquet(file_path: Path, category: str = "price", http_session: requests.Session | None = None) -> bool:
+def upload_single_parquet(file_path: Path, category: str = "price", http_session: requests.Session | None = None, headers: dict | None = None) -> bool:
     """단일 parquet 파일을 서버에 업로드. 성공 시 True.
 
     서버 일시적 부하 또는 프록시 502 에러에 대비하여 지수 백오프 기반 최대 3회 재시도를 수행합니다.
     """
-    headers = _headers()
+    if headers is None:
+        headers = _headers()
     url = f"{PLATFORM_URL}/sync/upload_parquet"
     params = {"category": category}
     
@@ -267,7 +268,7 @@ def upload_single_parquet(file_path: Path, category: str = "price", http_session
     return False
 
 
-def push_local_dataset(local_data_dir: Path, max_workers: int = 2) -> dict:
+def push_local_dataset(local_data_dir: Path, max_workers: int = 8) -> dict:
     """로컬에 축적된 parquet 파일들을 서버의 영구 저장소로 업로드 (네이버 차단 완벽 우회).
 
     로컬의 가격 데이터 및 펀더멘털 데이터를 비교하여 서버에 없거나 로컬 데이터가 더 최신인 경우 업로드합니다.
@@ -335,10 +336,13 @@ def push_local_dataset(local_data_dir: Path, max_workers: int = 2) -> dict:
         http_session.mount("https://", adapter)
         http_session.mount("http://", adapter)
         
+        # OS 자격 증명 조회는 최초 1회만 수행하여 재사용 (Windows Credential Manager 병목 차단)
+        headers = _headers()
+        
         def worker(item):
             fp, cat = item
             try:
-                success = upload_single_parquet(fp, category=cat, http_session=http_session)
+                success = upload_single_parquet(fp, category=cat, http_session=http_session, headers=headers)
                 return fp.name, success, None
             except Exception as e:
                 return fp.name, False, str(e)

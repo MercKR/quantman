@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, BackgroundTasks
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -296,14 +296,26 @@ async def upload_parquet(
 
 @router.post("/complete")
 def sync_complete(
+    background_tasks: BackgroundTasks,
     device: Device = Depends(get_current_device),
 ):
     """로컬앱이 모든 Parquet 벌크 동기화 파일 전송을 마쳤음을 서버에 알림.
-    이 시점에 단 한 번 메모리 캐시를 무효화하여 서버 리소스를 극적으로 절약합니다.
+    이 시점에 단 한 번 메모리 캐시를 무효화하고 백그라운드 캐시 워밍업을 시작합니다.
     """
     from .. import data_cache
     data_cache.invalidate()
     _log.info("Parquet 벌크 동기화 완료 신호 수신. 메모리 캐시 무효화 완료 -> device:%s", device.id)
+
+    # 백그라운드 스레드에서 캐시 로딩 및 기술적 지표 사전 계산 수행 (Cold Start 극복)
+    def warmup_cache():
+        try:
+            _log.info("🚀 백그라운드 데이터셋 캐시 워밍업(Warm-up) 시작...")
+            data_cache.get_dataset()
+            _log.info("✅ 백그라운드 데이터셋 캐시 워밍업 완료. 이제 즉시 웹에서 백테스트 가능합니다.")
+        except Exception as e:
+            _log.error("❌ 백그라운드 데이터셋 캐시 워밍업 실패: %s", e)
+
+    background_tasks.add_task(warmup_cache)
     return {"ok": True}
 
 
