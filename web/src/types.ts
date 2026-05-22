@@ -450,6 +450,8 @@ export interface ScreenerPreset {
   title: string;        // "시가총액 상위"
   desc: string;
   spec?: ScreenerSpecIO; // 편집 시작점 — 프리셋의 룰 (presets 엔드포인트가 포함)
+  // 국내("KR") / 미국("US") — 웹이 컨텍스트별 섹션으로 노출. 통화·단위 표기에도 사용.
+  market_group?: "KR" | "US";
 }
 
 /** 계정에 저장된 사용자 정의 세트. */

@@ -176,6 +176,60 @@ export default function ScreenerPanel({
     );
   }
 
+  // ── 기본 세트 카드 렌더 (국내/미국 섹션 공용) ──────────────────────────────
+  const krPresets = presets.filter((p) => p.market_group !== "US");
+  const usPresets = presets.filter((p) => p.market_group === "US");
+
+  function renderPresetCard(p: ScreenerPreset) {
+    const isExp = expanded === p.key;
+    const isSel = selectedKey === p.key;
+    const items = previews[p.key];
+    return (
+      <div key={p.key} className={"screener-card" + (isSel ? " sel" : "")}>
+        <div className="screener-card-head">
+          <div className="screener-card-title">
+            <strong>{p.title}</strong>
+          </div>
+          <div className="screener-card-actions">
+            <button type="button" className="ghost sm" onClick={() => applyPreset(p.key)}>
+              {isSel ? "선택됨" : "선택"}
+            </button>
+            <button type="button" className="ghost sm" title="숫자 조정 (이 전략에만)"
+                    onClick={() => setEditor({
+                      kind: "preset", key: p.key, title: p.title,
+                      spec: p.spec ? JSON.parse(JSON.stringify(p.spec)) : JSON.parse(JSON.stringify(DEFAULT_SPEC)),
+                    })}>⚙</button>
+            <button type="button" className="ghost sm" title="미리보기" onClick={() => togglePreview(p.key)}>
+              {isExp ? "▾" : "▸"}
+            </button>
+          </div>
+        </div>
+        <div className="screener-card-desc">{p.desc}</div>
+        {isExp && (
+          <div className="screener-preview">
+            {loadingPrev === p.key
+              ? <span className="muted small">불러오는 중…</span>
+              : items && items.length === 0
+                ? <span className="muted small">매칭 종목 없음</span>
+                : items
+                  ? <ul className="screener-preview-list">
+                      {items.slice(0, 5).map((m) => (
+                        <li key={m.symbol}>
+                          <span>{m.symbol} {m.name}</span>
+                          <span className="muted small">
+                            {m.pct_change_1d != null
+                              ? `${m.pct_change_1d > 0 ? "+" : ""}${m.pct_change_1d.toFixed(2)}%` : "—"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  : null}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // ── 목록 화면 ──────────────────────────────────────────────────────────────
   return (
     <div className="screener-panel">
@@ -225,60 +279,25 @@ export default function ScreenerPanel({
         </>
       )}
 
-      <div className="screener-section-h">기본 세트</div>
       {presets.length === 0 ? (
-        <div className="cat-empty" style={{ padding: 12, lineHeight: 1.6 }}>
-          기본 세트를 불러오는 중입니다…
-        </div>
-      ) : presets.map((p) => {
-        const isExp = expanded === p.key;
-        const isSel = selectedKey === p.key;
-        const items = previews[p.key];
-        return (
-          <div key={p.key} className={"screener-card" + (isSel ? " sel" : "")}>
-            <div className="screener-card-head">
-              <div className="screener-card-title">
-                <strong>{p.title}</strong>
-              </div>
-              <div className="screener-card-actions">
-                <button type="button" className="ghost sm" onClick={() => applyPreset(p.key)}>
-                  {isSel ? "선택됨" : "선택"}
-                </button>
-                <button type="button" className="ghost sm" title="숫자 조정 (이 전략에만)"
-                        onClick={() => setEditor({
-                          kind: "preset", key: p.key, title: p.title,
-                          spec: p.spec ? JSON.parse(JSON.stringify(p.spec)) : JSON.parse(JSON.stringify(DEFAULT_SPEC)),
-                        })}>⚙</button>
-                <button type="button" className="ghost sm" title="미리보기" onClick={() => togglePreview(p.key)}>
-                  {isExp ? "▾" : "▸"}
-                </button>
-              </div>
-            </div>
-            <div className="screener-card-desc">{p.desc}</div>
-            {isExp && (
-              <div className="screener-preview">
-                {loadingPrev === p.key
-                  ? <span className="muted small">불러오는 중…</span>
-                  : items && items.length === 0
-                    ? <span className="muted small">매칭 종목 없음</span>
-                    : items
-                      ? <ul className="screener-preview-list">
-                          {items.slice(0, 5).map((m) => (
-                            <li key={m.symbol}>
-                              <span>{m.symbol} {m.name}</span>
-                              <span className="muted small">
-                                {m.pct_change_1d != null
-                                  ? `${m.pct_change_1d > 0 ? "+" : ""}${m.pct_change_1d.toFixed(2)}%` : "—"}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      : null}
-              </div>
-            )}
+        <>
+          <div className="screener-section-h">기본 세트</div>
+          <div className="cat-empty" style={{ padding: 12, lineHeight: 1.6 }}>
+            기본 세트를 불러오는 중입니다…
           </div>
-        );
-      })}
+        </>
+      ) : (
+        <>
+          <div className="screener-section-h">기본 세트 · 국내</div>
+          {krPresets.map(renderPresetCard)}
+          {usPresets.length > 0 && (
+            <>
+              <div className="screener-section-h">기본 세트 · 미국 <span className="muted small">(USD)</span></div>
+              {usPresets.map(renderPresetCard)}
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -303,6 +322,11 @@ function SetEditor({
 
   const spec = editor.spec;
   const isPreset = editor.kind === "preset";
+  // 미국 스펙이면 화폐 단위(원)를 $로 — us_metrics는 USD 기준.
+  const isUsSpec = !!spec.markets && spec.markets.length > 0
+    && spec.markets.every((m) => m === "NAS" || m === "NYS" || m === "AMS");
+  const unitOf = (f: ScreenerField): string =>
+    isUsSpec && f.unit === "원" ? "$" : f.unit;
 
   function setSpec(next: ScreenerSpecIO) {
     setEditor({ ...editor, spec: next });
@@ -352,7 +376,7 @@ function SetEditor({
         <div key={i} className="screener-rule">
           <select value={r.field} onChange={(e) => setSpec(withRule(spec, i, { field: e.target.value }))}>
             {fields.map((f) => (
-              <option key={f.key} value={f.key}>{f.label}{f.unit ? ` (${f.unit})` : ""}</option>
+              <option key={f.key} value={f.key}>{f.label}{unitOf(f) ? ` (${unitOf(f)})` : ""}</option>
             ))}
           </select>
           <select value={r.op} onChange={(e) => setSpec(withRule(spec, i, { op: e.target.value as ScreenerOp }))}>
