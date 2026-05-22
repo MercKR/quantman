@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from . import (data_cache, kis_master_cache, krx_cache, naver_fundamentals,
                 technical_cache)
@@ -339,6 +340,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="퀀트 플랫폼 API", version="0.2.0", lifespan=lifespan)
+
+# 응답 gzip 압축 — /symbols 같은 대용량 JSON이 ~1/10로 줄어 전송 시간이 급감.
+# Accept-Encoding: gzip을 보내는 클라이언트(브라우저)에만 적용.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
