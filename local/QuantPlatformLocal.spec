@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../core"))
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 datas, binaries, hiddenimports = [], [], []
 
@@ -21,6 +21,12 @@ for pkg in ("keyring", "pystray", "apscheduler", "FinanceDataReader"):
     datas += d
     binaries += b
     hiddenimports += h
+
+# quant_core 데이터 파일(시장 캘린더·유니버스 JSON)을 번들에 포함.
+# onedir 패키지엔 .py만 들어가므로 이걸 빠뜨리면 calendars/us_sessions.json이 없어
+# 미국 스케줄러(_plan_us_session → market_calendar)가 CalendarError로 동작 불가.
+# 포함 대상: quant_core/calendars/*.json, quant_core/universe/*.json
+datas += collect_data_files("quant_core")
 
 hiddenimports += [
     "pystray._win32",
