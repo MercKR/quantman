@@ -219,8 +219,8 @@ function StrategyCard({
       </div>
       <div className="sc-target">
         {screenerKey
-          ? <>🔍 자동 선택: <code>{screenerKey}</code></>
-          : <>📊 {summarizeTargets(s.definition.trade_symbol)}</>}
+          ? <>자동 선택: <code>{screenerKey}</code></>
+          : <>{summarizeTargets(s.definition.trade_symbol)}</>}
       </div>
       <div className="sc-meta">
         매수 {buyN} · 매도 {sellRuleCount} 규칙 · 자본 {s.definition.amount_pct}%
@@ -414,7 +414,7 @@ function DetailPanel({
                 </div>
                 {s.run_mode !== "live" ? (
                   <button className="promote-btn" onClick={onPromote}>
-                    🚀 실전으로 승격
+                    실전으로 승격
                   </button>
                 ) : (
                   <div className="live-active">
@@ -459,7 +459,7 @@ function PromoteModal({
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal promote-modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-head">
-          <h2>🚀 실전 승격 — {s.name}</h2>
+          <h2>실전 승격 — {s.name}</h2>
           <button className="ghost sm" onClick={onCancel}>✕</button>
         </header>
 

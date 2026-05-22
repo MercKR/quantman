@@ -425,7 +425,7 @@ function ReconciliationPanel({
       <div style={{ display: "flex", alignItems: "center",
                       justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
         <h3 style={{ margin: 0 }}>
-          📋 잔고 정합성 {hasDrift && (
+          잔고 정합성 {hasDrift && (
             <span style={{ color: "var(--amber)", fontSize: 14, fontWeight: 600 }}>
               · 차이 감지
             </span>

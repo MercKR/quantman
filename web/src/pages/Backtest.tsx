@@ -700,7 +700,7 @@ function BuildTab(props: {
             <input type="number" min={1} value={forwardDays}
                    onChange={(e) => setForwardDays(Number(e.target.value))} />
             일 뒤 수익률
-            <button className="ghost sm"
+            <button className="ghost"
                     disabled={!!busy || !!parseScreenerKey(tradeSymbol)}
                     title={parseScreenerKey(tradeSymbol)
                       ? "자동 선택 전략은 통계 미리보기 미지원 — 수동 종목으로 분석하세요." : undefined}
@@ -1078,10 +1078,10 @@ function MarketplacePlaceholder() {
         다른 사용자의 성과·승률·드로우다운을 한눈에 비교할 수 있게 됩니다.
       </p>
       <ul className="soon-list">
-        <li>📊 큐레이션된 무료 전략 5~10종 (RSI 역추세 · 모멘텀 · 골든크로스 등)</li>
-        <li>🔀 한 번의 클릭으로 내 전략으로 가져오기 (fork)</li>
-        <li>📈 마켓플레이스 전략의 라이브 성과 추적</li>
-        <li>💰 유료 전략 · 정산 · 환불 · 평가 (Phase V3)</li>
+        <li>큐레이션된 무료 전략 5~10종 (RSI 역추세 · 모멘텀 · 골든크로스 등)</li>
+        <li>한 번의 클릭으로 내 전략으로 가져오기 (fork)</li>
+        <li>마켓플레이스 전략의 라이브 성과 추적</li>
+        <li>유료 전략 · 정산 · 환불 · 평가 (Phase V3)</li>
       </ul>
       <p className="muted small">
         지금은 [빌더]에서 직접 전략을 만들거나, 다른 트레이더의 글·블로그를 참고해

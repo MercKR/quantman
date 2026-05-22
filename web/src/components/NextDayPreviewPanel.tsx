@@ -72,7 +72,7 @@ export default function NextDayPreviewPanel() {
   if (!preview) {
     return (
       <div className="panel preview-panel preview-empty">
-        <h3>📋 내일 매매 미리보기</h3>
+        <h3>내일 매매 미리보기</h3>
         <div className="muted">
           {err ? `불러오기 실패: ${err}` : "불러오는 중…"}
         </div>
@@ -83,7 +83,7 @@ export default function NextDayPreviewPanel() {
   if (!preview.available) {
     return (
       <div className="panel preview-panel preview-empty">
-        <h3>📋 내일 매매 미리보기</h3>
+        <h3>내일 매매 미리보기</h3>
         <div className="muted">{preview.reason ?? "준비 중"}</div>
       </div>
     );
@@ -97,7 +97,7 @@ export default function NextDayPreviewPanel() {
     <div className="panel preview-panel">
       <div className="preview-head">
         <h3 style={{ margin: 0 }}>
-          📋 내일 매매 미리보기
+          내일 매매 미리보기
           <button className="ghost sm" onClick={() => setCollapsed((v) => !v)}
                   style={{ marginLeft: 10 }}>
             {collapsed ? "펼치기" : "접기"}
