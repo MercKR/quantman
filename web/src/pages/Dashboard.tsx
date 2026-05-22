@@ -39,15 +39,18 @@ export default function Dashboard() {
   const [range, setRange] = useState<Range>("1m");
 
   useEffect(() => {
+    // 빠른 데이터(스냅샷·기기·전략, 보통 <120ms)로 페이지를 먼저 렌더한다.
     Promise.all([
       api.snapshot().catch(() => null),
       api.devices().catch(() => []),
       api.listStrategies().catch(() => []),
-      api.marketContext().catch(() => null),
-    ]).then(([s, d, st, m]) => {
-      setSnap(s); setDevices(d); setStrategies(st); setMarket(m);
+    ]).then(([s, d, st]) => {
+      setSnap(s); setDevices(d); setStrategies(st);
       setLoaded(true);
     });
+    // 시장 컨텍스트는 콜드 시 최대 ~80s까지 걸려 화면 전체를 막던 원인 → 분리.
+    // 도착하면 자산곡선 아래 벤치마크(KOSPI) 행만 채운다(미도착 시 행 숨김).
+    api.marketContext().catch(() => null).then(setMarket);
   }, []);
 
   if (!loaded) return <p className="muted">불러오는 중…</p>;
