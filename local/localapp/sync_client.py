@@ -112,7 +112,10 @@ def pull_preview() -> dict | None:
       네트워크/응답 오류 + 캐시도 만료 시 None — 호출자가 기존 청산-only 경로로.
     """
     try:
-        r = requests.get(f"{PLATFORM_URL}/preview/next-day", headers=_headers(),
+        # 디바이스 인증 엔드포인트 — 웹용 /preview/next-day(유저 JWT)가 아니라
+        # /sync/preview(디바이스 토큰). 이전엔 유저 전용 엔드포인트를 호출해 항상
+        # 401 → "preview 없음 → 신규 진입 0"이 되던 버그를 수정.
+        r = requests.get(f"{PLATFORM_URL}/sync/preview", headers=_headers(),
                          timeout=15)
     except Exception as e:
         log.warning("preview pull 네트워크 실패: %s — 캐시 fallback 시도", e)

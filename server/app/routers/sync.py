@@ -228,6 +228,36 @@ def pull_risk_limits(
     }
 
 
+@router.get("/preview")
+def pull_preview(
+    device: Device = Depends(get_current_device),
+    session: Session = Depends(get_session),
+) -> dict:
+    """로컬앱이 자기 계정의 최신 next_day_preview를 풀(pull) — 디바이스 인증.
+
+    웹용 `/preview/next-day`(유저 JWT)와 동일 데이터를 디바이스 인증으로 노출한다.
+    로컬앱 사이클(runner.run_cycle)이 매수 후보(candidates)를 받기 위해 호출하며,
+    preview는 데이터 cron이 `SyncSnapshot.payload.next_day_preview`에 merge한다.
+
+    역할 분리: 디바이스(로컬앱)는 `/sync/*`·디바이스 토큰, 웹은 `/preview/*`·유저 JWT.
+    이전엔 로컬앱이 유저 전용 `/preview/next-day`를 호출해 항상 401 → 신규 진입 차단
+    버그가 있었다(이 엔드포인트로 교체해 해결).
+
+    스냅샷 없음·preview 미생성 시 available=false (정상 상태, 캐시 fallback 없음).
+    """
+    snap = session.exec(
+        select(SyncSnapshot).where(SyncSnapshot.user_id == device.user_id)
+        .order_by(SyncSnapshot.received_at.desc())
+    ).first()
+    if snap is None or not snap.payload:
+        return {"available": False, "reason": "스냅샷 없음 — 로컬앱 sync 필요"}
+    preview = (snap.payload or {}).get("next_day_preview")
+    if preview is None:
+        return {"available": False,
+                "reason": "preview 아직 생성 안 됨 (다음 cron 갱신 대기)"}
+    return preview
+
+
 @router.post("/tradable_symbols", deprecated=True)
 def push_tradable_symbols(
     body: TradableSymbolsSyncIn,

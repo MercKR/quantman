@@ -1,0 +1,143 @@
+"""P0 회귀 — 로컬앱 preview pull 인증 경로.
+
+버그: 로컬앱(디바이스 토큰)이 유저 전용 `/preview/next-day`(get_current_user, JWT)를
+호출해 항상 401 → "preview 없음 → 신규 진입 0 → 청산만". 자동 매수가 구조적으로 차단됨.
+
+수정(Fix A): 디바이스 인증 `/sync/preview` 신설 + 로컬앱 repoint. 역할 분리 유지
+(디바이스=/sync/*·디바이스 토큰, 웹=/preview/*·유저 JWT).
+
+네트워크/lifespan 없이 인메모리 SQLite + 최소 앱으로 인증 분리를 양·음성 검증.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
+from sqlmodel import Session, SQLModel, create_engine
+
+# server 디렉터리를 path에 추가 — `import app.*`
+_SERVER_DIR = Path(__file__).resolve().parent.parent
+if str(_SERVER_DIR) not in sys.path:
+    sys.path.insert(0, str(_SERVER_DIR))
+
+from app.db import get_session
+from app.models import Device, SyncSnapshot, User
+from app.routers import preview as preview_router
+from app.routers import sync as sync_router
+from app.security import create_access_token, hash_token
+
+_DEVICE_TOKEN = "test-device-token-abc"
+_PREVIEW = {
+    "available": True,
+    "generated_at": "2026-05-23T09:00:00",
+    "data_source": "test",
+    "summary": {"n_buy_candidates": 1, "est_total_buy_amount": 1000.0,
+                "n_holding": 0, "cash": 5000.0},
+    "by_strategy": [{
+        "strategy_id": 1, "strategy_name": "T", "trade_symbol": "AAPL",
+        "run_mode": "paper", "signal_passed": True,
+        "candidates": [{"symbol": "AAPL", "name": "애플", "qty": 1,
+                        "prev_close": 304.99, "est_limit_price": 308.0,
+                        "est_total": 308.0, "sizing_mode": "pct_cash",
+                        "data_as_of": "2026-05-22"}],
+        "skipped": [],
+    }],
+    "exit_candidates": [],
+}
+
+
+def _build(payload: dict | None):
+    """인메모리 DB + 최소 앱(sync/preview 라우터) + 시드. (TestClient, jwt) 반환.
+
+    payload=None이면 스냅샷을 만들지 않는다(스냅샷 없음 케이스).
+    """
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+
+    with Session(engine) as s:
+        user = User(email="t@example.com")
+        s.add(user); s.commit(); s.refresh(user)
+        device = Device(user_id=user.id, name="dev",
+                        token_hash=hash_token(_DEVICE_TOKEN))
+        s.add(device); s.commit(); s.refresh(device)
+        if payload is not None:
+            s.add(SyncSnapshot(user_id=user.id, device_id=device.id,
+                               payload=payload))
+            s.commit()
+        user_id = user.id
+
+    app = FastAPI()
+    app.include_router(sync_router.router)
+    app.include_router(preview_router.router)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+    app.dependency_overrides[get_session] = _override
+    return TestClient(app), create_access_token(user_id)
+
+
+def _dev():
+    return {"Authorization": f"Bearer {_DEVICE_TOKEN}"}
+
+
+def _jwt(tok: str):
+    return {"Authorization": f"Bearer {tok}"}
+
+
+# ── 양성: 디바이스 토큰으로 /sync/preview → 200 + preview ─────────────────────
+
+def test_device_pulls_preview_via_sync():
+    client, _ = _build({"balance": {}, "next_day_preview": _PREVIEW})
+    r = client.get("/sync/preview", headers=_dev())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["available"] is True
+    assert body["by_strategy"][0]["candidates"][0]["symbol"] == "AAPL"
+
+
+# ── 음성/경계 ─────────────────────────────────────────────────────────────────
+
+def test_sync_preview_rejects_no_token():
+    client, _ = _build({"next_day_preview": _PREVIEW})
+    assert client.get("/sync/preview").status_code == 401
+
+
+def test_sync_preview_rejects_user_jwt():
+    """유저 JWT는 디바이스 토큰이 아니므로 /sync/preview에서 거부(401)."""
+    client, tok = _build({"next_day_preview": _PREVIEW})
+    assert client.get("/sync/preview", headers=_jwt(tok)).status_code == 401
+
+
+def test_sync_preview_available_false_when_preview_missing():
+    """스냅샷은 있으나 next_day_preview 키가 없으면 available=false (200, 무크래시)."""
+    client, _ = _build({"balance": {}})       # preview 키 없음
+    r = client.get("/sync/preview", headers=_dev())
+    assert r.status_code == 200
+    assert r.json()["available"] is False
+
+
+def test_sync_preview_available_false_when_no_snapshot():
+    """스냅샷 자체가 없으면 available=false (200)."""
+    client, _ = _build(None)
+    r = client.get("/sync/preview", headers=_dev())
+    assert r.status_code == 200
+    assert r.json()["available"] is False
+
+
+# ── 웹 엔드포인트는 그대로(유저 JWT 전용) — 역할 분리 보존 ──────────────────────
+
+def test_web_preview_still_user_authed():
+    client, tok = _build({"next_day_preview": _PREVIEW})
+    # 디바이스 토큰으로 웹 엔드포인트 호출 → 거부(401)
+    assert client.get("/preview/next-day", headers=_dev()).status_code == 401
+    # 유저 JWT로는 200 + 동일 preview
+    r = client.get("/preview/next-day", headers=_jwt(tok))
+    assert r.status_code == 200
+    assert r.json()["available"] is True
