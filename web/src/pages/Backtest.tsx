@@ -839,12 +839,16 @@ function ResultTab({ backtest, metrics, name, busy, onDraft, onApply, saveMsg }:
       <Verdict metrics={metrics} />
       <div className="cards" style={{ marginBottom: 18 }}>
         <Stat label="총수익률" value={`${fmt2(metrics.total_return)}%`}
+              colorBy={metrics.total_return}
               hint="백테스트 전체 기간 동안 자산이 늘어난 비율입니다." />
         <Stat label="CAGR" value={`${fmt2(metrics.cagr)}%`}
+              colorBy={metrics.cagr}
               hint="복리로 환산한 연평균 수익률입니다." />
         <Stat label="MDD" value={`${fmt2(metrics.mdd)}%`}
+              colorBy={metrics.mdd}
               hint="고점 대비 자산이 가장 크게 떨어졌던 낙폭입니다." />
         <Stat label="샤프" value={fmt2(metrics.sharpe)}
+              colorBy={metrics.sharpe}
               hint="변동성 한 단위당 거둔 수익을 나타내는 위험조정 수익 지표입니다." />
         <Stat label="승률" value={`${fmt2(metrics.win_rate)}%`}
               hint="전체 거래 중 이익으로 끝난 거래의 비율입니다." />
@@ -852,6 +856,7 @@ function ResultTab({ backtest, metrics, name, busy, onDraft, onApply, saveMsg }:
               hint="백테스트 기간 중 매수 후 청산이 완료된 횟수입니다." />
         <Stat label="vs Buy&Hold"
               value={`${fmt2(metrics.excess_return)}%p`}
+              colorBy={metrics.excess_return}
               hint="같은 종목을 단순 매수·보유했을 때 대비 초과 수익(%p)입니다." />
       </div>
       <EquityChart equity={backtest.equity ?? []}
@@ -979,16 +984,21 @@ function CapitalInput({ value, onChange }: {
   );
 }
 
-function Stat({ label, value, hint }: {
+function Stat({ label, value, hint, colorBy }: {
   label: string; value: string; hint?: string;
+  // 손익 색을 입힐 기준 수치. 양수=green, 음수=red, 0/미지정=중립.
+  // 사실 표시일 뿐(빨강=마이너스 숫자) — 평가·추천이 아니다.
+  colorBy?: number | null;
 }) {
+  const tone = colorBy == null || Number.isNaN(colorBy)
+    ? "" : colorBy > 0 ? " pos" : colorBy < 0 ? " neg" : "";
   return (
     <div className="stat">
       <div className="label">
         {label}
         {hint && <span className="metric-hint" data-tip={hint}>?</span>}
       </div>
-      <div className="value">{value}</div>
+      <div className={"value" + tone}>{value}</div>
     </div>
   );
 }
