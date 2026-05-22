@@ -353,6 +353,14 @@ def push_local_dataset(local_data_dir: Path, max_workers: int = 2) -> dict:
     else:
         log.info("업로드할 신규 데이터가 없습니다. 모든 데이터가 최신 상태입니다.")
 
+    # ── Phase 2.5: 모든 업로드 및 스킵 판정이 종료된 시점에 서버 메모리 캐시를 단 1회만 무효화하도록 신호 전송 ──
+    try:
+        r = requests.post(f"{PLATFORM_URL}/sync/complete", headers=_headers(), timeout=15)
+        r.raise_for_status()
+        log.info("✅ 서버에 동기화 완료 신호를 성공적으로 전송하여 메모리 캐시를 갱신했습니다.")
+    except Exception as e:
+        log.warning("⚠️ 서버 동기화 완료 알림 전송 실패 (최신 백테스트 데이터 갱신이 다소 지연될 수 있음): %s", e)
+
     log.info("로컬 데이터 업로드 완료: 총 %d -> 업로드 %d · 최신 유지 %d · 실패 %d",
              n_total, n_uploaded, n_skipped, n_failed)
     return {"total": n_total, "uploaded": n_uploaded, "skipped": n_skipped, "failed": n_failed}

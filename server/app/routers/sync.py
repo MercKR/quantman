@@ -283,8 +283,6 @@ async def upload_parquet(
         content = await file.read()
         # blocking 디스크 쓰기를 비동기 스레드 풀에 위임하여 이벤트 루프 정지 차단
         await anyio.to_thread.run_sync(dest_path.write_bytes, content)
-        # 데이터가 갱신되었으므로 메모리 캐시를 무효화하여 다음 요청 시 디스크에서 새로 읽도록 함
-        data_cache.invalidate()
         _log.info("Parquet 동기화 성공: %s (%s, %d bytes) -> device:%s", safe_name, category, len(content), device.id)
     except Exception as e:
         _log.error("Parquet 저장 실패 [%s]: %s", safe_name, e)
@@ -294,4 +292,18 @@ async def upload_parquet(
         )
 
     return {"ok": True, "filename": safe_name, "category": category, "size": len(content)}
+
+
+@router.post("/complete")
+def sync_complete(
+    device: Device = Depends(get_current_device),
+):
+    """로컬앱이 모든 Parquet 벌크 동기화 파일 전송을 마쳤음을 서버에 알림.
+    이 시점에 단 한 번 메모리 캐시를 무효화하여 서버 리소스를 극적으로 절약합니다.
+    """
+    from .. import data_cache
+    data_cache.invalidate()
+    _log.info("Parquet 벌크 동기화 완료 신호 수신. 메모리 캐시 무효화 완료 -> device:%s", device.id)
+    return {"ok": True}
+
 
