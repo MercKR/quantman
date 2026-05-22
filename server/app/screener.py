@@ -389,6 +389,42 @@ PRESETS: dict[str, dict] = {
             "limit": 20,
         },
     },
+    # ── 미국 (S&P500 스테이지1) — 시총·거래대금·1일 등락 기반 (USD) ────────────
+    "us_marcap_top": {
+        "title": "미국 시총 상위",
+        "desc": "S&P500 시가총액 상위 — 미국 대형주 위주.",
+        "spec": {
+            "markets": ["NAS", "NYS", "AMS"],
+            "rules": [],
+            "sort": {"field": "market_cap", "order": "desc"},
+            "limit": 20,
+        },
+    },
+    "us_trade_value_top": {
+        "title": "미국 거래대금 상위",
+        "desc": "S&P500 중 오늘 거래대금 상위 — 유동성 큰 종목 (시총 $100억+).",
+        "spec": {
+            "markets": ["NAS", "NYS", "AMS"],
+            "rules": [
+                {"field": "market_cap", "op": ">=", "value": 10_000_000_000},  # $10B
+            ],
+            "sort": {"field": "trade_value", "order": "desc"},
+            "limit": 20,
+        },
+    },
+    "us_gainers_today": {
+        "title": "미국 오늘 상승률 상위",
+        "desc": "S&P500 중 오늘 상승률 상위 (시총 $100억+).",
+        "spec": {
+            "markets": ["NAS", "NYS", "AMS"],
+            "rules": [
+                {"field": "pct_change_1d", "op": "between", "value": [1, 30]},
+                {"field": "market_cap", "op": ">=", "value": 10_000_000_000},
+            ],
+            "sort": {"field": "pct_change_1d", "order": "desc"},
+            "limit": 20,
+        },
+    },
 }
 
 
@@ -420,11 +456,16 @@ def field_catalog() -> list[dict]:
 
 
 def list_presets() -> list[dict]:
-    """프리셋 카탈로그 — UI에서 카드로 표시할 메타 + 편집 가능한 spec."""
-    return [
-        {"key": k, "title": p["title"], "desc": p["desc"], "spec": p["spec"]}
-        for k, p in PRESETS.items()
-    ]
+    """프리셋 카탈로그 — UI에서 카드로 표시할 메타 + 편집 가능한 spec.
+
+    market_group("KR"|"US")로 국내/미국 프리셋을 구분 (웹이 컨텍스트별로 노출)."""
+    out = []
+    for k, p in PRESETS.items():
+        markets = p["spec"].get("markets") or list(KR_MARKETS)
+        group = "US" if all(m in US_MARKETS for m in markets) else "KR"
+        out.append({"key": k, "title": p["title"], "desc": p["desc"],
+                    "spec": p["spec"], "market_group": group})
+    return out
 
 
 def run_preset(key: str) -> list[dict]:
