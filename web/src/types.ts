@@ -87,8 +87,9 @@ export interface ExecutionPolicy {
   max_drawdown_pct?: number;              // 누적 손실 한도 (자본 고점 대비)
   buy_tolerance_pct?: number;             // 매수 지정가 = 전일 종가 × (1 + N%) — 갭상승 허용 범위
   sell_tolerance_pct?: number;            // 매도 지정가 = 전일 종가 × (1 - N%) — 갭하락 허용 범위 (Phase 38.9)
-  // Phase 39 — 백테스트 비용 가정. 실매매(모의/실전) 영향 없음.
-  bt_commission_bps?: number;             // 편도 수수료 (bps). 25 = 0.25%
+  // Phase 39 + C-01 — 백테스트 비용 가정. 실매매(모의/실전) 영향 없음.
+  bt_commission_bps?: number;             // 편도 위탁수수료 (bps). 3 = 0.03% (KIS 평균)
+  bt_sell_tax_bps?: number;               // 매도 단방향 거래세 (bps). 23 = 0.23% (KOSPI/KOSDAQ 평균)
   bt_slippage_bps?: number;               // 편도 슬리피지 (bps). 10 = 0.10%
   bt_gap_extra_cost?: boolean;            // 갭일 추가 비용 산입 여부 (갭의 절반)
   bt_gap_threshold_pct?: number;          // 이 % 이상 갭이면 추가 비용 발생
@@ -105,7 +106,8 @@ export const EXECUTION_DEFAULTS: Required<ExecutionPolicy> = {
   buy_tolerance_pct: 1.0,
   sell_tolerance_pct: 2.0,
   // Phase 39
-  bt_commission_bps: 25,
+  bt_commission_bps: 3,                   // 편도 위탁수수료만 (C-01 — 매도세 분리)
+  bt_sell_tax_bps: 23,                    // 매도세 (편도, KOSPI/KOSDAQ 평균)
   bt_slippage_bps: 10,
   bt_gap_extra_cost: true,
   bt_gap_threshold_pct: 1.0,

@@ -64,8 +64,9 @@ export default function Backtest() {
   const [maxDrawdownPct, setMaxDrawdownPct] = useState(EXECUTION_DEFAULTS.max_drawdown_pct);
   const [buyTolerancePct, setBuyTolerancePct] = useState(EXECUTION_DEFAULTS.buy_tolerance_pct);
   const [sellTolerancePct, setSellTolerancePct] = useState(EXECUTION_DEFAULTS.sell_tolerance_pct);
-  // Phase 39 — 백테스트 비용 가정 (실매매 영향 없음)
+  // Phase 39 + C-01 — 백테스트 비용 가정 (실매매 영향 없음)
   const [btCommissionBps, setBtCommissionBps] = useState(EXECUTION_DEFAULTS.bt_commission_bps);
+  const [btSellTaxBps, setBtSellTaxBps] = useState(EXECUTION_DEFAULTS.bt_sell_tax_bps);
   const [btSlippageBps, setBtSlippageBps] = useState(EXECUTION_DEFAULTS.bt_slippage_bps);
   const [btGapExtraCost, setBtGapExtraCost] = useState(EXECUTION_DEFAULTS.bt_gap_extra_cost);
   const [btGapThresholdPct, setBtGapThresholdPct] = useState(EXECUTION_DEFAULTS.bt_gap_threshold_pct);
@@ -132,8 +133,9 @@ export default function Backtest() {
       max_drawdown_pct: maxDrawdownPct,
       buy_tolerance_pct: buyTolerancePct,
       sell_tolerance_pct: sellTolerancePct,
-      // Phase 39 — 백테스트 비용 가정
+      // Phase 39 + C-01 — 백테스트 비용 가정
       bt_commission_bps: btCommissionBps,
+      bt_sell_tax_bps: btSellTaxBps,
       bt_slippage_bps: btSlippageBps,
       bt_gap_extra_cost: btGapExtraCost,
       bt_gap_threshold_pct: btGapThresholdPct,
@@ -637,11 +639,19 @@ function BuildTab(props: {
       <details className="panel section-collapsible">
         <summary><h3>5. 백테스트 가정 <span className="muted">(백테스트 결과의 보수성에만 영향 · 실매매(모의/실전) 영향 없음)</span></h3></summary>
         <div className="amount-row">
-          <label>수수료 (편도)</label>
+          <label>위탁수수료 (편도)</label>
           <input type="number" min={0} max={200} step={1} value={btCommissionBps}
                  onChange={(e) => setBtCommissionBps(Number(e.target.value))} />
           <span className="muted">
-            bps — 1bps=0.01%. 매수·매도 양쪽 모두 적용. KIS 위탁수수료+거래세 합산 기준 25 (= 0.25%) 권장.
+            bps — 1bps=0.01%. 매수·매도 양쪽 모두 적용 (KIS 위탁수수료만). default 3 (= 0.03%).
+          </span>
+        </div>
+        <div className="amount-row">
+          <label>거래세 (매도 단방향)</label>
+          <input type="number" min={0} max={50} step={1} value={btSellTaxBps}
+                 onChange={(e) => setBtSellTaxBps(Number(e.target.value))} />
+          <span className="muted">
+            bps — 매도 시에만 적용 (한국 시장 비대칭 비용). KOSPI/KOSDAQ 평균 23 (= 0.23%, 농특세 포함).
           </span>
         </div>
         <div className="amount-row">

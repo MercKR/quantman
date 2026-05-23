@@ -39,6 +39,9 @@ def run_strategy_backtest(
     # 편도 비용을 bps → 비율로 변환. 정책 우선, fallback은 strategy 필드.
     commission = pol["bt_commission_bps"] / 10_000.0
     slippage = pol["bt_slippage_bps"] / 10_000.0
+    sell_tax = pol.get("bt_sell_tax_bps", 0) / 10_000.0   # C-01
+    # C-03 통화: trade_symbol이 6자리 숫자(005930)면 KRW, 아니면 USD로 추정.
+    currency = "KRW" if (strategy.trade_symbol or "").isdigit() else "USD"
     sell_conds = [c.model_dump() for c in sr.conditions] if sr.conditions else None
     return run_backtest(
         data=data,
@@ -55,6 +58,8 @@ def run_strategy_backtest(
         fill=strategy.fill,
         commission=commission,
         slippage=slippage,
+        sell_tax=sell_tax,
+        currency=currency,
         initial_capital=initial_capital,
         start=start,
         end=end,

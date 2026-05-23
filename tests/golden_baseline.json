@@ -1,47 +1,47 @@
 {
   "01_buy_and_hold": {
-    "cagr": 8.859838,
-    "mdd": -41.798649,
+    "cagr": 8.389751,
+    "mdd": -42.113447,
     "n_trades": 4,
-    "sharpe": 0.46158,
+    "sharpe": 0.444962,
     "success": true,
-    "total_return": 39.44355,
+    "total_return": 37.099918,
     "win_rate": 50.0
   },
   "02_above_ma20": {
-    "cagr": -0.293515,
-    "mdd": -49.274058,
+    "cagr": -4.584101,
+    "mdd": -54.706213,
     "n_trades": 38,
-    "sharpe": 0.0904,
+    "sharpe": -0.119691,
     "success": true,
-    "total_return": -1.144689,
+    "total_return": -16.7889,
     "win_rate": 50.0
   },
   "03_uptrend": {
-    "cagr": -8.745842,
-    "mdd": -44.493409,
-    "n_trades": 246,
-    "sharpe": -0.545448,
+    "cagr": -29.928233,
+    "mdd": -77.319457,
+    "n_trades": 249,
+    "sharpe": -2.419585,
     "success": true,
-    "total_return": -30.124823,
-    "win_rate": 46.341463
+    "total_return": -75.16617,
+    "win_rate": 32.53012
   },
   "04_oversold_bounce": {
-    "cagr": -10.492659,
-    "mdd": -39.904018,
-    "n_trades": 117,
-    "sharpe": -0.975088,
+    "cagr": -17.963298,
+    "mdd": -57.234043,
+    "n_trades": 112,
+    "sharpe": -1.708645,
     "success": true,
-    "total_return": -35.219186,
-    "win_rate": 37.606838
+    "total_return": -53.953275,
+    "win_rate": 30.357143
   },
   "05_dual_momentum": {
-    "cagr": 7.311549,
-    "mdd": -22.158862,
-    "n_trades": 45,
-    "sharpe": 0.505854,
+    "cagr": -3.035177,
+    "mdd": -34.59075,
+    "n_trades": 57,
+    "sharpe": -0.111393,
     "success": true,
-    "total_return": 31.835381,
-    "win_rate": 28.888889
+    "total_return": -11.37172,
+    "win_rate": 21.052632
   }
 }

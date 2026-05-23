@@ -16,8 +16,16 @@ import numpy as np
 import pandas as pd
 
 from .analysis import build_signal_mask
+from .exec_defaults import DEFAULT_EXECUTION, round_to_tick
 
 TRADING_DAYS = 252
+
+# CM-01 — 백테스트 비용 default는 ExecutionPolicy 단일 출처에서 끌어온다.
+# 이전엔 backtest.py가 자체 default(commission 0.00015 / slippage 0.0005)를 들고
+# exec_defaults는 25 bps / 10 bps로 별개여서 호출 경로마다 다른 값이 적용됐다.
+_DEFAULT_COMMISSION = DEFAULT_EXECUTION["bt_commission_bps"] / 10_000.0
+_DEFAULT_SLIPPAGE = DEFAULT_EXECUTION["bt_slippage_bps"] / 10_000.0
+_DEFAULT_SELL_TAX = DEFAULT_EXECUTION["bt_sell_tax_bps"] / 10_000.0
 
 
 def _empty(error: str) -> dict:
@@ -71,8 +79,10 @@ def run_backtest(
     sell_conditions: list[dict] | None = None,
     sell_logic: str = "AND",
     fill: str = "next_open",
-    commission: float = 0.00015,
-    slippage: float = 0.0005,
+    commission: float = _DEFAULT_COMMISSION,
+    slippage: float = _DEFAULT_SLIPPAGE,
+    sell_tax: float = _DEFAULT_SELL_TAX,            # C-01: 매도 단방향(거래세)
+    currency: str = "KRW",                            # C-03: 틱 라운딩 통화
     initial_capital: float = 10_000_000.0,
     start=None,
     end=None,
@@ -157,9 +167,18 @@ def run_backtest(
     def _open(i: int, raw_price: float):
         nonlocal cash, shares, position, entry_price, entry_i, peak_high, peak_close
         extra = _gap_extra(i) if next_open else 0.0
-        price = raw_price * (1 + slippage + extra)
-        shares = cash / (price * (1 + commission))
-        cash -= shares * price * (1 + commission)
+        # C-03 — 슬리피지 적용 후 호가단위로 라운딩(매수는 up = 매수자 불리).
+        slipped = raw_price * (1 + slippage + extra)
+        price = round_to_tick(slipped, direction="up", currency=currency)
+        if price <= 0:
+            return
+        # C-04 — 정수주 강제. 잔여 현금은 cash로 유지.
+        per_share_cost = price * (1 + commission)
+        new_shares = int(cash // per_share_cost)
+        if new_shares <= 0:
+            return
+        shares = float(new_shares)
+        cash -= shares * per_share_cost
         entry_price = price
         entry_i = i
         peak_high = highs[i]
@@ -169,8 +188,17 @@ def run_backtest(
     def _close(i: int, raw_price: float, reason: str):
         nonlocal cash, shares, position
         extra = _gap_extra(i) if next_open else 0.0
-        price = raw_price * (1 - slippage - extra)
-        proceeds = shares * price * (1 - commission)
+        # C-03 — 슬리피지 적용 후 호가단위로 라운딩(매도는 down = 매도자 불리).
+        slipped = raw_price * (1 - slippage - extra)
+        price = round_to_tick(slipped, direction="down", currency=currency)
+        if price <= 0:
+            cash += shares * 0  # safety
+            shares = 0.0
+            position = False
+            return
+        # C-01 — 매도세는 매도 단방향. 매수에 세금이 붙던 이전 모델은 비대칭 현실
+        # (한국 시장)을 비대칭 모델로 표현한다.
+        proceeds = shares * price * (1 - commission - sell_tax)
         cost = shares * entry_price * (1 + commission)
         trades.append({
             "진입일": dates[entry_i],

@@ -41,16 +41,20 @@ export default function Strategies() {
   const [snap, setSnap] = useState<SyncSnapshot | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState<Filter>(
-    mode === "live" ? "live" : "paper"
-  );
+  // W-05 — 모드 변경 시 필터 자동 동기화를 effect+setFilter에서 파생값화.
+  // "사용자 수동 변경" 우선, "모드가 변하면 수동값 리셋"의 React 권장 패턴
+  // (https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes).
+  const [manualFilter, setManualFilter] = useState<Filter | null>(null);
+  const [lastMode, setLastMode] = useState(mode);
+  if (mode !== lastMode) {
+    setLastMode(mode);
+    setManualFilter(null);   // mode 변경 시 수동 override 리셋
+  }
+  const filter: Filter = manualFilter ?? (mode === "live" ? "live" : "paper");
+  const setFilter = (f: Filter) => setManualFilter(f);
+
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [promoteFor, setPromoteFor] = useState<StrategyRow | null>(null);
-
-  // 헤더 모드 변경 시 필터 자동 동기화
-  useEffect(() => {
-    setFilter(mode === "live" ? "live" : "paper");
-  }, [mode]);
 
   function load() {
     setErr("");
@@ -62,6 +66,9 @@ export default function Strategies() {
       .catch((e) => setErr((e as Error).message))
       .finally(() => setLoaded(true));
   }
+  // 데이터 패칭은 의도적 effect — react-hooks/set-state-in-effect는 적절한 dependencies로
+  // 해소되지 않는 사용자 트리거 fetch에 대해선 disable.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(load, []);
 
   async function changeMode(s: StrategyRow, runMode: string) {
@@ -595,12 +602,14 @@ function RiskSummarySection({ definition: d }: { definition: StrategyDef }) {
   const maxPos = e.max_position_pct ?? EXECUTION_DEFAULTS.max_position_pct;
   const dailyLoss = e.daily_loss_limit_pct ?? EXECUTION_DEFAULTS.daily_loss_limit_pct;
   const maxDd = e.max_drawdown_pct ?? EXECUTION_DEFAULTS.max_drawdown_pct;
-  // Phase 39 — 백테스트 비용 가정 (전략에 명시 저장된 경우만 표시)
+  // Phase 39 + C-01 — 백테스트 비용 가정 (전략에 명시 저장된 경우만 표시)
   const hasBtCost = (e.bt_commission_bps !== undefined && e.bt_commission_bps !== null)
+    || (e.bt_sell_tax_bps !== undefined && e.bt_sell_tax_bps !== null)
     || (e.bt_slippage_bps !== undefined && e.bt_slippage_bps !== null)
     || (e.bt_gap_extra_cost !== undefined && e.bt_gap_extra_cost !== null)
     || (e.bt_gap_threshold_pct !== undefined && e.bt_gap_threshold_pct !== null);
   const btCom = e.bt_commission_bps ?? EXECUTION_DEFAULTS.bt_commission_bps;
+  const btTax = e.bt_sell_tax_bps ?? EXECUTION_DEFAULTS.bt_sell_tax_bps;
   const btSlip = e.bt_slippage_bps ?? EXECUTION_DEFAULTS.bt_slippage_bps;
   const btGap = e.bt_gap_extra_cost ?? EXECUTION_DEFAULTS.bt_gap_extra_cost;
   const btGapTh = e.bt_gap_threshold_pct ?? EXECUTION_DEFAULTS.bt_gap_threshold_pct;
@@ -619,7 +628,8 @@ function RiskSummarySection({ definition: d }: { definition: StrategyDef }) {
       {hasBtCost && (
         <>
           <h4 style={{ marginTop: 12 }}>백테스트 비용 가정 <span className="muted small">(실매매 영향 없음)</span></h4>
-          <ExitRow label="수수료 (편도)" v={`${btCom} bps`} />
+          <ExitRow label="위탁수수료 (편도)" v={`${btCom} bps`} />
+          <ExitRow label="거래세 (매도 단방향)" v={`${btTax} bps`} />
           <ExitRow label="슬리피지 (편도)" v={`${btSlip} bps`} />
           <ExitRow label="갭일 추가 비용" v={btGap ? `ON (≥${btGapTh}%)` : "OFF"} />
         </>

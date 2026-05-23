@@ -164,8 +164,9 @@ class ExecutionPolicy(BaseModel):
     # 시스템 리스크
     daily_loss_limit_pct: Optional[float] = None
     max_drawdown_pct: Optional[float] = None
-    # 백테스트 비용 가정
+    # 백테스트 비용 가정 (C-01 — sell_tax 분리)
     bt_commission_bps: Optional[float] = None
+    bt_sell_tax_bps: Optional[float] = None
     bt_slippage_bps: Optional[float] = None
     bt_gap_extra_cost: Optional[bool] = None
     bt_gap_threshold_pct: Optional[float] = None
