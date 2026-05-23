@@ -48,12 +48,18 @@ def _pick_universe(size: int) -> list[str]:
     all_metrics = krx_cache.get_all_metrics()
     candidates = []
     for sym, m in all_metrics.items():
-        if m.get("kind") != "stock":         continue
-        if m.get("is_pref"):                 continue
-        if m.get("is_managed"):              continue
-        if m.get("is_halt"):                 continue
+        # X-03 — E701: one-liner if/continue 패턴을 정상 들여쓰기로.
+        if m.get("kind") != "stock":
+            continue
+        if m.get("is_pref"):
+            continue
+        if m.get("is_managed"):
+            continue
+        if m.get("is_halt"):
+            continue
         cap = m.get("market_cap") or 0
-        if cap <= 0:                          continue
+        if cap <= 0:
+            continue
         candidates.append((sym, cap))
     candidates.sort(key=lambda x: x[1], reverse=True)
     return [s for s, _ in candidates[:size]]

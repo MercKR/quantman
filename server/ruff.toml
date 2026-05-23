@@ -1,0 +1,8 @@
+# Ruff config (X-03 — 일관된 lint 기준).
+# 테스트는 sys.path 조정·dedicated setup이 잦아 E402(import-not-at-top)이
+# 정상이고, 짧은 setup 라인을 ;로 묶는 패턴도 가독성을 해치지 않아 허용한다.
+
+line-length = 100
+
+[lint.per-file-ignores]
+"tests/**" = ["E402", "E701", "E702"]

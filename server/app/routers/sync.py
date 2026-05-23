@@ -47,12 +47,18 @@ def push_snapshot(
 
 
 def _post_webhook(url: str, text: str) -> bool:
-    """Discord/Slack 호환 형태로 알림 발송 (Discord는 content=, Slack은 text=)."""
+    """Discord/Slack 호환 형태로 알림 발송 (Discord는 content=, Slack은 text=).
+
+    S-03 — timeout 8s → 5s. 여러 알림이 누적될 때 push 응답 시간이 8s/건씩 늘어나는
+    문제 완화. 5s는 Discord/Slack의 정상 응답엔 충분하고 장애 시 빠른 fail.
+    완전 fire-and-forget(BackgroundTasks)으로 전환하려면 DB 성공-갱신 결합을
+    리팩토링해야 하므로 별도 작업.
+    """
     if not url:
         return False
     try:
         body = {"content": text, "text": text}
-        r = requests.post(url, json=body, timeout=8)
+        r = requests.post(url, json=body, timeout=5)
         return 200 <= r.status_code < 300
     except Exception as e:
         _log.warning("webhook 전송 실패: %s", e)
@@ -300,7 +306,6 @@ async def upload_parquet(
 ):
     """로컬앱이 수집 완료된 .parquet 파일을 서버에 업로드하여 무결하게 적재."""
     from quant_core import data_fetcher
-    from .. import data_cache
 
     filename = file.filename
     if not filename or not filename.endswith(".parquet"):
