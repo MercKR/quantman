@@ -24,7 +24,10 @@ from zoneinfo import ZoneInfo
 KST = ZoneInfo("Asia/Seoul")
 
 _CAL_DIR = Path(__file__).parent / "calendars"
-_FILES = {"US": _CAL_DIR / "us_sessions.json"}
+_FILES = {
+    "US": _CAL_DIR / "us_sessions.json",
+    "KR": _CAL_DIR / "krx_sessions.json",
+}
 
 
 class CalendarError(RuntimeError):
@@ -133,3 +136,14 @@ def coverage_range(market: str) -> tuple[str, str]:
     cal = _load(market)
     days = cal["sorted_days"]
     return (days[0], days[-1]) if days else ("", "")
+
+
+def is_session_day(market: str, day: date) -> bool:
+    """해당 날짜가 정규장 거래일인가 (휴장이면 False).
+
+    KRX cron 게이트: 평일이라도 한국 공휴일(설/추석/광복절 등)이면 False.
+    'today is open'과 다름 — is_session_open은 현재 시각이 정규장 구간인지 본다.
+    L-03 수정: cycle/intraday/settlement 진입 전에 호출해 휴장일 매도·발주 차단.
+    """
+    cal = _load(market)
+    return day.isoformat() in cal["sessions"]

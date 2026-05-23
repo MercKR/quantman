@@ -10,8 +10,9 @@ import json
 import logging
 import threading
 import time
-from datetime import date
 from pathlib import Path
+
+from .trader import kst_today  # L-06: PC tz와 무관한 KST 거래일
 
 import quant_core as qc
 
@@ -116,7 +117,7 @@ def _on_exec_event(trader: Trader, broker: Broker, evt: dict) -> None:
             "positions": snap.get("positions", []),
             "decisions": decisions,
             "cycle_summary": {
-                "today": date.today().isoformat(),
+                "today": kst_today().isoformat(),
                 "kind": "exec_notice",
             },
         })
@@ -143,7 +144,7 @@ def _push_after_sell(broker: Broker, decisions: list[dict]) -> None:
             "positions": snap.get("positions", []),
             "decisions": decisions,
             "cycle_summary": {
-                "today": date.today().isoformat(),
+                "today": kst_today().isoformat(),
                 "kind": "intraday_stop_trigger",
             },
         }
@@ -187,7 +188,7 @@ def _check_us_realtime(broker: Broker, manager) -> None:
             "positions": snap.get("positions", []),
             "decisions": [],
             "cycle_summary": {
-                "today": date.today().isoformat(),
+                "today": kst_today().isoformat(),
                 "kind": "us_realtime_unavailable",
                 "us_realtime_unavailable": True,
                 "message": "미국 해외 실시간 시세가 수신되지 않습니다. KIS HTS "
@@ -212,6 +213,17 @@ def start(market: str = "KRX") -> dict:
     """
     global _us_realtime_warned
     from .sync_client import pull_strategies
+
+    # L-03: KRX 휴장일이면 loop 시작 자체를 skip — 시세 없는 시간대에 stop loss
+    # 평가가 stale 데이터로 동작하는 사고 차단. US는 동적 플래너가 게이트.
+    if market == "KRX":
+        from quant_core import market_calendar as _mc
+        today = kst_today()
+        if not _mc.is_session_day("KR", today):
+            log.info("KRX 휴장일 — intraday loop skip (today=%s)", today.isoformat())
+            return {"status": "skipped_holiday", "market": "KRX",
+                    "today": today.isoformat()}
+
     with _lock:
         if _state["running"]:
             log.info("intraday_loop 이미 실행 중")

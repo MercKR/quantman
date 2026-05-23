@@ -31,3 +31,7 @@ KILLSWITCH_PATH = APP_DIR / "killswitch.json"    # kill switch 상태
 PENDING_ORDERS_PATH = APP_DIR / "pending_orders.json"  # 미체결 추적
 SLIPPAGE_PATH = APP_DIR / "slippage.json"        # 누적 슬리피지 통계
 REBALANCE_PATH = APP_DIR / "rebalance.json"      # 전략별 마지막 리밸런싱 일자 (주기 게이팅)
+# L-01 — 발주 의도(intent) 저널 (append-only). 발주 직전 "submitting"으로 fsync,
+# 직후 "submitted"/"failed"로 마감. 재기동 시 submitting으로 끝난 intent를 KIS
+# 당일 주문 조회와 매칭해 중복 발주 방지. 자세한 설계는 intents.py.
+INTENTS_PATH = APP_DIR / "intents.jsonl"

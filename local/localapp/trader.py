@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import quant_core as qc
 from quant_core.exec_defaults import merged_execution
@@ -24,7 +26,7 @@ from quant_core.exec_defaults import merged_execution
 from .broker import Broker
 from .config import (EQUITY_PATH, LEDGER_PATH, PENDING_ORDERS_PATH,
                      REBALANCE_PATH, TRADES_PATH)
-from . import analytics, killswitch, order_log
+from . import analytics, intents, killswitch, order_log
 
 log = logging.getLogger("localapp.trader")
 
@@ -39,7 +41,25 @@ def _load_json(path: Path, default):
 
 
 def _save_json(path: Path, obj) -> None:
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    """원자적 저장: tmp에 쓰고 os.replace로 교체 (L-02 수정).
+
+    write_text는 truncate-then-write라 도중에 크래시하면 파일이 깨진 채 남고
+    다음 boot에서 _load_json이 default={}로 폴백 → 보유 원장 소실 위험.
+    tmp 파일에 완전히 쓴 뒤 os.replace로 원자 교체하면, 어떤 시점에 종료돼도
+    파일은 항상 이전 완전본 또는 새 완전본 중 하나만 보인다.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def kst_today() -> date:
+    """현재 KST 날짜 — 사용자 PC tz와 무관하게 한국 시장 기준 (L-06 수정).
+
+    원장·intent·체결 dedup의 'today' 키가 PC tz에 따라 달라지면 한국장 거래일이
+    어긋난다(여행/해외 거주 사용자). 명시적으로 KST 환산.
+    """
+    return datetime.now(ZoneInfo("Asia/Seoul")).date()
 
 
 def _policy(strat_def: dict) -> dict:
@@ -159,9 +179,11 @@ class Trader:
     # ── 영속화 ────────────────────────────────────────────────────────────────
 
     def _save(self):
+        # L-02: 4파일 모두 원자적 저장 (_save_json은 tmp+os.replace 패턴).
+        # 4파일 cross-consistency는 여전히 미보장(파일별 원자성만)이지만, 부분
+        # truncate에 의한 원장 소실은 차단된다.
         _save_json(LEDGER_PATH, self.ledger)
-        EQUITY_PATH.write_text(json.dumps(self.equity, ensure_ascii=False),
-                                encoding="utf-8")
+        _save_json(EQUITY_PATH, self.equity)
         _save_json(PENDING_ORDERS_PATH, self.pending)
         _save_json(REBALANCE_PATH, self.rebalance_state)
 
@@ -178,8 +200,7 @@ class Trader:
 
         호출 시점: 15:35 post_close_settlement (08:55 메인 사이클 직전엔 위험).
         """
-        from datetime import date
-        today = today_iso or date.today().isoformat()
+        today = today_iso or kst_today().isoformat()
         try:
             snap = self.broker.account_snapshot()
         except Exception as e:
@@ -301,7 +322,7 @@ class Trader:
         symbol = p["symbol"]
         side = p["side"]
         intended = p.get("intended_price")
-        today = date.today().isoformat()
+        today = kst_today().isoformat()
 
         order_log.log_order("partial" if partial else "filled", symbol, side,
                              filled_qty, order_no=order_no,
@@ -355,6 +376,12 @@ class Trader:
     def _submit_buy(self, sid: str, strat_name: str, strat_def: dict,
                     symbol: str, qty: int, ref_price: float, policy: dict,
                     decisions: list[dict]) -> None:
+        # L-01: 발주 직전 intent journal에 submitting 기록(fsync). 크래시-재기동
+        # 시 reconcile이 KIS 당일 주문 조회로 매칭 → 중복 발주 방지.
+        today_iso = kst_today().isoformat()
+        intent_id = intents.new_intent_id()
+        intents.begin(today_iso, intent_id, sid, strat_name, symbol, "buy",
+                      qty, ref_price)
         use_limit = bool(policy["use_limit"])
         if use_limit:
             limit = qc.round_to_tick(
@@ -363,6 +390,7 @@ class Trader:
             try:
                 r = self.broker.buy_limit(symbol, qty, limit)
             except Exception as e:
+                intents.mark_failed(today_iso, intent_id, f"buy_limit: {e}")
                 log.error("매수 지정가 발주 실패 [%s]: %s", symbol, e)
                 decisions.append(order_log.decision(
                     "error", sid, strat_name, symbol, f"발주 예외: {e}"))
@@ -372,16 +400,24 @@ class Trader:
             try:
                 r = self.broker.buy(symbol, qty)
             except Exception as e:
+                intents.mark_failed(today_iso, intent_id, f"buy: {e}")
                 log.error("매수 시장가 발주 실패 [%s]: %s", symbol, e)
                 decisions.append(order_log.decision(
                     "error", sid, strat_name, symbol, f"발주 예외: {e}"))
                 return
+        # KIS 응답 수신 — submitted 마감(order_no가 빈 문자면 거부 처리는 _after_submit이 함)
+        intents.mark_submitted(today_iso, intent_id, r.get("order_no", "") or "")
         self._after_submit(r, sid, strat_name, strat_def, symbol, "buy", qty,
                             ref_price, limit, policy, decisions, reason="매수신호")
 
     def _submit_sell(self, sid: str, strat_name: str, symbol: str, qty: int,
                      ref_price: float, policy: dict, reason: str,
                      decisions: list[dict]) -> None:
+        # L-01: 매도도 동일 멱등 보호 — 크래시 시 over-sell 방지(L-04와 중복 안전망).
+        today_iso = kst_today().isoformat()
+        intent_id = intents.new_intent_id()
+        intents.begin(today_iso, intent_id, sid, strat_name, symbol, "sell",
+                      qty, ref_price)
         use_limit = bool(policy["use_limit"])
         # Phase 38.9 — 매도 tolerance 단일화. 신호·청산 모두 같은 값.
         tol = policy["sell_tolerance_pct"]
@@ -391,6 +427,7 @@ class Trader:
             try:
                 r = self.broker.sell_limit(symbol, qty, limit)
             except Exception as e:
+                intents.mark_failed(today_iso, intent_id, f"sell_limit: {e}")
                 log.error("매도 지정가 발주 실패 [%s]: %s", symbol, e)
                 decisions.append(order_log.decision(
                     "error", sid, strat_name, symbol, f"발주 예외: {e}"))
@@ -400,10 +437,12 @@ class Trader:
             try:
                 r = self.broker.sell(symbol, qty)
             except Exception as e:
+                intents.mark_failed(today_iso, intent_id, f"sell: {e}")
                 log.error("매도 시장가 발주 실패 [%s]: %s", symbol, e)
                 decisions.append(order_log.decision(
                     "error", sid, strat_name, symbol, f"발주 예외: {e}"))
                 return
+        intents.mark_submitted(today_iso, intent_id, r.get("order_no", "") or "")
         self._after_submit(r, sid, strat_name, None, symbol, "sell", qty,
                             ref_price, limit, policy, decisions, reason=reason)
 
@@ -554,6 +593,16 @@ class Trader:
             decisions.append(order_log.decision(
                 "skip_funds", strategy_id, strat_name, symbol,
                 f"수량 부족 (현금 {cash:,.0f} / 전일종가 {prev_close:,.0f})"))
+            return False
+
+        # L-01 멱등 게이트 — 오늘 같은 (sid, symbol, buy)로 이미 발주됐다면 skip.
+        # 크래시 후 재기동 + reconcile이 submitted/ambiguous로 마감했으면 차단.
+        today_iso = kst_today().isoformat()
+        if intents.is_active(today_iso, ledger_key, symbol, "buy"):
+            decisions.append(order_log.decision(
+                "skip_idempotent", strategy_id, strat_name, symbol,
+                "오늘 이미 발주된 intent 존재 — 중복 차단"))
+            log.info("[L-01] 중복 매수 차단 %s/%s", ledger_key, symbol)
             return False
 
         # 발주가는 _submit_buy 내부에서 prev_close × (1 + tolerance%) 계산
@@ -708,7 +757,7 @@ class Trader:
           {"kill_switch_daily_loss_pct": 2.0, "max_drawdown_pct": 15.0}
         키가 없거나 None이면 글로벌 default 사용.
         """
-        today = today or date.today()
+        today = today or kst_today()
         decisions: list[dict] = []
 
         # ── 0. 이전 사이클 미체결 정리 ─────────────────────────────────────
@@ -820,6 +869,11 @@ class Trader:
                 ref_price = cur
 
             policy = _policy(pos.get("definition"))
+            # L-01 멱등 게이트 — 오늘 같은 (sid, symbol, sell) intent가 활성이면 skip
+            today_iso = kst_today().isoformat()
+            if intents.is_active(today_iso, sid, pos["symbol"], "sell"):
+                log.info("[L-01] 중복 매도 차단 %s/%s", sid, pos["symbol"])
+                continue
             self._submit_sell(sid, pos.get("strategy_name", ""), pos["symbol"],
                               pos["qty"], ref_price, policy, reason, decisions)
             sold_this_cycle.add(sid)

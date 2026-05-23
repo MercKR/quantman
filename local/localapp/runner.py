@@ -102,8 +102,36 @@ def run_cycle(market: str = "KRX") -> dict:
     setup_logging()
     _flush_pending()
 
+    # L-03: KRX 휴장일(공휴일·임시휴장)이면 사이클 중단 — 휴장에 매도 발주·
+    # stale 시세 평가 방지. US는 동적 야간 플래너가 비세션일을 이미 건너뛴다.
+    if market == "KRX":
+        from quant_core import market_calendar as _mc
+        from .trader import kst_today
+        today = kst_today()
+        if not _mc.is_session_day("KR", today):
+            log.info("KRX 휴장일 — 사이클 skip (today=%s)", today.isoformat())
+            return {"status": "skipped_holiday", "market": "KRX",
+                    "today": today.isoformat()}
+
     # 체결통보 WebSocket ready 확인 (08:50 intraday_loop과 race condition 방지)
     _wait_for_order_ws()
+
+    # L-01: 직전 사이클에서 'submitting'으로 끝난 intent(=발주 직전 크래시)를 KIS
+    # 당일 주문 조회로 매칭해 submitted/failed로 마감. 매칭되면 중복 발주 차단,
+    # 미매칭이면 정상 재시도 허용. 자세한 설계는 intents.py.
+    from . import intents as _intents
+    from .trader import kst_today as _kst_today
+    try:
+        _broker_for_reconcile = make_broker()
+        rec = _intents.reconcile_submitting(_broker_for_reconcile,
+                                            _kst_today().isoformat())
+        if any(rec.get(k) for k in ("matched", "no_fill", "ambiguous",
+                                    "kis_query_failed")):
+            log.info("[L-01] intent reconcile: %s", rec)
+    except Exception as e:
+        # reconcile 실패해도 cycle은 진행 — 게이트는 submitting 상태 유지하여
+        # 중복 발주 위험을 보수적으로 차단.
+        log.warning("[L-01] intent reconcile 실패(보수적 차단 유지): %s", e)
 
     try:
         strategies = pull_strategies()
@@ -167,11 +195,19 @@ def run_post_close_settlement(market: str = "KRX") -> dict:
     Phase 40: ledger ↔ KIS 잔고 reconcile 실행 (매매가 끝난 직후라 안전).
     HTS/MTS 수동 매도분을 ledger에서 자동 차감.
     """
-    from datetime import date
+    from .trader import kst_today
     setup_logging()
     _flush_pending()
 
-    today = date.today().isoformat()
+    today_d = kst_today()  # L-06: PC tz와 무관한 KST 거래일
+    # L-03: KRX 휴장일에는 정산도 무의미(체결 없음)·KIS 잔고 reconcile 부작용 우려.
+    if market == "KRX":
+        from quant_core import market_calendar as _mc
+        if not _mc.is_session_day("KR", today_d):
+            log.info("KRX 휴장일 — settlement skip (today=%s)", today_d.isoformat())
+            return {"status": "skipped_holiday", "market": "KRX",
+                    "today": today_d.isoformat()}
+    today = today_d.isoformat()
     log.info("장 마감 후 settlement 시작 (market=%s)", market)
     broker = make_broker()
     trader = Trader(broker)
