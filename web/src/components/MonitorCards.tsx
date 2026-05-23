@@ -337,73 +337,75 @@ export function ExecutionQuality({ buckets, reasons }: {
   );
 }
 
-// ── 5. 로컬앱 헬스 ────────────────────────────────────────────────────────────
+// ── 5. 로컬앱 상태 — 칩 1줄 + hover tooltip ──────────────────────────────────
 
+/** 동기화 지연·토큰 만료·warnings를 결합해 단일 상태로 환원.
+ *  로컬앱이 살아있는지(=자동매매가 실제 도는지) 한눈에 보여주는 게 핵심.
+ *  자세한 timestamp는 tooltip(title)으로만 제공 — raw 시각 노출은 의미 약함. */
 export function HealthCard({ snapAt, health }: {
   snapAt?: string; health?: LocalHealth;
 }) {
-  // Date.now()를 render 중 직접 호출하면 React purity 위반 + 매 render 다른 값.
-  // state로 보관하고 30초마다 refresh.
   const [now, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
-  const items: { label: string; value: string; tone: "" | "warn" | "neg" }[] = [];
-  if (snapAt) {
-    const ageMin = (now - new Date(snapAt).getTime()) / 60000;
-    items.push({
-      label: "마지막 동기화",
-      value: ageMin < 1 ? "방금 전"
-        : ageMin < 60 ? `${Math.floor(ageMin)}분 전`
-        : `${Math.floor(ageMin / 60)}시간 전`,
-      tone: ageMin > 30 ? "warn" : "",
-    });
+
+  if (!snapAt && !health) return null;
+
+  // 동기화 지연 평가
+  const syncAgeSec = snapAt ? (now - new Date(snapAt).getTime()) / 1000 : Infinity;
+  // KIS 토큰 만료
+  const tokenHoursLeft = health?.kis_token_expires_at
+    ? (new Date(health.kis_token_expires_at).getTime() - now) / 3600000 : null;
+  const warnings = health?.warnings ?? [];
+
+  // 가장 심각한 상태가 칩 톤 결정.
+  let tone: "ok" | "warn" | "error" = "ok";
+  const reasons: string[] = [];
+  if (syncAgeSec > 300) {       // 5분 이상 끊김
+    tone = "error";
+    reasons.push("끊김 — 자동매매 중단됨");
+  } else if (syncAgeSec > 30) { // 30초~5분 응답 지연
+    tone = "warn";
+    reasons.push("응답 지연");
   }
-  if (health?.last_cycle_ts) {
-    const ts = new Date(health.last_cycle_ts);
-    items.push({
-      label: "마지막 사이클",
-      value: ts.toLocaleString(),
-      tone: "",
-    });
+  if (tokenHoursLeft != null) {
+    if (tokenHoursLeft < 0) {
+      tone = "error";
+      reasons.push("KIS 토큰 만료 — 재인증 필요");
+    } else if (tokenHoursLeft < 2 && tone !== "error") {
+      tone = "warn";
+      reasons.push(`KIS 토큰 ${fmt2(tokenHoursLeft)}시간 후 만료`);
+    }
   }
-  if (health?.kis_token_expires_at) {
-    const exp = new Date(health.kis_token_expires_at);
-    const hoursLeft = (exp.getTime() - now) / 3600000;
-    items.push({
-      label: "KIS 토큰 만료",
-      value: hoursLeft < 0 ? "만료됨"
-        : hoursLeft < 24 ? `${fmt2(hoursLeft)}시간 남음`
-        : `${Math.floor(hoursLeft / 24)}일 남음`,
-      tone: hoursLeft < 0 ? "neg" : hoursLeft < 2 ? "warn" : "",
-    });
+  if (warnings.length > 0 && tone === "ok") tone = "warn";
+
+  const icon = tone === "ok" ? "✅" : tone === "warn" ? "⚠" : "❌";
+  const label = tone === "ok" ? "정상" : reasons[0] ?? "주의";
+  const ageStr = !isFinite(syncAgeSec) ? "—"
+    : syncAgeSec < 60 ? `${Math.floor(syncAgeSec)}초 전`
+    : syncAgeSec < 3600 ? `${Math.floor(syncAgeSec / 60)}분 전`
+    : `${Math.floor(syncAgeSec / 3600)}시간 전`;
+
+  // tooltip: 자세한 상태 (raw timestamp + 토큰 + warnings)
+  const tipLines: string[] = [];
+  if (snapAt) tipLines.push(`마지막 동기화: ${new Date(snapAt).toLocaleString()} (${ageStr})`);
+  if (health?.last_cycle_ts) tipLines.push(`마지막 사이클: ${new Date(health.last_cycle_ts).toLocaleString()}`);
+  if (tokenHoursLeft != null) {
+    tipLines.push(tokenHoursLeft < 0 ? "KIS 토큰: 만료됨"
+      : tokenHoursLeft < 24 ? `KIS 토큰: ${fmt2(tokenHoursLeft)}시간 후 만료`
+      : `KIS 토큰: ${Math.floor(tokenHoursLeft / 24)}일 후 만료`);
   }
-  if (health?.kis_master_pushed_date) {
-    items.push({
-      label: "KIS 마스터 sync",
-      value: health.kis_master_pushed_date,
-      tone: "",
-    });
-  }
-  if (items.length === 0) return null;
+  if (health?.kis_master_pushed_date) tipLines.push(`KIS 마스터 sync: ${health.kis_master_pushed_date}`);
+  for (const w of warnings) tipLines.push(`⚠ ${w}`);
+
   return (
-    <div className="panel">
-      <h3 style={{ marginTop: 0 }}>로컬앱 헬스</h3>
-      <div className="health-grid">
-        {items.map((it, i) => (
-          <div key={i} className={"health-cell " + it.tone}>
-            <div className="muted" style={{ fontSize: 11 }}>{it.label}</div>
-            <div style={{ fontWeight: 600 }}>{it.value}</div>
-          </div>
-        ))}
-      </div>
-      {health?.warnings && health.warnings.length > 0 && (
-        <ul style={{ marginTop: 10, fontSize: 13, color: "var(--amber)" }}>
-          {health.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
-        </ul>
-      )}
-    </div>
+    <span className={"health-chip " + tone} title={tipLines.join("\n")}>
+      <span aria-hidden>{icon}</span>
+      <span>로컬앱 {label}</span>
+      <span className="muted small">· {ageStr}</span>
+    </span>
   );
 }
 

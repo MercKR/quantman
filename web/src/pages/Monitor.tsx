@@ -181,11 +181,14 @@ export default function Monitor() {
                 style={{ color: "var(--red)" }}>
           전량 매도 후 매수 중지
         </button>
-        <span className="muted" style={{ marginLeft: "auto", fontSize: 12 }}>
-          {paired
-            ? `대상 기기: ${devices[0].name} (#${devices[0].id})`
-            : "기기 페어링 필요"}
-        </span>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+          {paired && <HealthCard snapAt={snap?.received_at} health={p?.health} />}
+          <span className="muted" style={{ fontSize: 12 }}>
+            {paired
+              ? `대상 기기: ${devices[0].name} (#${devices[0].id})`
+              : "기기 페어링 필요"}
+          </span>
+        </div>
       </div>
 
       {!paired ? (
@@ -241,8 +244,7 @@ export default function Monitor() {
       {/* 포트폴리오 위험 — 상관관계 + 섹터. W-02 — 로드 실패 시 카드 내부에 표시. */}
       <PortfolioRiskCard risk={risk} err={riskErr} />
 
-      {/* 로컬앱 헬스 */}
-      <HealthCard snapAt={snap?.received_at} health={p?.health} />
+      {/* 로컬앱 상태는 페이지 상단 액션바 오른쪽 칩으로 이동 (Step 3) */}
 
       {/* 알림·위험 한도 설정은 설정 페이지에서 일괄 관리 (중복 폼 제거) */}
       <div className="panel" style={{ display: "flex", alignItems: "center",

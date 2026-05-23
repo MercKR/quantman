@@ -610,17 +610,17 @@ details.section-collapsible[open] > summary { margin-bottom: 14px; }
 }
 .sector-pct { text-align: right; font-weight: 600; }
 
-/* Monitor — 헬스 grid */
-.health-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
-}
-.health-cell {
+/* Monitor — 로컬앱 상태 칩 (액션바 우측 inline) */
+.health-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 999px;
+  font-size: 12px; font-weight: 600;
   background: var(--bg); border: 1px solid var(--border);
-  border-radius: 6px; padding: 10px 12px;
+  white-space: nowrap; cursor: help;
 }
-.health-cell.warn { background: var(--amber-soft); border-color: var(--amber); }
-.health-cell.neg { background: var(--red-soft); border-color: var(--red); }
+.health-chip.ok { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+.health-chip.warn { color: var(--amber); border-color: var(--amber); background: var(--amber-soft); }
+.health-chip.error { color: var(--red); border-color: var(--red); background: var(--red-soft); }
 
 /* Monitor — 알림 설정 form */
 .alert-form {
