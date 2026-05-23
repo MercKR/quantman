@@ -14,7 +14,7 @@ import requests
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, BackgroundTasks
 from sqlmodel import Session, select
 
-from ..db import get_session
+from ..db import engine, get_session
 from ..deps import get_current_device, get_current_user
 from ..models import Device, Strategy, SyncSnapshot, User, UserSettings
 from ..schemas import (StrategyOut, SyncPushIn, SyncSnapshotOut,
@@ -30,20 +30,34 @@ router = APIRouter(prefix="/sync", tags=["sync"])
 @router.post("/push")
 def push_snapshot(
     body: SyncPushIn,
+    background_tasks: BackgroundTasks,
     device: Device = Depends(get_current_device),
     session: Session = Depends(get_session),
 ):
-    """로컬앱이 잔고·포지션·자산곡선·체결로그를 푸시."""
+    """로컬앱이 잔고·포지션·자산곡선·체결로그를 푸시.
+
+    S-03 — _check_alerts는 외부 webhook(Discord/Slack)을 호출하므로 응답 경로에
+    인라인이면 webhook 1건당 최대 5s씩 누적된다. BackgroundTasks로 응답 후
+    실행 → push 응답 시간은 webhook 지연과 분리된다. 단 같은 프로세스에서
+    돌아가므로 진정한 격리는 아님(Redis 큐는 베타엔 과설계).
+    """
     snap = SyncSnapshot(user_id=device.user_id, device_id=device.id,
                         payload=body.payload)
     session.add(snap)
     session.commit()
-    # 임계치 알림 (실패해도 본 응답엔 영향 없음)
+    background_tasks.add_task(_check_alerts_bg, device.user_id, body.payload)
+    return {"ok": True}
+
+
+def _check_alerts_bg(user_id: int, payload: dict) -> None:
+    """BackgroundTask용 — 별도 Session으로 알림 검사. 응답 후 실행되므로
+    원래 요청의 session은 이미 닫혀 있다.
+    """
     try:
-        _check_alerts(session, device.user_id, body.payload)
+        with Session(engine) as bg_session:
+            _check_alerts(bg_session, user_id, payload)
     except Exception as e:
         _log.warning("알림 검사 실패: %s", e)
-    return {"ok": True}
 
 
 def _post_webhook(url: str, text: str) -> bool:

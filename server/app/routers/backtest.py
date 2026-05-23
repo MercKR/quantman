@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import quant_core as qc
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 from sqlmodel import Session, select
@@ -170,13 +170,20 @@ def run_backtest(body: BacktestIn,
 
 
 @router.get("/backtest/runs", response_model=list[BacktestRunSummary])
-def list_backtest_runs(user: User = Depends(get_current_user),
-                       session: Session = Depends(get_session)):
+def list_backtest_runs(
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+    # S-08 — 하드코딩 limit=50 제거. 기본은 호환 유지(50), 클라이언트가
+    # limit/offset으로 페이지네이션 가능. 최대 200으로 캡(서버 보호).
+    limit: int = Query(50, ge=1, le=200, description="페이지당 최대 항목 수"),
+    offset: int = Query(0, ge=0, description="건너뛸 항목 수(페이지네이션)"),
+):
     rows = session.exec(
         select(BacktestRun)
         .where(BacktestRun.user_id == user.id)
         .order_by(BacktestRun.created_at.desc())
-        .limit(50)
+        .offset(offset)
+        .limit(limit)
     ).all()
     return [BacktestRunSummary(
         id=r.id, name=r.name, created_at=r.created_at,

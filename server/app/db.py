@@ -1,9 +1,13 @@
 """DB 엔진 및 세션."""
 
+import logging
+
 from sqlmodel import Session, SQLModel, create_engine
 from sqlalchemy import text
 
 from .config import settings
+
+_log = logging.getLogger("app.db")
 
 _is_sqlite = settings.DB_URL.startswith("sqlite")
 _is_postgres = settings.DB_URL.startswith("postgresql")
@@ -96,8 +100,10 @@ def _migrate() -> None:
                         conn.exec_driver_sql('ALTER TABLE "usersettings" ADD COLUMN last_alerted_reconcile TIMESTAMP')
                     if "us_buying_power_mode" not in us_cols:
                         conn.exec_driver_sql("ALTER TABLE \"usersettings\" ADD COLUMN us_buying_power_mode VARCHAR DEFAULT 'integrated'")
-    except Exception as e:  # noqa: BLE001  — 마이그레이션 실패가 기동을 막지 않도록
-        print(f"[migrate] 스키마 보정 건너뜀: {e}")
+    except Exception:  # noqa: BLE001  — 마이그레이션 실패가 기동을 막지 않도록
+        # S-11 — print는 로그 수집기에 안 잡혀 배포 "성공"인데 스키마 손상이
+        # 침묵하는 위험. exception 레벨로 traceback까지 남겨야 운영에서 보임.
+        _log.exception("[migrate] 스키마 보정 건너뜀")
 
 
 def create_db_and_tables() -> None:
