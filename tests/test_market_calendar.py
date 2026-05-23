@@ -111,5 +111,6 @@ def test_coverage_range():
 
 
 def test_unsupported_market():
+    # _BUNDLE_FILES에 등록되지 않은 마켓 코드는 CalendarError를 던져야 함.
     with pytest.raises(mc.CalendarError):
-        mc.session_kst("KR", date(2026, 7, 15))
+        mc.session_kst("XX", date(2026, 7, 15))
