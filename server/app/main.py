@@ -7,10 +7,11 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
@@ -67,7 +68,9 @@ def _run_with_retry(name: str, fn: Callable[[], None],
                 return
             backoff_min = _RETRY_BACKOFFS_MIN[
                 min(state["attempt"] - 1, len(_RETRY_BACKOFFS_MIN) - 1)]
-            run_at = datetime.now() + timedelta(minutes=backoff_min)
+            # tz-aware(KST) 시각으로 생성 — scheduler가 Asia/Seoul이므로 naive를
+            # 쓰면 UTC 배포(Railway)에서 과거 시각으로 해석돼 misfire drop된다.
+            run_at = datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(minutes=backoff_min)
             _log.warning("[%s] %d분 후 재시도 (#%d) — %s",
                          name, backoff_min, state["attempt"] + 1,
                          run_at.strftime("%H:%M:%S"))
@@ -431,6 +434,19 @@ def health():
     return {"status": "ok", "service": "quant-platform-api"}
 
 
+def _require_health_token(x_health_token: str | None = Header(default=None)) -> None:
+    """production에서 /health/*/refresh를 토큰으로 보호.
+
+    무인증이면 누구나 호출해 상류(KIS/KRX/NAVER) rate limit·비용을 소모시킬 수 있다.
+    development에서는 토큰 검증을 건너뛰어 로컬 진단을 그대로 허용.
+    """
+    if settings.ENV != "production":
+        return
+    if not x_health_token or x_health_token != settings.HEALTH_TOKEN:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "X-Health-Token 헤더가 필요합니다.")
+
+
 @app.get("/health/master")
 def master_health():
     """KIS 종목마스터 캐시 상태 — 인증 없이 진단용."""
@@ -438,11 +454,8 @@ def master_health():
 
 
 @app.post("/health/master/refresh")
-def master_refresh():
-    """KIS 마스터 즉시 갱신 — 진단/배포 직후 수동 트리거.
-
-    공개 엔드포인트지만 부작용은 동일 데이터 다운로드뿐 (악용 무관).
-    """
+def master_refresh(_: None = Depends(_require_health_token)):
+    """KIS 마스터 즉시 갱신 — 진단/배포 직후 수동 트리거. production은 토큰 필요."""
     return kis_master_cache.refresh()
 
 
@@ -453,11 +466,8 @@ def krx_health():
 
 
 @app.post("/health/krx/refresh")
-def krx_refresh():
-    """KRX 스냅샷 즉시 갱신 — 진단/검증용 수동 트리거.
-
-    공용 시세성 데이터라 부작용 없음 (KRX 공식 데이터 1회 다운로드).
-    """
+def krx_refresh(_: None = Depends(_require_health_token)):
+    """KRX 스냅샷 즉시 갱신 — 진단/검증용 수동 트리거. production은 토큰 필요."""
     return krx_cache.refresh()
 
 
@@ -468,8 +478,8 @@ def naver_health():
 
 
 @app.post("/health/naver/refresh")
-def naver_refresh():
-    """NAVER 펀더멘털 즉시 갱신 — 진단/검증용."""
+def naver_refresh(_: None = Depends(_require_health_token)):
+    """NAVER 펀더멘털 즉시 갱신 — 진단/검증용. production은 토큰 필요."""
     return naver_fundamentals.refresh()
 
 
@@ -480,6 +490,6 @@ def technical_health():
 
 
 @app.post("/health/technical/refresh")
-def technical_refresh():
-    """기술적 지표 즉시 갱신 — 진단/검증용."""
+def technical_refresh(_: None = Depends(_require_health_token)):
+    """기술적 지표 즉시 갱신 — 진단/검증용. production은 토큰 필요."""
     return technical_cache.refresh()
