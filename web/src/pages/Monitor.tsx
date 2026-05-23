@@ -2,13 +2,12 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import {
   ExecutionQuality, HealthCard, MarketBar, PortfolioRiskCard,
-  PositionDetailCards, RiskBanner, StrategyPnl,
+  PositionDetailCards, RiskBanner, StrategyCardGrid,
 } from "../components/MonitorCards";
 import { CsvExportBar } from "../components/MonitorTools";
-import NextDayPreviewPanel from "../components/NextDayPreviewPanel";
 import type {
-  CommandRow, CommandType, DeviceRow, MarketContext, PortfolioRisk,
-  SyncSnapshot,
+  CommandRow, CommandType, DeviceRow, MarketContext, NextDayPreview,
+  PortfolioRisk, SyncSnapshot,
 } from "../types";
 
 const REFRESH_MS = 5000;
@@ -19,6 +18,7 @@ export default function Monitor() {
   const [cmds, setCmds] = useState<CommandRow[]>([]);
   const [market, setMarket] = useState<MarketContext | null>(null);
   const [risk, setRisk] = useState<PortfolioRisk | null>(null);
+  const [preview, setPreview] = useState<NextDayPreview | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -53,14 +53,22 @@ export default function Monitor() {
     }
   }
 
+  // 매매 예정(NextDayPreview) — 30초 polling. 페어링 여부와 무관하게 fetch
+  // (페어링 안 됐을 땐 server가 available=false 응답).
+  function loadPreview() {
+    api.getNextDayPreview().then(setPreview).catch(() => {});
+  }
+
   // 데이터 패칭(폴링) 효과 — 의도적. (W-05: 정적 분석 규칙은 비활성.)
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     load();
     loadRisk();
+    loadPreview();
     const t = setInterval(load, REFRESH_MS);
     const t2 = setInterval(loadRisk, 30_000);
-    return () => { clearInterval(t); clearInterval(t2); };
+    const t3 = setInterval(loadPreview, 30_000);
+    return () => { clearInterval(t); clearInterval(t2); clearInterval(t3); };
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -108,9 +116,6 @@ export default function Monitor() {
 
       {/* 시장 컨텍스트 */}
       <MarketBar ctx={market} />
-
-      {/* Phase 31 — 내일 매매 미리보기 (페어링 후에만 의미) */}
-      {paired && <NextDayPreviewPanel />}
 
       {/* 위험 한도 banner — usagePct>=80 또는 drawdown<=-10일 때만 표시 */}
       {paired && <RiskBanner ks={ks} dd={p?.drawdown} equityNow={equityNow} />}
@@ -221,8 +226,12 @@ export default function Monitor() {
         </div>
       )}
 
-      {/* 전략별 P&L */}
-      <StrategyPnl data={p?.strategy_pnl} />
+      {/* 전략별 카드 그리드 — StrategyPnl + NextDayPreview + 보유 통합 (Step 4) */}
+      <StrategyCardGrid
+        pnl={p?.strategy_pnl}
+        preview={preview}
+        positions={positions}
+      />
 
       {/* 실행 품질 — 시간대별 슬리피지 + 거부 사유 */}
       <ExecutionQuality

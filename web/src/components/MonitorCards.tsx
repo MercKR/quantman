@@ -6,9 +6,9 @@ import {
   Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip as PieTooltip,
 } from "recharts";
 import type {
-  DrawdownState, KillSwitchState, LocalHealth, MarketContext, PortfolioRisk,
-  PositionRich, ReconciliationResult, RejectionReason, SlippageBucket,
-  StrategyPnlSummary,
+  DrawdownState, KillSwitchState, LocalHealth, MarketContext, NextDayPreview,
+  PortfolioRisk, PositionRich, ReconciliationResult, RejectionReason,
+  SlippageBucket, StrategyPnlSummary,
 } from "../types";
 import { fmt2, wonReadable } from "../format";
 
@@ -223,65 +223,202 @@ function PositionHeader({ count, onReconcile, reconcileDisabled, reconcileToolti
   );
 }
 
-// ── 3. 전략별 P&L ─────────────────────────────────────────────────────────────
+// ── 3. 전략별 카드 그리드 — P&L + 매매 예정 + 신호 근거 + 보유 통합 ────────
 
-export function StrategyPnl({ data }: { data?: StrategyPnlSummary }) {
-  if (!data || data.by_strategy.length === 0) {
+/** 전략 키별로 join: pnl(by_strategy) + nextDayPreview(by_strategy)
+ *  + positions(strategy_name으로 그룹) → 카드 1개로 표시. */
+export function StrategyCardGrid({
+  pnl, preview, positions,
+}: {
+  pnl?: StrategyPnlSummary;
+  preview?: NextDayPreview | null;
+  positions: PositionRich[];
+}) {
+  // 전략 이름 합집합 — pnl, preview, positions 어디에든 등장하는 전략을 모두 표시.
+  const names = new Set<string>();
+  for (const r of pnl?.by_strategy ?? []) names.add(r.strategy);
+  for (const bs of preview?.by_strategy ?? []) names.add(bs.strategy_name);
+  for (const p of positions) if (p.strategy_name) names.add(p.strategy_name);
+
+  if (names.size === 0) {
     return (
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>전략별 P&L</h3>
-        <p className="muted">아직 청산된 거래가 없어 집계가 불가능합니다.</p>
+        <h3 style={{ marginTop: 0 }}>전략별 현황</h3>
+        <p className="muted">활성 전략이 없습니다. [내 전략] 탭에서 전략을 모의로 두면 자동 사이클이 시작됩니다.</p>
       </div>
     );
   }
-  const t = data.total;
+
+  const total = pnl?.total;
   return (
     <div className="panel">
-      <h3 style={{ marginTop: 0 }}>전략별 P&L</h3>
-      <div className="cards" style={{ marginBottom: 12 }}>
-        <PnlStat label="오늘" v={t.today} />
-        <PnlStat label="7일" v={t.week} />
-        <PnlStat label="30일" v={t.month} />
-        <PnlStat label="누적" v={t.all} />
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between",
+                     gap: 12, marginBottom: 12 }}>
+        <h3 style={{ margin: 0 }}>전략별 현황 ({names.size})</h3>
+        {total && (
+          <span className="muted small">
+            전 전략 합계 · 오늘 <b className={total.today >= 0 ? "pos" : "neg"}>{wonReadable(total.today)}</b>
+            {" · "}30일 <b className={total.month >= 0 ? "pos" : "neg"}>{wonReadable(total.month)}</b>
+            {" · "}누적 <b className={total.all >= 0 ? "pos" : "neg"}>{wonReadable(total.all)}</b>
+          </span>
+        )}
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>전략</th><th>거래</th><th>승률</th>
-            <th>오늘</th><th>7일</th><th>30일</th><th>누적</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.by_strategy.map((r) => (
-            <tr key={r.strategy}>
-              <td>{r.strategy}</td>
-              <td>{r.trades}</td>
-              <td>{fmt2(r.win_rate)}%</td>
-              <td className={r.today_pnl >= 0 ? "pos" : "neg"}>
-                {wonReadable(r.today_pnl)}
-              </td>
-              <td className={r.week_pnl >= 0 ? "pos" : "neg"}>
-                {wonReadable(r.week_pnl)}
-              </td>
-              <td className={r.month_pnl >= 0 ? "pos" : "neg"}>
-                {wonReadable(r.month_pnl)}
-              </td>
-              <td className={r.pnl >= 0 ? "pos" : "neg"}>
-                {wonReadable(r.pnl)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="strategy-grid">
+        {[...names].map((name) => (
+          <StrategyCard
+            key={name} name={name}
+            pnlRow={pnl?.by_strategy.find((r) => r.strategy === name)}
+            previewRow={preview?.by_strategy?.find((bs) => bs.strategy_name === name)}
+            heldPositions={positions.filter((p) => p.strategy_name === name)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
 
-function PnlStat({ label, v }: { label: string; v: number }) {
+function StrategyCard({ name, pnlRow, previewRow, heldPositions }: {
+  name: string;
+  pnlRow?: StrategyPnlSummary["by_strategy"][number];
+  previewRow?: NextDayPreview["by_strategy"] extends (infer T)[] | undefined ? T : never;
+  heldPositions: PositionRich[];
+}) {
   return (
-    <div className="stat">
-      <div className="label">{label}</div>
-      <div className={"value " + (v >= 0 ? "pos" : "neg")}>{wonReadable(v)}</div>
+    <div className="strategy-card">
+      <div className="strategy-card-head">
+        <strong>{name}</strong>
+        {previewRow && (
+          <span className={"sc-badge " + previewRow.run_mode}>
+            {previewRow.run_mode === "live" ? "실전" : "모의"}
+          </span>
+        )}
+      </div>
+
+      {/* P&L 한 줄 */}
+      {pnlRow ? (
+        <div className="strategy-pnl-row">
+          <PnlMini label="오늘" v={pnlRow.today_pnl} />
+          <PnlMini label="7일" v={pnlRow.week_pnl} />
+          <PnlMini label="30일" v={pnlRow.month_pnl} />
+          <PnlMini label="누적" v={pnlRow.pnl} />
+          <span className="muted small" style={{ marginLeft: "auto" }}>
+            거래 {pnlRow.trades} · 승률 {fmt2(pnlRow.win_rate)}%
+          </span>
+        </div>
+      ) : (
+        <div className="muted small">아직 청산된 거래 없음 (집계 대기)</div>
+      )}
+
+      {/* 매매 예정 — 신호 근거 + 금액 산정 근거 */}
+      {previewRow && (
+        <div className="strategy-section">
+          <div className="strategy-section-title">
+            매매 예정{" "}
+            {previewRow.signal_passed
+              ? <span className="pos small">신호 통과 ✓</span>
+              : <span className="muted small">신호 미충족</span>}
+          </div>
+          {previewRow.signal_summary && (
+            <div className="muted small" style={{ marginBottom: 4 }}>
+              공통 조건: <code>{previewRow.signal_summary}</code>
+            </div>
+          )}
+          {previewRow.candidates.length > 0 ? (
+            <table className="strategy-mini-table">
+              <thead>
+                <tr>
+                  <th>종목</th>
+                  <th style={{ textAlign: "right" }}>수량</th>
+                  <th style={{ textAlign: "right" }}>발주가</th>
+                  <th style={{ textAlign: "right" }}>총액</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewRow.candidates.map((c) => (
+                  <tr key={c.symbol}>
+                    <td>{c.name || c.symbol}</td>
+                    <td style={{ textAlign: "right" }}>{c.qty.toLocaleString()}</td>
+                    <td style={{ textAlign: "right" }}>
+                      {c.est_limit_price.toLocaleString()}원
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      <strong>{c.est_total.toLocaleString()}원</strong>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="muted small">매수 후보 없음</div>
+          )}
+          {previewRow.per_symbol_details
+            && Object.keys(previewRow.per_symbol_details).length > 0
+            && Object.keys(previewRow.per_symbol_details).length <= 30 && (
+            <details className="strategy-detail">
+              <summary className="muted small">
+                종목별 조건 평가 ({Object.keys(previewRow.per_symbol_details).length}종목)
+              </summary>
+              <div style={{ marginTop: 4 }}>
+                {Object.entries(previewRow.per_symbol_details).map(([sym, ev]) => (
+                  <div key={sym} className="small">
+                    <span className={ev.passed ? "pos" : "muted"}>{ev.passed ? "✓" : "✗"}</span>{" "}
+                    <strong>{sym}</strong>{" "}
+                    <span className="muted">{ev.summary}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+          {previewRow.skipped.length > 0 && (
+            <div className="muted small" style={{ marginTop: 4 }}>
+              {previewRow.skipped.map((sk, i) => (
+                <div key={i}>⊘ {sk.symbol ? `${sk.symbol}: ` : ""}{sk.reason}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 현재 보유 — 이 전략으로 매수한 포지션 */}
+      {heldPositions.length > 0 && (
+        <div className="strategy-section">
+          <div className="strategy-section-title">보유 ({heldPositions.length})</div>
+          <table className="strategy-mini-table">
+            <thead>
+              <tr>
+                <th>종목</th>
+                <th style={{ textAlign: "right" }}>수량</th>
+                <th style={{ textAlign: "right" }}>수익률</th>
+              </tr>
+            </thead>
+            <tbody>
+              {heldPositions.map((p) => {
+                const ret = p.cur_return_pct ?? 0;
+                return (
+                  <tr key={p.symbol}>
+                    <td>{p.name ?? p.symbol}</td>
+                    <td style={{ textAlign: "right" }}>{p.qty.toLocaleString()}</td>
+                    <td className={ret >= 0 ? "pos" : "neg"} style={{ textAlign: "right" }}>
+                      {ret >= 0 ? "+" : ""}{fmt2(ret)}%
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PnlMini({ label, v }: { label: string; v: number }) {
+  return (
+    <div className="pnl-mini">
+      <div className="muted" style={{ fontSize: 11 }}>{label}</div>
+      <div className={v >= 0 ? "pos" : "neg"} style={{ fontWeight: 700, fontSize: 13 }}>
+        {wonReadable(v)}
+      </div>
     </div>
   );
 }

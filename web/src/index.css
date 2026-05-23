@@ -610,6 +610,41 @@ details.section-collapsible[open] > summary { margin-bottom: 14px; }
 }
 .sector-pct { text-align: right; font-weight: 600; }
 
+/* Monitor — 전략별 카드 그리드 (P&L + 매매 예정 + 신호 근거 + 보유 통합) */
+.strategy-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 14px;
+}
+.strategy-card {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.strategy-card-head {
+  display: flex; align-items: center; gap: 8px;
+}
+.strategy-card-head strong { font-size: 15px; }
+.strategy-pnl-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 10px; background: var(--panel); border-radius: 6px;
+}
+.pnl-mini { display: flex; flex-direction: column; gap: 1px; min-width: 56px; }
+.strategy-section {
+  border-top: 1px dashed var(--border); padding-top: 8px;
+}
+.strategy-section-title {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  margin-bottom: 6px;
+}
+.strategy-mini-table { width: 100%; font-size: 12px; }
+.strategy-mini-table th {
+  text-align: left; color: var(--muted); font-weight: 600; padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.strategy-mini-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.strategy-detail { margin-top: 6px; }
+.strategy-detail summary { cursor: pointer; }
+
 /* Monitor — 로컬앱 상태 칩 (액션바 우측 inline) */
 .health-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1300,82 +1335,6 @@ thead th { color: var(--muted); font-weight: 600; }
 .soon-list li {
   padding: 10px 14px; background: var(--bg); border-radius: 8px;
   font-size: 13px;
-}
-
-/* Phase 31 — 내일 매매 미리보기 패널 */
-.preview-panel {
-  border-left: 4px solid var(--accent, #409eff);
-}
-.preview-panel.preview-empty {
-  border-left-color: var(--border);
-  opacity: 0.7;
-}
-.preview-head {
-  display: flex; align-items: center; justify-content: space-between;
-  flex-wrap: wrap; gap: 8px; margin-bottom: 10px;
-}
-.preview-meta {
-  display: flex; align-items: center; gap: 4px;
-}
-.preview-summary {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px; margin-bottom: 14px;
-}
-.preview-stat {
-  background: var(--bg); padding: 10px 12px; border-radius: 8px;
-  border: 1px solid var(--border);
-}
-.preview-stat-label {
-  font-size: 11px; color: var(--muted); margin-bottom: 4px;
-}
-.preview-stat-value {
-  font-size: 16px; font-weight: 700;
-}
-.preview-section {
-  margin-top: 12px;
-}
-.preview-section h4 {
-  font-size: 13px; margin: 0 0 8px;
-}
-.preview-strategy {
-  background: var(--bg); padding: 10px 12px; border-radius: 8px;
-  border: 1px solid var(--border); margin-bottom: 8px;
-}
-.preview-strategy-head {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
-  margin-bottom: 6px;
-}
-.preview-table {
-  width: 100%; border-collapse: collapse; font-size: 12px;
-}
-.preview-table th, .preview-table td {
-  padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border);
-}
-.preview-table th {
-  color: var(--muted); font-weight: 600; font-size: 11px;
-}
-.preview-skipped {
-  margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border);
-}
-/* Phase 41 — 공통 조건 평가 결과 */
-.preview-signal-common {
-  margin-top: 6px; padding: 4px 8px;
-  background: var(--bg); border-radius: 4px;
-}
-.preview-signal-common code {
-  font-size: 11px; color: var(--text);
-}
-/* Phase 41 — 종목별 평가 결과 (펼침 가능) */
-.preview-per-symbol { margin-top: 6px; }
-.preview-per-symbol summary { cursor: pointer; padding: 4px 0; }
-.preview-per-symbol-list {
-  display: grid; grid-template-columns: 1fr 1fr;
-  gap: 4px 16px; padding: 4px 8px;
-  background: var(--bg); border-radius: 4px; max-height: 220px; overflow-y: auto;
-}
-.preview-disclaimer {
-  margin-top: 14px; padding: 8px 12px;
-  background: var(--bg); border-radius: 6px; line-height: 1.5;
 }
 
 /* ── 모바일/태블릿 — 사이드바를 상단 가로 내비로 접기 ─────────────────────── */
