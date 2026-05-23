@@ -39,7 +39,7 @@ _RETRY_BACKOFFS_MIN = [5, 15, 30, 60, 120]
 _RETRY_MAX_ATTEMPTS = 5
 
 
-def _run_with_retry(name: str, fn: Callable[[], None],
+def _run_with_retry(name: str, fn: Callable[[], object],
                      scheduler: BackgroundScheduler) -> None:
     """fn을 즉시 실행, 실패 시 backoff 후 재시도 job을 scheduler에 등록.
 
