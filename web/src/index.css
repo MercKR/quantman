@@ -1413,18 +1413,28 @@ thead th { color: var(--muted); font-weight: 600; }
 @media (max-width: 760px) {
   .shell { flex-direction: column; }
   .sidebar {
-    width: 100%; flex-direction: row; flex-wrap: wrap;
-    align-items: center; gap: 4px 6px;
+    width: 100%; flex-direction: row; flex-wrap: nowrap;
+    align-items: center; gap: 6px;
     padding: 8px 14px;
     border-right: none; border-bottom: 1px solid var(--border);
     position: sticky; top: 0; z-index: 20;
+    overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none;
   }
+  .sidebar::-webkit-scrollbar { display: none; }
+  .sidebar > * { flex-shrink: 0; }
   .brand { padding: 4px 6px 4px 4px; font-size: 16px; }
-  .sidebar .navlink { padding: 11px 12px; font-size: 14px; }
-  /* 이메일은 숨기고 로그아웃만 우측으로 — 좁은 폭에서 공간 확보 */
+  .sidebar .navlink {
+    padding: 11px 12px; font-size: 14px;
+    min-height: 44px; display: inline-flex; align-items: center;
+  }
+  /* 좁은 폭: 이메일 숨김, 로그아웃은 우측에 sticky 고정 — 가로 스크롤 시에도 항상 보임 */
   .sidebar-foot {
-    margin-top: 0; margin-left: auto; padding: 0;
+    margin-top: 0; margin-left: auto; padding: 0 0 0 8px;
     display: flex; align-items: center; gap: 8px;
+    position: sticky; right: 0;
+    background: var(--panel);
+    box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.08);
   }
   .sidebar-foot > div:first-child { display: none; }
   .sidebar-foot .spacer { display: none; }
