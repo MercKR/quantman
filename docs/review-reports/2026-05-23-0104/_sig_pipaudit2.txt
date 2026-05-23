@@ -1,0 +1,6 @@
+=== pip-audit SERVER (clean) ===
+No known vulnerabilities found
+EXIT_SERVER=0
+=== pip-audit LOCAL (clean) ===
+No known vulnerabilities found
+EXIT_LOCAL=0

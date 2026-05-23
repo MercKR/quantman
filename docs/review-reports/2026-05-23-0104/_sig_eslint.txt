@@ -1,0 +1,60 @@
+  1035 |     <input
+  1036 |       type="text" inputMode="numeric"  react-hooks/set-state-in-effect
+
+C:\Users\USER\Desktop\창업\퀀트\platform\web\src\pages\Login.tsx
+  37:50  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\USER\Desktop\창업\퀀트\platform\web\src\pages\Monitor.tsx
+  54:5  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\USER\Desktop\창업\퀀트\platform\web\src\pages\Monitor.tsx:54:5
+  52 |
+  53 |   useEffect(() => {
+> 54 |     load();
+     |     ^^^^ Avoid calling setState() directly within an effect
+  55 |     loadRisk();
+  56 |     const t = setInterval(load, REFRESH_MS);
+  57 |     const t2 = setInterval(loadRisk, 30_000);  react-hooks/set-state-in-effect
+
+C:\Users\USER\Desktop\창업\퀀트\platform\web\src\pages\Strategies.tsx
+  52:5   error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\USER\Desktop\창업\퀀트\platform\web\src\pages\Strategies.tsx:52:5
+  50 |   // 헤더 모드 변경 시 필터 자동 동기화
+  51 |   useEffect(() => {
+> 52 |     setFilter(mode === "live" ? "live" : "paper");
+     |     ^^^^^^^^^ Avoid calling setState() directly within an effect
+  53 |   }, [mode]);
+  54 |
+  55 |   function load() {                    react-hooks/set-state-in-effect
+  65:13  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\USER\Desktop\창업\퀀트\platform\web\src\pages\Strategies.tsx:65:13
+  63 |       .finally(() => setLoaded(true));
+  64 |   }
+> 65 |   useEffect(load, []);
+     |             ^^^^ Avoid calling setState() directly within an effect
+  66 |
+  67 |   async function changeMode(s: StrategyRow, runMode: string) {
+  68 |     setErr("");  react-hooks/set-state-in-effect
+
+✖ 10 problems (10 errors, 0 warnings)
+

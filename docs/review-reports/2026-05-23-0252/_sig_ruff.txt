@@ -1,0 +1,452 @@
+E702 Multiple statements on one line (semicolon)
+  --> app\routers\portfolio.py:93:15
+   |
+91 |     if n < 2:
+92 |         return 0.0
+93 |     a = a[-n:]; b = b[-n:]
+   |               ^
+94 |     ma = sum(a) / n; mb = sum(b) / n
+95 |     num = sum((a[i] - ma) * (b[i] - mb) for i in range(n))
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> app\routers\portfolio.py:94:20
+   |
+92 |         return 0.0
+93 |     a = a[-n:]; b = b[-n:]
+94 |     ma = sum(a) / n; mb = sum(b) / n
+   |                    ^
+95 |     num = sum((a[i] - ma) * (b[i] - mb) for i in range(n))
+96 |     da = math.sqrt(sum((x - ma) ** 2 for x in a))
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> app\routers\sync.py:87:31
+   |
+85 |             if ok:
+86 |                 s.last_alerted_killswitch = now
+87 |                 session.add(s); session.commit()
+   |                               ^
+88 |         elif not is_active and was_alerted:
+89 |             # 해제 알림
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> app\routers\sync.py:95:31
+   |
+93 |             if ok:
+94 |                 s.last_alerted_killswitch = None
+95 |                 session.add(s); session.commit()
+   |                               ^
+96 |
+97 |     # 1b. Drawdown 한도 알림 (Phase 38.10) — last_alerted_loss를 공유해 스팸 방지
+   |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:113:31
+    |
+111 |             if ok:
+112 |                 s.last_alerted_loss = now
+113 |                 session.add(s); session.commit()
+    |                               ^
+114 |
+115 |     # 1c. Preview 누락 연속 카운터 + 알림 (Phase 38.5)
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:129:23
+    |
+127 |                 if ok:
+128 |                     s.last_alerted_preview_missing = now
+129 |         session.add(s); session.commit()
+    |                       ^
+130 |     elif (s.preview_missing_streak or 0) > 0:
+131 |         # 회복: 카운터 리셋
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:134:23
+    |
+132 |         s.preview_missing_streak = 0
+133 |         s.last_alerted_preview_missing = None
+134 |         session.add(s); session.commit()
+    |                       ^
+135 |
+136 |     # 1d. 미국 실시간 시세 미신청 (장중 실시간 손절 미제공) — kind=us_realtime_unavailable
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:161:35
+    |
+159 |                 if ok:
+160 |                     s.last_alerted_loss = now
+161 |                     session.add(s); session.commit()
+    |                                   ^
+162 |
+163 |     # 3. Phase 40 — 잔고 정합성 drift 알림 (HTS/MTS 수동 매매 추정)
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:191:31
+    |
+189 |             if ok:
+190 |                 s.last_alerted_reconcile = now
+191 |                 session.add(s); session.commit()
+    |                               ^
+    |
+
+F401 [*] `..data_cache` imported but unused
+   --> app\routers\sync.py:303:20
+    |
+301 |     """로컬앱이 수집 완료된 .parquet 파일을 서버에 업로드하여 무결하게 적재."""
+302 |     from quant_core import data_fetcher
+303 |     from .. import data_cache
+    |                    ^^^^^^^^^^
+304 |
+305 |     filename = file.filename
+    |
+help: Remove unused import: `..data_cache`
+
+E701 Multiple statements on one line (colon)
+   --> app\screener.py:160:17
+    |
+158 |     op = rule.op
+159 |     target = rule.value
+160 |     if op == ">":  return v > target
+    |                 ^
+161 |     if op == ">=": return v >= target
+162 |     if op == "<":  return v < target
+    |
+
+E701 Multiple statements on one line (colon)
+   --> app\screener.py:161:18
+    |
+159 |     target = rule.value
+160 |     if op == ">":  return v > target
+161 |     if op == ">=": return v >= target
+    |                  ^
+162 |     if op == "<":  return v < target
+163 |     if op == "<=": return v <= target
+    |
+
+E701 Multiple statements on one line (colon)
+   --> app\screener.py:162:17
+    |
+160 |     if op == ">":  return v > target
+161 |     if op == ">=": return v >= target
+162 |     if op == "<":  return v < target
+    |                 ^
+163 |     if op == "<=": return v <= target
+164 |     if op == "between":
+    |
+
+E701 Multiple statements on one line (colon)
+   --> app\screener.py:163:18
+    |
+161 |     if op == ">=": return v >= target
+162 |     if op == "<":  return v < target
+163 |     if op == "<=": return v <= target
+    |                  ^
+164 |     if op == "between":
+165 |         lo, hi = target
+    |
+
+E701 Multiple statements on one line (colon)
+   --> app\screener.py:167:18
+    |
+165 |         lo, hi = target
+166 |         return lo <= v <= hi
+167 |     if op == "in":     return v in target
+    |                  ^
+168 |     if op == "not_in": return v not in target
+169 |     return False
+    |
+
+E701 Multiple statements on one line (colon)
+   --> app\screener.py:168:22
+    |
+166 |         return lo <= v <= hi
+167 |     if op == "in":     return v in target
+168 |     if op == "not_in": return v not in target
+    |                      ^
+169 |     return False
+    |
+
+E701 Multiple statements on one line (colon)
+  --> app\technical_cache.py:51:36
+   |
+49 |     candidates = []
+50 |     for sym, m in all_metrics.items():
+51 |         if m.get("kind") != "stock":         continue
+   |                                    ^
+52 |         if m.get("is_pref"):                 continue
+53 |         if m.get("is_managed"):              continue
+   |
+
+E701 Multiple statements on one line (colon)
+  --> app\technical_cache.py:52:28
+   |
+50 |     for sym, m in all_metrics.items():
+51 |         if m.get("kind") != "stock":         continue
+52 |         if m.get("is_pref"):                 continue
+   |                            ^
+53 |         if m.get("is_managed"):              continue
+54 |         if m.get("is_halt"):                 continue
+   |
+
+E701 Multiple statements on one line (colon)
+  --> app\technical_cache.py:53:31
+   |
+51 |         if m.get("kind") != "stock":         continue
+52 |         if m.get("is_pref"):                 continue
+53 |         if m.get("is_managed"):              continue
+   |                               ^
+54 |         if m.get("is_halt"):                 continue
+55 |         cap = m.get("market_cap") or 0
+   |
+
+E701 Multiple statements on one line (colon)
+  --> app\technical_cache.py:54:28
+   |
+52 |         if m.get("is_pref"):                 continue
+53 |         if m.get("is_managed"):              continue
+54 |         if m.get("is_halt"):                 continue
+   |                            ^
+55 |         cap = m.get("market_cap") or 0
+56 |         if cap <= 0:                          continue
+   |
+
+E701 Multiple statements on one line (colon)
+  --> app\technical_cache.py:56:20
+   |
+54 |         if m.get("is_halt"):                 continue
+55 |         cap = m.get("market_cap") or 0
+56 |         if cap <= 0:                          continue
+   |                    ^
+57 |         candidates.append((sym, cap))
+58 |     candidates.sort(key=lambda x: x[1], reverse=True)
+   |
+
+F401 [*] `pytest` imported but unused
+  --> tests\test_cold_start_us_metrics.py:19:8
+   |
+17 | from pathlib import Path
+18 |
+19 | import pytest
+   |        ^^^^^^
+20 |
+21 | _SERVER_DIR = Path(__file__).resolve().parent.parent
+   |
+help: Remove unused import: `pytest`
+
+E402 Module level import not at top of file
+  --> tests\test_cold_start_us_metrics.py:25:1
+   |
+23 |     sys.path.insert(0, str(_SERVER_DIR))
+24 |
+25 | from quant_core import data_fetcher
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+26 | from app import main as appmain
+27 | from app import us_metrics_cache
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_cold_start_us_metrics.py:26:1
+   |
+25 | from quant_core import data_fetcher
+26 | from app import main as appmain
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+27 | from app import us_metrics_cache
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_cold_start_us_metrics.py:27:1
+   |
+25 | from quant_core import data_fetcher
+26 | from app import main as appmain
+27 | from app import us_metrics_cache
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+
+F401 [*] `pytest` imported but unused
+  --> tests\test_sync_preview_auth.py:17:8
+   |
+15 | from pathlib import Path
+16 |
+17 | import pytest
+   |        ^^^^^^
+18 | from fastapi import FastAPI
+19 | from fastapi.testclient import TestClient
+   |
+help: Remove unused import: `pytest`
+
+E402 Module level import not at top of file
+  --> tests\test_sync_preview_auth.py:28:1
+   |
+26 |     sys.path.insert(0, str(_SERVER_DIR))
+27 |
+28 | from app.db import get_session
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+29 | from app.models import Device, SyncSnapshot, User
+30 | from app.routers import preview as preview_router
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_sync_preview_auth.py:29:1
+   |
+28 | from app.db import get_session
+29 | from app.models import Device, SyncSnapshot, User
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+30 | from app.routers import preview as preview_router
+31 | from app.routers import sync as sync_router
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_sync_preview_auth.py:30:1
+   |
+28 | from app.db import get_session
+29 | from app.models import Device, SyncSnapshot, User
+30 | from app.routers import preview as preview_router
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+31 | from app.routers import sync as sync_router
+32 | from app.security import create_access_token, hash_token
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_sync_preview_auth.py:31:1
+   |
+29 | from app.models import Device, SyncSnapshot, User
+30 | from app.routers import preview as preview_router
+31 | from app.routers import sync as sync_router
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+32 | from app.security import create_access_token, hash_token
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_sync_preview_auth.py:32:1
+   |
+30 | from app.routers import preview as preview_router
+31 | from app.routers import sync as sync_router
+32 | from app.security import create_access_token, hash_token
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+33 |
+34 | _DEVICE_TOKEN = "test-device-token-abc"
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> tests\test_sync_preview_auth.py:65:20
+   |
+63 |     with Session(engine) as s:
+64 |         user = User(email="t@example.com")
+65 |         s.add(user); s.commit(); s.refresh(user)
+   |                    ^
+66 |         device = Device(user_id=user.id, name="dev",
+67 |                         token_hash=hash_token(_DEVICE_TOKEN))
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> tests\test_sync_preview_auth.py:65:32
+   |
+63 |     with Session(engine) as s:
+64 |         user = User(email="t@example.com")
+65 |         s.add(user); s.commit(); s.refresh(user)
+   |                                ^
+66 |         device = Device(user_id=user.id, name="dev",
+67 |                         token_hash=hash_token(_DEVICE_TOKEN))
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> tests\test_sync_preview_auth.py:68:22
+   |
+66 |         device = Device(user_id=user.id, name="dev",
+67 |                         token_hash=hash_token(_DEVICE_TOKEN))
+68 |         s.add(device); s.commit(); s.refresh(device)
+   |                      ^
+69 |         if payload is not None:
+70 |             s.add(SyncSnapshot(user_id=user.id, device_id=device.id,
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> tests\test_sync_preview_auth.py:68:34
+   |
+66 |         device = Device(user_id=user.id, name="dev",
+67 |                         token_hash=hash_token(_DEVICE_TOKEN))
+68 |         s.add(device); s.commit(); s.refresh(device)
+   |                                  ^
+69 |         if payload is not None:
+70 |             s.add(SyncSnapshot(user_id=user.id, device_id=device.id,
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_us_metrics_enrich.py:19:1
+   |
+17 |     sys.path.insert(0, str(_SERVER_DIR))
+18 |
+19 | from app import us_metrics_cache
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_webhook_ssrf.py:25:1
+   |
+23 |     sys.path.insert(0, str(_SERVER_DIR))
+24 |
+25 | from app.db import get_session
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+26 | from app.models import User
+27 | from app.routers import settings as settings_router
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_webhook_ssrf.py:26:1
+   |
+25 | from app.db import get_session
+26 | from app.models import User
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+27 | from app.routers import settings as settings_router
+28 | from app.security import create_access_token
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_webhook_ssrf.py:27:1
+   |
+25 | from app.db import get_session
+26 | from app.models import User
+27 | from app.routers import settings as settings_router
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+28 | from app.security import create_access_token
+   |
+
+E402 Module level import not at top of file
+  --> tests\test_webhook_ssrf.py:28:1
+   |
+26 | from app.models import User
+27 | from app.routers import settings as settings_router
+28 | from app.security import create_access_token
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+29 |
+30 | _FULL = {
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> tests\test_webhook_ssrf.py:49:20
+   |
+47 |     with Session(engine) as s:
+48 |         user = User(email="t@example.com")
+49 |         s.add(user); s.commit(); s.refresh(user)
+   |                    ^
+50 |         user_id = user.id
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> tests\test_webhook_ssrf.py:49:32
+   |
+47 |     with Session(engine) as s:
+48 |         user = User(email="t@example.com")
+49 |         s.add(user); s.commit(); s.refresh(user)
+   |                                ^
+50 |         user_id = user.id
+   |
+
+Found 42 errors.
+[*] 3 fixable with the `--fix` option.

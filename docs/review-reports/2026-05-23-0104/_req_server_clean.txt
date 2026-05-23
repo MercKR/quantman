@@ -1,0 +1,14 @@
+fastapi>=0.136
+uvicorn[standard]>=0.47
+sqlmodel>=0.0.38
+PyJWT>=2.10
+bcrypt>=4.1
+email-validator>=2.1
+httpx>=0.27
+psycopg[binary]>=3.2
+google-auth[requests]>=2.30
+apscheduler>=3.10
+requests>=2.31
+finance-datareader>=0.9
+pandas>=2.0
+python-multipart>=0.0.18

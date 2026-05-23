@@ -275,3 +275,85 @@ platform/docs/review-reports/2026-05-22-1400/
   정상 동작 조건.
 - **Vercel preview URL이 있으면 Phase 6은 preview 기준** — production 보호.
 - **Postgres 연결 안 되면 Phase 1·7 일부 검증 skip** (Railway down 시).
+
+---
+
+## 8. `/goal` 원클릭 스니펫
+
+`/goal`(Claude Code v2.1.139+, 신뢰 워크스페이스 필요)로 위 플레이북을 사람 개입 없이
+완주시킨다. 평가자(Haiku)는 transcript만 보므로, 모든 종료 조건을 "실제 출력으로 증명"
+하도록 강제했다. auto mode와 함께 쓰면 완전 무인 실행. 사용 전 `cd platform/web; bun run dev`로
+dev 서버를 먼저 띄워둘 것(Phase 2·3 필요). 중간 점검 `/goal`, 중단 `/goal clear`.
+
+### 8-A. 진단 전용 (REPORT-ONLY) — 수정·커밋 없이 모든 문제를 상세 보고
+
+각 결함은 6필드를 모두 채운다: ①문제 사항(위치·근거) ②왜 문제인가(영향)
+③근본 원인(구조적) ④방향성에 맞는 해결책(CLAUDE.md/DESIGN.md/도메인 원칙 부합)
+⑤Trade-off·한계·예상 부작용 ⑥추가 필요 정보·align 해야 할 사항.
+
+```text
+/goal REVIEW_PLAYBOOK.md의 /풀리뷰 10단계(Phase 0~9)를 진단 관점으로 완주하되,
+어떤 코드도 수정·커밋·push 하지 말고 발견한 모든 문제를 상세히 "보고"만 하라.
+
+[작업 지시] CWD는 platform/. REPORT-ONLY 모드. Phase별 분석을 실행하되 소스 파일을
+편집하거나 커밋하지 않는다. /qa 대신 /qa-only를 쓰고, design-review·review·cso 등은
+분석 결과만 수집한다(자동 수정 금지). lint·type·golden test·audit 같은 읽기 전용
+명령은 실행해 신호를 수집한다(코드 변경 아님). 결과는
+platform/docs/review-reports/<오늘날짜-HHMM>/FINDINGS_REPORT.md 에 누적 기록한다.
+
+[보고 형식] 발견한 모든 결함을 아래 6필드를 전부 채워 기록한다. 하나라도 비면 미완료:
+  1.문제 사항(위치·근거)  2.왜 문제인가(영향)  3.근본 원인(구조적)
+  4.방향성에 맞는 해결책(CLAUDE.md/DESIGN.md/도메인 원칙 부합)
+  5.Trade-off·한계·예상 부작용  6.추가 필요 정보·align 해야 할 사항
+심각도(Critical/High/Medium/Low)와 결함 ID를 붙인다.
+
+[완료 조건 — 전부 충족 시에만 done. 각 항목을 대화에 실제 출력으로 증명할 것]
+1. FINDINGS_REPORT.md가 review-reports/<오늘날짜> 폴더에 작성됨(경로 출력).
+2. Phase 0~9가 모두 진단됨(codex 미설치면 "skipped" 한 줄로 갈음 허용).
+   각 phase 커버 여부를 나열해 증명.
+3. 읽기 전용 신호 수집 완료: `cd platform; pytest tests/golden_backtest.py -v`,
+   server `ruff check .`·`mypy app`, web `bun run tsc --noEmit`·`bun run lint`를
+   실행하고 각 출력 마지막 줄을 붙여넣어 증명(통과 여부와 무관, 결과를 결함으로 기록).
+4. 자체 점검표 출력: 모든 결함 ID에 대해 6필드(1~6)가 채워졌는지 ✅/❌ 표로 제시.
+   ❌가 하나라도 있으면 done 아님.
+5. 우선순위 매트릭스(Critical/High/Medium/Low 건수)와 5개 관점별 0-10 점수를
+   FINDINGS_REPORT.md에 포함하고 카운트를 출력.
+
+[제약 — 위반 시 done 아님]
+- 소스 코드 편집·git commit·git push 일절 금지. 산출물은 review-reports 폴더의
+  보고 문서(.md)에만 쓴다.
+- 추측으로 단정하지 말 것. 근거가 부족한 항목은 결함 6번(추가 필요 정보)에 명시.
+- Phase 2·3용 dev 서버(`cd platform/web; bun run dev`)가 안 뜨면 그 Phase는
+  "관측 불가, 사용자 개입 필요"로 보고하고 계속 진행(무한 재시도 금지).
+- 한글 출력 스크립트는 UTF-8 명시(cp949 모지바케 방지).
+
+[안전장치] 40턴을 넘기거나 같은 Phase에서 3턴 연속 진전이 없으면 멈추고
+FINDINGS_REPORT.md에 "[INCOMPLETE — blocked at Phase N]"로 현황을 남긴 뒤 보고하라.
+```
+
+### 8-B. 진단 전용 경량 (엔지니어링·도메인만)
+
+```text
+/goal platform/에서 코드 수정 없이 진단만 하라. /health, /review(분석만), /cso daily,
+그리고 읽기전용 명령(`pytest tests/golden_backtest.py -v`, ruff·mypy·tsc·bun lint)을
+실행해 신호를 수집하고, 발견한 모든 Critical/High/Medium 결함을 6필드(문제/왜/근본원인/
+방향성맞는해결책/trade-off·부작용/추가필요정보)로 FINDINGS_REPORT.md에 기록하라.
+완료 조건: 보고서 경로 출력 + 모든 결함의 6필드 채움 여부 ✅/❌ 자체점검표 + 명령
+출력 마지막 줄들 + 심각도별 건수. 코드 편집·commit·push 금지. 25턴 넘으면 현황 보고.
+```
+
+### 8-C. 수정형 (참고 — 결함을 즉시 고치고 커밋)
+
+보고가 아니라 실제 수정까지 자율로 돌릴 때. Critical은 즉시 수정 커밋, High는 수정
+또는 "구조변경=사용자결정"으로 deferred, Medium/Low는 backlog 기록.
+
+```text
+/goal REVIEW_PLAYBOOK.md의 /풀리뷰 10단계(Phase 0~9)를 끝까지 완주하고 발견된 결함을 처리하라.
+CWD는 platform/. Critical은 즉시 수정 커밋, High는 수정 또는 deferred(사용자결정) 기록,
+Medium/Low는 backlog 기록. 완료 조건(각 항목을 출력으로 증명): ①SUMMARY.md 작성(경로 출력)
+②Phase 0~9 모두 실행(codex 없으면 skipped 갈음) ③`cd platform; pytest tests/golden_backtest.py -v`
+exit 0 ④server ruff·mypy, web tsc·lint 통과 ⑤우선순위 매트릭스 Critical=0, High는 전부
+수정 또는 deferred(사용자결정). 제약: git push 금지(commit까지만), KIS 자격증명이 server·local
+코드에 노출되면 Critical, dev 서버 안 뜨면 즉시 멈춰 보고(무한 재시도 금지), 한글 출력 UTF-8 명시.
+40턴 초과 또는 같은 결함 3턴 무진전 시 멈추고 "[INCOMPLETE — blocked at Phase N]" 기록 후 보고.
+```
