@@ -1,5 +1,5 @@
 /**
- * 내일 매매 미리보기 패널 — 트레이딩 페이지 상단.
+ * 매매 예정 종목 패널 — 트레이딩 페이지 상단.
  *
  * 서버가 각 데이터 cron 후 자동 평가한 결과를 표시. 사용자 투명성:
  * "내일 자동매매가 무엇을 살/팔 예정인지" 실시간 데이터 기준 미리보기.
@@ -72,7 +72,7 @@ export default function NextDayPreviewPanel() {
   if (!preview) {
     return (
       <div className="panel preview-panel preview-empty">
-        <h3>내일 매매 미리보기</h3>
+        <h3>매매 예정 종목</h3>
         <div className="muted">
           {err ? `불러오기 실패: ${err}` : "불러오는 중…"}
         </div>
@@ -83,7 +83,7 @@ export default function NextDayPreviewPanel() {
   if (!preview.available) {
     return (
       <div className="panel preview-panel preview-empty">
-        <h3>내일 매매 미리보기</h3>
+        <h3>매매 예정 종목</h3>
         <div className="muted">{preview.reason ?? "준비 중"}</div>
       </div>
     );
@@ -97,7 +97,7 @@ export default function NextDayPreviewPanel() {
     <div className="panel preview-panel">
       <div className="preview-head">
         <h3 style={{ margin: 0 }}>
-          내일 매매 미리보기
+          매매 예정 종목
           <button className="ghost sm" onClick={() => setCollapsed((v) => !v)}
                   style={{ marginLeft: 10 }}>
             {collapsed ? "펼치기" : "접기"}

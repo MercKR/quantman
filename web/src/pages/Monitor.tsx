@@ -4,9 +4,7 @@ import {
   ExecutionQuality, HealthCard, MarketBar, PortfolioRiskCard,
   PositionDetailCards, RiskGauges, StrategyPnl,
 } from "../components/MonitorCards";
-import {
-  BacktestLiveOverlay, CsvExportBar,
-} from "../components/MonitorTools";
+import { CsvExportBar } from "../components/MonitorTools";
 import NextDayPreviewPanel from "../components/NextDayPreviewPanel";
 import type {
   CommandRow, CommandType, DeviceRow, MarketContext, PortfolioRisk,
@@ -164,15 +162,6 @@ export default function Monitor() {
       <div className="panel" style={{ display: "flex", flexWrap: "wrap",
                                          gap: 8, alignItems: "center" }}>
         <strong style={{ marginRight: 8 }}>액션:</strong>
-        <button onClick={() => {
-          if (confirm("자동매매는 평일 08:55 KST에 자동 실행됩니다.\n" +
-                       "지금 수동 실행은 검증 목적으로만 사용하세요 — " +
-                       "장중 실행 시 시초가가 아닌 현 시점 기준으로 발주됩니다.\n\n계속하시겠습니까?")) {
-            send("RUN_CYCLE_NOW");
-          }
-        }} disabled={actionDisabled} title={pairTooltip}>
-          지금 1회 실행 (검증용)
-        </button>
         <button className="ghost sm" onClick={() => send("PAUSE_AUTO")}
                 disabled={actionDisabled} title={pairTooltip}>
           일시정지
@@ -182,14 +171,12 @@ export default function Monitor() {
           재개
         </button>
         <button className="ghost sm" onClick={() => {
-          // 실전·모의 구분은 각 포지션·전략 카드의 run_mode 배지가 담당.
-          // 청산 확인은 단일 메시지로 통합한다.
-          if (confirm("정말 모든 보유 종목을 청산하고 신규 진입을 차단하시겠습니까?")) {
+          if (confirm("정말 모든 보유 종목을 매도하고 신규 매수를 중지하시겠습니까?")) {
             send("LIQUIDATE_ALL");
           }
         }} disabled={actionDisabled} title={pairTooltip}
                 style={{ color: "var(--red)" }}>
-          전량 청산 + 차단
+          전량 매도 후 매수 중지
         </button>
         <span className="muted" style={{ marginLeft: "auto", fontSize: 12 }}>
           {paired
@@ -235,9 +222,6 @@ export default function Monitor() {
 
       {/* 전략별 P&L */}
       <StrategyPnl data={p?.strategy_pnl} />
-
-      {/* 백테스트 vs 라이브 overlay */}
-      <BacktestLiveOverlay liveEquity={p?.equity} />
 
       {/* 실행 품질 — 시간대별 슬리피지 + 거부 사유 */}
       <ExecutionQuality

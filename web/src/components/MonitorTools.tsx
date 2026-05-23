@@ -1,87 +1,8 @@
-/* Phase 13.4/13.9 — 백테스트-라이브 overlay + 알림 설정 + CSV export */
+/* Phase 13.4/13.9 — 알림 설정 + CSV export */
 
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import EquityChart from "./EquityChart";
-import type {
-  BacktestRunSummary, OrderEvent, UserSettingsIO,
-} from "../types";
-
-// ── 백테스트 vs 라이브 overlay ────────────────────────────────────────────────
-
-export function BacktestLiveOverlay({ liveEquity }: {
-  liveEquity?: { date: string; value: number }[];
-}) {
-  const [runs, setRuns] = useState<BacktestRunSummary[]>([]);
-  const [pickedId, setPickedId] = useState<number | null>(null);
-  const [overlay, setOverlay] = useState<{ date: string; value: number | null }[]>([]);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    api.listBacktestRuns()
-      .then((rs) => { setRuns(rs); setLoaded(true); })
-      .catch(() => setLoaded(true));
-  }, []);
-
-  async function loadRun(id: number) {
-    setPickedId(id);
-    try {
-      const r = await api.getBacktestRun(id);
-      // BacktestResult.equity는 백테스트 자산곡선 (보통 기간 동안의 일별)
-      const eq = r.result.equity ?? [];
-      // 정규화: 시작 100 기준
-      const base = eq.length ? Number(eq[0].value) || 100 : 100;
-      const norm = eq.map((p) => ({
-        date: p.date,
-        value: p.value != null ? (Number(p.value) / base) * 100 : null,
-      }));
-      setOverlay(norm);
-    } catch {
-      setOverlay([]);
-    }
-  }
-
-  // 라이브도 정규화 (시작값 = 100)
-  const liveBase = liveEquity?.[0]?.value;
-  const liveNorm = liveBase && liveBase > 0
-    ? (liveEquity ?? []).map((p) => ({
-        date: p.date, value: (p.value / liveBase) * 100,
-      })) : [];
-
-  return (
-    <div className="panel">
-      <h3 style={{ marginTop: 0 }}>백테스트 ↔ 라이브 비교</h3>
-      {!loaded ? <p className="muted">불러오는 중…</p> : runs.length === 0 ? (
-        <p className="muted">저장된 백테스트가 없습니다. [백테스트 → 전략 구성]에서 실행하세요.</p>
-      ) : (
-        <>
-          <div className="row" style={{ marginBottom: 12 }}>
-            <label>참조할 백테스트</label>
-            <select value={pickedId ?? ""}
-                    onChange={(e) => loadRun(Number(e.target.value))}>
-              <option value="">선택…</option>
-              {runs.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} · {new Date(r.created_at).toLocaleDateString()}
-                </option>
-              ))}
-            </select>
-            <span className="muted" style={{ fontSize: 12 }}>
-              시작값을 100으로 정규화해 표시합니다.
-            </span>
-          </div>
-          <EquityChart
-            equity={liveNorm.length ? liveNorm : overlay}
-            benchmark={liveNorm.length ? overlay : undefined}
-          />
-          <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            진한 선 = 라이브, 옅은 선 = 백테스트. 두 곡선의 괴리가 슬리피지·갭 영향입니다.
-          </p>
-        </>
-      )}
-    </div>
-  );
-}
+import type { OrderEvent, UserSettingsIO } from "../types";
 
 // ── 알림 설정 ─────────────────────────────────────────────────────────────────
 
