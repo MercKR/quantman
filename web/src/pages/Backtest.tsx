@@ -299,6 +299,7 @@ export default function Backtest() {
           buyTolerancePct={buyTolerancePct} setBuyTolerancePct={setBuyTolerancePct}
           sellTolerancePct={sellTolerancePct} setSellTolerancePct={setSellTolerancePct}
           btCommissionBps={btCommissionBps} setBtCommissionBps={setBtCommissionBps}
+          btSellTaxBps={btSellTaxBps} setBtSellTaxBps={setBtSellTaxBps}
           btSlippageBps={btSlippageBps} setBtSlippageBps={setBtSlippageBps}
           btGapExtraCost={btGapExtraCost} setBtGapExtraCost={setBtGapExtraCost}
           btGapThresholdPct={btGapThresholdPct} setBtGapThresholdPct={setBtGapThresholdPct}
@@ -358,6 +359,7 @@ function BuildTab(props: {
   buyTolerancePct: number; setBuyTolerancePct: (v: number) => void;
   sellTolerancePct: number; setSellTolerancePct: (v: number) => void;
   btCommissionBps: number; setBtCommissionBps: (v: number) => void;
+  btSellTaxBps: number; setBtSellTaxBps: (v: number) => void;
   btSlippageBps: number; setBtSlippageBps: (v: number) => void;
   btGapExtraCost: boolean; setBtGapExtraCost: (v: boolean) => void;
   btGapThresholdPct: number; setBtGapThresholdPct: (v: number) => void;
@@ -382,6 +384,7 @@ function BuildTab(props: {
     buyTolerancePct, setBuyTolerancePct,
     sellTolerancePct, setSellTolerancePct,
     btCommissionBps, setBtCommissionBps,
+    btSellTaxBps, setBtSellTaxBps,
     btSlippageBps, setBtSlippageBps,
     btGapExtraCost, setBtGapExtraCost,
     btGapThresholdPct, setBtGapThresholdPct,
