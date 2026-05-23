@@ -88,6 +88,11 @@ def _plan_us_session(sched: BlockingScheduler, now: datetime | None = None) -> N
 
 
 def start() -> None:
+    # Q1: 잔고 push 실패분의 백그라운드 retry thread. 정시 cron의 _flush_pending
+    # 첫 시도와 별개로 60초 idle 폴링 + 실패 시 backoff [10~600s] 재시도.
+    from . import sync_retry
+    sync_retry.start()
+
     sched = BlockingScheduler(timezone="Asia/Seoul")
 
     # ── 국내(KRX) 고정 cron ──────────────────────────────────────────────────
