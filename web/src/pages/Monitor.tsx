@@ -553,7 +553,7 @@ function EventBadge({ ev }: { ev: string }) {
     filled: { bg: "var(--green-soft)", fg: "var(--green)" },
     partial: { bg: "var(--green-soft)", fg: "var(--green)" },
     submitted: { bg: "var(--accent-soft)", fg: "var(--accent)" },
-    cancelled: { bg: "#f3f4f6", fg: "var(--muted)" },
+    cancelled: { bg: "var(--border)", fg: "var(--muted)" },
     rejected: { bg: "var(--red-soft)", fg: "var(--red)" },
     timeout: { bg: "var(--amber-soft)", fg: "var(--amber)" },
   };

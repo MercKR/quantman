@@ -36,17 +36,19 @@ export default function EquityChart({ equity, benchmark }: Props) {
   return (
     <ResponsiveContainer width="100%" height={280}>
       <LineChart data={merged} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
-        <CartesianGrid stroke="#eef0f3" />
+        {/* recharts SVG는 CSS var를 받지 못해 토큰값(DESIGN.md)을 직접 인라인한다.
+            변경 시 두 군데를 동기화: web/src/index.css :root vs 이 파일. */}
+        <CartesianGrid stroke="#e8e3db" />
         <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={50} />
         <YAxis tickFormatter={fmt} tick={{ fontSize: 11 }} width={52} />
         <Tooltip
           formatter={(v) => `${Number(v).toLocaleString()}원`}
-          labelStyle={{ color: "#6b7280" }}
+          labelStyle={{ color: "#6f6a62" }}
         />
         <Legend />
-        <Line type="monotone" dataKey="전략" stroke="#4f46e5"
+        <Line type="monotone" dataKey="전략" stroke="#d97757"
               dot={false} strokeWidth={2} />
-        <Line type="monotone" dataKey="Buy&Hold" stroke="#9ca3af"
+        <Line type="monotone" dataKey="Buy&Hold" stroke="#6f6a62"
               dot={false} strokeWidth={1.5} strokeDasharray="4 3" />
       </LineChart>
     </ResponsiveContainer>
