@@ -13,9 +13,11 @@ KIS API 호출 0회, 서버에 이미 있는 데이터만 사용:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import quant_core as qc
+from quant_core import market_calendar as _mc
 from sqlmodel import Session, select
 
 from .data_cache import get_dataset
@@ -24,6 +26,7 @@ from . import kis_master_cache
 from .models import Strategy, SyncSnapshot, User, UserSettings
 
 _log = logging.getLogger("app.preview")
+_KST = ZoneInfo("Asia/Seoul")
 
 
 def _latest_snapshot(session: Session, user_id: int) -> SyncSnapshot | None:
@@ -52,6 +55,66 @@ def _last_date(dataset: dict, symbol: str) -> str | None:
         return str(df.index[-1])[:10]
     except Exception:
         return None
+
+
+def _is_kr_symbol(symbol: str) -> bool:
+    """6자리 숫자면 한국 종목. 그 외(NVDA·AAPL 등)는 미국으로 분류."""
+    return symbol.isdigit() and len(symbol) == 6
+
+
+def _last_session_on_or_before(market: str, today: date) -> date | None:
+    """today 이하의 가장 가까운 시장 거래일. 캘린더 만료·예외 시 None.
+
+    is_session_day는 휴장 여부만 답하므로 역행 루프로 검색. 30일 이상
+    역행해야 한다면 캘린더가 비정상 → None 반환 (호출자는 fail-open).
+    """
+    d = today
+    for _ in range(31):
+        try:
+            if _mc.is_session_day(market, d):
+                return d
+        except Exception:
+            return None
+        d = d - timedelta(days=1)
+    return None
+
+
+def _data_freshness_ok(dataset: dict, symbol: str,
+                        today: date | None = None) -> tuple[bool, str]:
+    """S-05 — 종목 dataset의 마지막 데이터가 시장 직전 거래일과 일치하는가.
+
+    실패 케이스 — 사용자에게 노출하지 말아야 할 매수 후보:
+      · 거래정지 종목 (마지막 거래일이 N일 전)
+      · 상폐 직전 종목 (데이터 갱신 멈춤)
+      · 데이터 cron 실패로 dataset이 stale
+
+    True면 정상, False면 (False, 사유 메시지). 캘린더 자체가 비정상이면
+    fail-open으로 True 반환 — over-engineering 자제(캘린더 만료는 별도
+    log/health 경로에서 잡힘).
+    """
+    last_str = _last_date(dataset, symbol)
+    if last_str is None:
+        return False, "데이터 없음 (dataset 누락)"
+    try:
+        last_d = date.fromisoformat(last_str)
+    except ValueError:
+        return False, f"날짜 파싱 실패: {last_str}"
+
+    if today is None:
+        today = datetime.now(_KST).date()
+
+    market = "KR" if _is_kr_symbol(symbol) else "US"
+    ref = _last_session_on_or_before(market, today)
+    if ref is None:
+        # 캘린더 미작동 — stale 판정 자체가 불가하므로 통과 (다른 신호가 잡음)
+        return True, ""
+    if last_d < ref:
+        days_behind = (ref - last_d).days
+        return False, (
+            f"데이터 stale (last={last_str}, 직전 {market} 거래일 "
+            f"{ref.isoformat()}, {days_behind}일 지연) — "
+            f"거래정지·상폐·데이터 누락 가능")
+    return True, ""
 
 
 def _atr14(dataset: dict, symbol: str) -> float | None:
@@ -236,10 +299,18 @@ def _evaluate_strategy(strat_def: dict, dataset: dict, cash: float,
 
     # ── 3. 통과 종목 사이징 (screener_limit 한도) ──────────────────────────────
     bought = 0
+    today_kst = datetime.now(_KST).date()
     for symbol in eval_symbols:
         if bought >= slots_left:
             break
         if symbol not in passed_symbols:
+            continue
+        # S-05 — dataset이 시장 직전 거래일과 어긋나면 매수 후보로 노출하지
+        # 않는다. 거래정지·상폐·데이터 누락 종목이 자동매수 대상이 되는 사고
+        # 차단. 캘린더 만료 등으로 판정 불가 시엔 통과(fail-open).
+        fresh, freshness_msg = _data_freshness_ok(dataset, symbol, today_kst)
+        if not fresh:
+            out["skipped"].append({"symbol": symbol, "reason": freshness_msg})
             continue
         prev_close = _prev_close(dataset, symbol)
         if prev_close is None and symbol in match_meta_by_symbol:
