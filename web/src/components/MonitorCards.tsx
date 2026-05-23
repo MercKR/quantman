@@ -2,11 +2,21 @@
  * Phase 13.1~13.9의 visualization 컴포넌트들. */
 
 import { useEffect, useState } from "react";
+import {
+  Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip as PieTooltip,
+} from "recharts";
 import type {
   DrawdownState, KillSwitchState, LocalHealth, MarketContext, PortfolioRisk,
-  PositionRich, RejectionReason, SlippageBucket, StrategyPnlSummary,
+  PositionRich, ReconciliationResult, RejectionReason, SlippageBucket,
+  StrategyPnlSummary,
 } from "../types";
 import { fmt2, wonReadable } from "../format";
+
+// 파이 슬라이스 컬러 — DESIGN.md 따뜻한 톤. accent → 변주.
+const PIE_COLORS = [
+  "#d97757", "#7a6a55", "#b3a692", "#ad5019", "#6f6a62",
+  "#e8a87c", "#c38a5a", "#8b6f4e", "#a89077", "#d4b896",
+];
 
 // ── 1. 일일 손실 한도 게이지 + drawdown ───────────────────────────────────────
 
@@ -65,72 +75,157 @@ export function RiskGauges({ ks, dd, equityNow }: {
 
 // ── 2. 포지션 디테일 카드 (청산까지 거리) ────────────────────────────────────
 
-export function PositionDetailCards({ positions }: { positions: PositionRich[] }) {
+export function PositionDetailCards({
+  positions, reconciliation, onReconcile, reconcileDisabled, reconcileTooltip,
+}: {
+  positions: PositionRich[];
+  reconciliation?: ReconciliationResult;
+  onReconcile?: () => void;
+  reconcileDisabled?: boolean;
+  reconcileTooltip?: string;
+}) {
+  const checkedAt = reconciliation?.checked_at
+    ? new Date(reconciliation.checked_at).toLocaleString("ko-KR", { hour12: false })
+    : null;
+
   if (!positions || positions.length === 0) {
     return (
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>보유 종목</h3>
+        <PositionHeader count={0} onReconcile={onReconcile}
+                        reconcileDisabled={reconcileDisabled}
+                        reconcileTooltip={reconcileTooltip} />
         <p className="muted">현재 보유 종목이 없습니다.</p>
       </div>
     );
   }
+
+  // reconciliation 데이터: symbol → ledger qty 맵.
+  // - ledger_orphans: ledger에 있고 KIS 부족 (매도 누락 추정)
+  // - external_extras: KIS에 있고 ledger 부족 (외부 매수 등)
+  // - in_sync: 양쪽 일치 — 별도 ledger 수치 불필요(=KIS qty와 동일).
+  const ledgerByKis: Record<string, number> = {};
+  for (const o of reconciliation?.ledger_orphans ?? []) {
+    ledgerByKis[o.symbol] = o.ledger_total_qty;
+  }
+  for (const e of reconciliation?.external_extras ?? []) {
+    ledgerByKis[e.symbol] = e.ledger_total_qty;
+  }
+
+  // 파이차트: 각 보유 종목의 평가금액 비중. eval_price·qty 없는 행은 제외.
+  const pieData = positions
+    .filter((p) => p.qty > 0 && p.eval_price)
+    .map((p) => ({
+      name: p.name ?? p.symbol,
+      value: Math.round(p.qty * (p.eval_price ?? 0)),
+    }))
+    .sort((a, b) => b.value - a.value);
+
   return (
     <div className="panel">
-      <h3 style={{ marginTop: 0 }}>보유 종목 ({positions.length})</h3>
-      <div className="pos-grid">
-        {positions.map((p) => {
-          const ret = p.cur_return_pct ?? 0;
-          const dist = p.distances ?? {};
-          return (
-            <div key={p.symbol} className="pos-card">
-              <div className="pos-head">
-                <strong>{p.name ?? p.symbol}</strong>
-                <span className={"pos-ret " + (ret >= 0 ? "pos" : "neg")}>
-                  {ret >= 0 ? "+" : ""}{fmt2(ret)}%
-                </span>
-              </div>
-              <div className="muted" style={{ fontSize: 12 }}>
-                {p.symbol} · {p.strategy_name || "(전략 미상)"} · 보유 {p.held_days ?? 0}일
-              </div>
-              <div className="pos-row">
-                <div className="muted">평균가</div>
-                <div>{p.entry_price ? wonReadable(p.entry_price) : "—"}</div>
-                <div className="muted">현재가</div>
-                <div>{p.eval_price ? wonReadable(p.eval_price) : "—"}</div>
-              </div>
-              <div className="pos-dists">
-                {dist.tp_gap_pct !== undefined && (
-                  <DistChip label="익절까지" v={dist.tp_gap_pct} suffix="%p" tone="pos" />
-                )}
-                {dist.sl_gap_pct !== undefined && (
-                  <DistChip label="손절까지" v={dist.sl_gap_pct} suffix="%p" tone="neg" />
-                )}
-                {dist.trail_gap_pct !== undefined && (
-                  <DistChip label="트레일" v={dist.trail_gap_pct} suffix="%p" tone="warn" />
-                )}
-                {dist.hold_days_left !== undefined && (
-                  <DistChip label="보유일" v={dist.hold_days_left} suffix="일 남음" tone="" />
-                )}
-              </div>
-            </div>
-          );
-        })}
+      <PositionHeader count={positions.length} onReconcile={onReconcile}
+                      reconcileDisabled={reconcileDisabled}
+                      reconcileTooltip={reconcileTooltip}
+                      checkedAt={checkedAt} />
+
+      <div className="position-layout">
+        {pieData.length > 0 && (
+          <div className="position-pie">
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={45}
+                     outerRadius={85} paddingAngle={1}>
+                  {pieData.map((_, i) => (
+                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <PieTooltip formatter={(v) => wonReadable(Number(v))} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        <div className="position-table-wrap">
+          <table className="position-table">
+            <thead>
+              <tr>
+                <th>종목</th><th>전략</th>
+                <th style={{ textAlign: "right" }} title="KIS 실 잔고 수량">KIS</th>
+                <th style={{ textAlign: "right" }} title="자동매매 ledger 수량">ledger</th>
+                <th style={{ textAlign: "right" }} title="KIS − ledger (0이면 정상)">차이</th>
+                <th style={{ textAlign: "right" }}>평단가</th>
+                <th style={{ textAlign: "right" }}>현재가</th>
+                <th style={{ textAlign: "right" }}>수익률</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((p) => {
+                const ret = p.cur_return_pct ?? 0;
+                const ledger = ledgerByKis[p.symbol];
+                const drift = ledger !== undefined ? ledger - p.qty : 0;
+                const driftClass = drift !== 0 ? "drift" : "";
+                return (
+                  <tr key={p.symbol} className={driftClass}>
+                    <td>
+                      <strong>{p.name ?? p.symbol}</strong>
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        {p.symbol} · 보유 {p.held_days ?? 0}일
+                      </div>
+                    </td>
+                    <td className="muted">{p.strategy_name || "—"}</td>
+                    <td style={{ textAlign: "right" }}>{p.qty.toLocaleString()}</td>
+                    <td style={{ textAlign: "right" }}>
+                      {ledger !== undefined ? ledger.toLocaleString() : p.qty.toLocaleString()}
+                    </td>
+                    <td style={{ textAlign: "right",
+                                  color: drift === 0 ? "var(--muted)" : "var(--amber)" }}>
+                      {drift === 0 ? "—" : (drift > 0 ? `+${drift}` : `${drift}`)}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {p.entry_price ? wonReadable(p.entry_price) : "—"}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {p.eval_price ? wonReadable(p.eval_price) : "—"}
+                    </td>
+                    <td className={ret >= 0 ? "pos" : "neg"} style={{ textAlign: "right" }}>
+                      {ret >= 0 ? "+" : ""}{fmt2(ret)}%
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
 }
 
-function DistChip({ label, v, suffix, tone }: {
-  label: string; v: number; suffix: string; tone: string;
+function PositionHeader({ count, onReconcile, reconcileDisabled, reconcileTooltip, checkedAt }: {
+  count: number;
+  onReconcile?: () => void;
+  reconcileDisabled?: boolean;
+  reconcileTooltip?: string;
+  checkedAt?: string | null;
 }) {
-  // 0에 가까울수록 빨강 (트리거 임박)
-  const close = Math.abs(v) <= 1.5;
-  const cls = close ? "danger" : (tone === "pos" ? "pos" : tone === "neg" ? "neg" : "");
   return (
-    <span className={"dist-chip " + cls}>
-      <span className="muted">{label}</span>{" "}
-      <strong>{v >= 0 ? "+" : ""}{fmt2(v)}{suffix}</strong>
-    </span>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                   gap: 12, marginBottom: 12 }}>
+      <h3 style={{ margin: 0 }}>보유 종목 ({count})</h3>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {checkedAt && (
+          <span className="muted small" title={`KIS 잔고 ↔ ledger 마지막 점검 시각`}>
+            잔고 점검: {checkedAt}
+          </span>
+        )}
+        {onReconcile && (
+          <button className="ghost sm" onClick={onReconcile}
+                  disabled={reconcileDisabled} title={reconcileTooltip}>
+            지금 점검
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

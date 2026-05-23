@@ -586,37 +586,23 @@ details.section-collapsible[open] > summary { margin-bottom: 14px; }
   font-size: 12px; font-weight: 700; color: var(--text);
 }
 
-/* Monitor — 포지션 카드 */
-.pos-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
+/* Monitor — 보유 종목 (파이차트 + 표 + reconciliation 차이 통합) */
+.position-layout {
+  display: grid; grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: 18px; align-items: start;
 }
-.pos-card {
-  background: var(--bg); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 14px;
+@media (max-width: 768px) {
+  .position-layout { grid-template-columns: 1fr; }
 }
-.pos-head {
-  display: flex; justify-content: space-between; align-items: baseline;
-  margin-bottom: 4px;
+.position-pie { min-width: 0; }
+.position-table-wrap { overflow-x: auto; }
+.position-table { width: 100%; font-size: 13px; }
+.position-table th {
+  text-align: left; font-weight: 600; color: var(--muted);
+  font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border);
 }
-.pos-ret { font-size: 16px; font-weight: 700; }
-.pos-row {
-  display: grid; grid-template-columns: auto 1fr auto 1fr;
-  gap: 8px; font-size: 13px; margin: 10px 0;
-}
-.pos-dists {
-  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
-}
-.dist-chip {
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: 6px; padding: 4px 9px; font-size: 12px;
-}
-.dist-chip.danger {
-  background: var(--red-soft); border-color: var(--red); color: var(--red);
-}
-.dist-chip.pos strong { color: var(--up); }
-.dist-chip.neg strong { color: var(--down); }
-.dist-chip.warn strong { color: var(--amber); }
+.position-table td { padding: 8px; border-bottom: 1px solid var(--border); }
+.position-table tr.drift td { background: var(--amber-soft); }
 
 /* Monitor — 실행 품질 / 포트폴리오 위험 grid */
 .exec-grid {

@@ -8,7 +8,7 @@ import { CsvExportBar } from "../components/MonitorTools";
 import NextDayPreviewPanel from "../components/NextDayPreviewPanel";
 import type {
   CommandRow, CommandType, DeviceRow, MarketContext, PortfolioRisk,
-  ReconciliationResult, SyncSnapshot,
+  SyncSnapshot,
 } from "../types";
 
 const REFRESH_MS = 5000;
@@ -192,16 +192,14 @@ export default function Monitor() {
           {/* 위험 한도 게이지 + drawdown */}
           <RiskGauges ks={ks} dd={p?.drawdown} equityNow={equityNow} />
 
-          {/* Phase 40 — 잔고 정합성 (KIS ↔ ledger) */}
-          <ReconciliationPanel
+          {/* 보유 종목 — 파이차트 + 표 + ledger/KIS 차이 통합 (Phase 40 reconciliation 흡수) */}
+          <PositionDetailCards
+            positions={positions}
             reconciliation={p?.reconciliation}
-            onTrigger={() => send("RECONCILE_NOW")}
-            disabled={actionDisabled}
-            pairTooltip={pairTooltip}
+            onReconcile={() => send("RECONCILE_NOW")}
+            reconcileDisabled={actionDisabled}
+            reconcileTooltip={pairTooltip}
           />
-
-          {/* 보유 종목 디테일 카드 */}
-          <PositionDetailCards positions={positions} />
 
       {/* 사이클 요약 */}
       {summary && (
@@ -388,117 +386,6 @@ export default function Monitor() {
           </table>
         </div>
       )}
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Phase 40 — KIS 잔고 ↔ ledger drift 점검 결과 패널. */
-function ReconciliationPanel({
-  reconciliation, onTrigger, disabled, pairTooltip,
-}: {
-  reconciliation?: ReconciliationResult;
-  onTrigger: () => void;
-  disabled: boolean;
-  pairTooltip?: string;
-}) {
-  const r = reconciliation;
-  const hasDrift = !!r?.has_drift;
-  const orphans = r?.ledger_orphans ?? [];
-  const extras = r?.external_extras ?? [];
-  const applied = r?.applied ?? [];
-  const checkedAt = r?.checked_at
-    ? new Date(r.checked_at).toLocaleString("ko-KR", { hour12: false })
-    : null;
-
-  return (
-    <div className="panel" style={hasDrift ? {
-      borderLeft: "4px solid var(--amber)", background: "var(--amber-soft)",
-    } : undefined}>
-      <div style={{ display: "flex", alignItems: "center",
-                      justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
-        <h3 style={{ margin: 0 }}>
-          잔고 정합성 {hasDrift && (
-            <span style={{ color: "var(--amber)", fontSize: 14, fontWeight: 600 }}>
-              · 차이 감지
-            </span>
-          )}
-        </h3>
-        <button className="ghost sm" onClick={onTrigger}
-                disabled={disabled} title={pairTooltip}>
-          지금 점검
-        </button>
-      </div>
-
-      {!r ? (
-        <p className="muted" style={{ fontSize: 13, margin: 0 }}>
-          아직 점검 결과가 없습니다. 15:35 settlement 사이클 또는 "지금 점검" 버튼으로 실행하세요.
-          <br />
-          HTS·MTS에서 수동 매매한 경우 자동매매 ledger와 KIS 실 잔고가 어긋날 수 있어,
-          이 패널이 차이를 자동 감지하고 정정합니다.
-        </p>
-      ) : r.error ? (
-        <div className="error small">{r.error}</div>
-      ) : (
-        <>
-          <div className="muted small" style={{ marginBottom: 8 }}>
-            마지막 점검: {checkedAt} ·
-            {" "}일치: {r.in_sync.length}종목 ·
-            {" "}KIS 잔고: {r.kis_symbol_count}종목 ·
-            {" "}ledger: {r.ledger_symbol_count}종목
-          </div>
-          {!hasDrift && applied.length === 0 && (
-            <div className="muted small">✓ 모든 보유 종목이 일치합니다.</div>
-          )}
-          {applied.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <strong className="small">자동 차감 {applied.length}건 (HTS/MTS 수동 매도 추정)</strong>
-              <ul style={{ margin: "4px 0 0 16px", padding: 0, fontSize: 13 }}>
-                {applied.map((a) => (
-                  <li key={a.sid}>
-                    <code>{a.symbol}</code> {a.old_qty}주 → {a.new_qty}주
-                    {" "}(-{a.removed_qty})
-                    {a.fully_closed && (
-                      <span style={{ color: "var(--amber)", marginLeft: 6 }}>
-                        [전량 청산]
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {orphans.length > 0 && orphans.length !== applied.length && (
-            <div style={{ marginTop: 8 }}>
-              <strong className="small">ledger 초과분 {orphans.length}종목</strong>
-              <ul style={{ margin: "4px 0 0 16px", padding: 0, fontSize: 13 }}>
-                {orphans.map((o) => (
-                  <li key={o.symbol}>
-                    <code>{o.symbol}</code> ledger {o.ledger_total_qty}주 vs KIS {o.kis_qty}주
-                    {" "}(부족 {o.shortfall}주)
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {extras.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <strong className="small">외부 매수 {extras.length}종목 (자동매매 미관여)</strong>
-              <ul style={{ margin: "4px 0 0 16px", padding: 0, fontSize: 13 }}>
-                {extras.map((e) => (
-                  <li key={e.symbol}>
-                    <code>{e.symbol}</code> 초과 {e.excess}주
-                    {e.in_ledger ? " (자동매매 보유에 추가 매수)" : " (신규)"}
-                  </li>
-                ))}
-              </ul>
-              <div className="muted small" style={{ marginTop: 4 }}>
-                외부 매수분은 ledger를 손대지 않습니다 — 자동매매가 매수한 게 아니므로
-                자동 매도 대상이 아닙니다.
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>
