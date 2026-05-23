@@ -10,6 +10,21 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 
+
+def _safe_log_return(close: pd.Series) -> pd.Series:
+    """log(close / prev_close) — 두 값 모두 양수일 때만 계산, 아니면 NaN (C-02).
+
+    가격(주가)에는 잘 정의되지만 매크로 시계열(금리차·스프레드 등 음수 가능)에서는
+    ``np.log``가 -inf 또는 NaN을 만들면서 'divide by zero in log'·'invalid value in
+    log' 경고를 띄우고, 다운스트림 신호가 ``fillna(False)``로 조용히 누락된다.
+    정의역에서 마스킹하여 경고를 근본 차단하고 NaN을 명시적 미정의 신호로 둔다.
+    """
+    prev = close.shift(1)
+    valid = (close > 0) & (prev > 0)
+    ratio = close.where(valid) / prev.where(valid)
+    return np.log(ratio)
+
+
 # ── 기본 수익률 ──────────────────────────────────────────────────────────────
 
 def add_returns(df: pd.DataFrame) -> pd.DataFrame:
@@ -19,7 +34,7 @@ def add_returns(df: pd.DataFrame) -> pd.DataFrame:
     df["pct_change_5d"]   = df["Close"].pct_change(5) * 100
     df["pct_change_20d"]  = df["Close"].pct_change(20) * 100
     df["pct_change_252d"] = df["Close"].pct_change(252) * 100   # 1년(약 252 거래일)
-    df["log_return_1d"]   = np.log(df["Close"] / df["Close"].shift(1)) * 100
+    df["log_return_1d"]   = _safe_log_return(df["Close"]) * 100
     return df
 
 
@@ -118,7 +133,7 @@ def add_atr(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
 
 def add_realized_vol(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    log_ret = np.log(df["Close"] / df["Close"].shift(1))
+    log_ret = _safe_log_return(df["Close"])  # C-02: 음수/0 Close 마스킹
     for w in [5, 20, 60]:
         df[f"realized_vol_{w}d"] = log_ret.rolling(w).std() * np.sqrt(252) * 100
     return df
@@ -128,7 +143,9 @@ def add_realized_vol(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_zscore(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    ret = df["log_return_1d"] if "log_return_1d" in df.columns else np.log(df["Close"] / df["Close"].shift(1)) * 100
+    # C-02: log_return_1d가 없으면 _safe_log_return으로 계산(음수/0 마스킹).
+    ret = (df["log_return_1d"] if "log_return_1d" in df.columns
+           else _safe_log_return(df["Close"]) * 100)
     for w in [20, 60]:
         mu  = ret.rolling(w).mean()
         std = ret.rolling(w).std()
