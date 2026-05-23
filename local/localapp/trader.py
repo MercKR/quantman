@@ -345,6 +345,11 @@ class Trader:
                 # 추가 매수 — 평균단가 갱신
                 lg = self.ledger[sid]
                 total = lg["qty"] + filled_qty
+                # L-05 — 정상 경로엔 두 값 모두 양수라 안전하나, 경로 변경 또는
+                # 비정상 fill_qty/ledger qty=0 잔존 시 ZeroDivisionError 잠재.
+                # 1줄 가드로 명시. 둘 다 0이면 의미 없는 호출이므로 조용히 return.
+                if total <= 0:
+                    return
                 lg["entry_price"] = (lg["entry_price"] * lg["qty"]
                                       + fill_price * filled_qty) / total
                 lg["qty"] = total
