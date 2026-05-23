@@ -141,6 +141,18 @@ class SellRules(BaseModel):
     sell_amount_pct: float = 100.0           # 100 = 전량 매도
 
 
+class SizingModifier(BaseModel):
+    """매수액 수정자 — "조건이 맞으면 매수액에 ×N" (Phase 47 Cycle B).
+
+    여러 개 정의 시 매치된 모든 수정자의 multiplier가 누적 곱셈된다.
+    ConditionGroup은 매수/매도 조건과 동일 평가 엔진(build_signal_mask)을 사용해
+    매크로 종목·이력통계·중첩 그룹을 모두 지원한다.
+    """
+    condition: ConditionGroup = Field(default_factory=ConditionGroup)
+    multiplier: float = 1.0                  # 0 = 진입 차단, 1 = 그대로, <1 = 축소, >1 = 확대
+    note: Optional[str] = None               # 사용자 메모 (선택)
+
+
 class ExecutionPolicy(BaseModel):
     """체결 정책 — 모든 필드가 Optional. None이면 글로벌 default 사용.
 
@@ -159,6 +171,9 @@ class ExecutionPolicy(BaseModel):
     # 사이징 (Phase 47 — fixed_amount·equal_weight 추가)
     sizing_mode: Optional[str] = None              # "fixed_amount" | "pct_cash" | "equal_weight" | "atr_risk"
     amount_krw: Optional[float] = None             # fixed_amount 모드: 한 종목당 원 단위 금액
+    # Phase 47 Cycle B — 매수액 수정자 (0개 이상). 조건이 맞으면 베이스 매수액에 배수 곱.
+    # 여러 개 매치 시 모두 누적 곱셈. ConditionGroup은 매수 조건과 동일 표현력.
+    size_modifiers: Optional[list[SizingModifier]] = None
     atr_risk_pct: Optional[float] = None
     atr_mult: Optional[float] = None
     max_position_pct: Optional[float] = None

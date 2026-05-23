@@ -617,6 +617,10 @@ function RiskSummarySection({ definition: d }: { definition: StrategyDef }) {
                 : `정률 (자본의 ${d.amount_pct}%)`
         }
       />
+      {(e.size_modifiers ?? []).length > 0 && (
+        <ExitRow label="매수액 수정자"
+                  v={`${(e.size_modifiers ?? []).length}개 — 조건 매치 시 배수 적용`} />
+      )}
       <ExitRow label="단일 종목 상한" v={`${maxPos}%`} />
       <ExitRow label="일일 손실 한도" v={`${dailyLoss}%`} />
       <ExitRow label="누적 손실 한도" v={`${maxDd}%`} />

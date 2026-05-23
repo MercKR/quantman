@@ -474,6 +474,32 @@ details.section-collapsible[open] > summary { margin-bottom: 14px; }
   border-left: 2px solid var(--accent);
 }
 
+/* 매수액 수정자 (Phase 47 Cycle B) */
+.size-modifiers { margin-top: 4px; }
+.modifier-card {
+  margin: 10px 0;
+  padding: 12px 14px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+}
+.modifier-head {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 10px; flex-wrap: wrap;
+}
+.modifier-tag {
+  font-size: 12px; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px;
+  background: var(--accent-soft, rgba(64, 158, 255, 0.08));
+  color: var(--accent);
+}
+.modifier-mul-input {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--fg);
+  margin-right: auto;
+}
+.modifier-mul-input input {
+  width: 70px; padding: 4px 8px;
+}
+
 /* 수동 다중 종목 선택기 */
 .multi-picker {
   position: relative;

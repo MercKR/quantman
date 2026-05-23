@@ -683,6 +683,42 @@ class Trader:
         else:  # pct_cash (default) — 현행 정률
             qty = int(cash * strat.amount_pct / 100.0 // prev_close)
 
+        # Phase 47 Cycle B — 매수액 수정자 적용 (베이스 qty × 누적 multiplier).
+        # ConditionGroup이 충족되면 multiplier 곱셈. 여러 modifier 매치 시 모두 누적.
+        # 평가 실패한 modifier는 skip (사용자 입력 검증 경계 — 잘못된 1개가 매수
+        # 전체를 막지 않음). 단일 종목 상한 클램프(아래)가 부풀린 qty도 차단.
+        modifiers = policy.get("size_modifiers") or []
+        if modifiers and qty > 0:
+            multiplier = 1.0
+            applied_count = 0
+            for mod in modifiers:
+                cond = mod.get("condition") if isinstance(mod, dict) else None
+                if not isinstance(cond, dict):
+                    continue
+                conds = cond.get("conditions") or []
+                if not conds:
+                    continue
+                logic = cond.get("logic", "AND")
+                try:
+                    mask = qc.build_signal_mask(
+                        dataset, conds, logic, current_symbol=symbol)
+                    matched = (not mask.empty) and bool(mask.iloc[-1])
+                except Exception as e:
+                    log.warning("size_modifier 평가 실패 [%s/%s]: %s",
+                                  strategy_id, symbol, e)
+                    continue
+                if matched:
+                    mul = float(mod.get("multiplier") or 1.0)
+                    multiplier *= mul
+                    applied_count += 1
+            if multiplier != 1.0:
+                old_qty = qty
+                qty = max(0, int(qty * multiplier))
+                decisions.append(order_log.decision(
+                    "size_modifier_applied", strategy_id, strat_name, symbol,
+                    f"수정자 {applied_count}개 매치 — 매수액 ×{multiplier:.3g} "
+                    f"({old_qty}주 → {qty}주)"))
+
         # L-10 — 모든 모드에 단일 종목 비중 상한 클램프.
         # capital은 통화 일치(KRW/USD)된 값.
         qty = min(qty, cap_qty)

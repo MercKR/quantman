@@ -42,6 +42,9 @@ DEFAULT_EXECUTION: dict[str, Any] = {
     "sizing_mode": "pct_cash",
     # fixed_amount 모드: 한 종목당 원 단위 금액. 0이면 발주 차단.
     "amount_krw": 0,
+    # Phase 47 Cycle B — 매수액 수정자 (0개 이상). 조건이 맞으면 베이스 매수액에 배수 곱.
+    # 비어 있으면 베이스 그대로 사용 (수정자 없음 == 동작 변화 없음).
+    "size_modifiers": [],
     # atr_risk 모드: 자본의 X%만 1트레이드에 위험
     "atr_risk_pct": 1.0,
     # ATR × 이 배수 = 1주당 손절폭(원). 수량 = (자본×risk%) ÷ (ATR×mult)

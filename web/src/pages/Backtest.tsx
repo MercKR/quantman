@@ -8,7 +8,8 @@ import Verdict from "../components/Verdict";
 import { fmt2, wonReadable } from "../format";
 import type {
   AnalysisResult, BacktestResult, BacktestRunSummary, ConditionGroup,
-  ExecutionPolicy, RebalanceIO, ScreenerSpecIO, StrategyDef, SymbolInfo,
+  ExecutionPolicy, RebalanceIO, ScreenerSpecIO, SizingModifier,
+  StrategyDef, SymbolInfo,
 } from "../types";
 import { EXECUTION_DEFAULTS, parseScreenerKey } from "../types";
 
@@ -58,6 +59,8 @@ export default function Backtest() {
   // 리스크/사이징 — exec_defaults.py의 default와 동기 (Phase 47 — 4지 통합)
   const [sizingMode, setSizingMode] = useState<SizingMode>(EXECUTION_DEFAULTS.sizing_mode);
   const [amountKrw, setAmountKrw] = useState(EXECUTION_DEFAULTS.amount_krw);
+  // Phase 47 Cycle B — 매수액 수정자 (0개 이상)
+  const [sizeModifiers, setSizeModifiers] = useState<SizingModifier[]>([]);
   const [atrRiskPct, setAtrRiskPct] = useState(EXECUTION_DEFAULTS.atr_risk_pct);
   const [atrMult, setAtrMult] = useState(EXECUTION_DEFAULTS.atr_mult);
   const [maxPositionPct, setMaxPositionPct] = useState(EXECUTION_DEFAULTS.max_position_pct);
@@ -129,6 +132,9 @@ export default function Backtest() {
     const execution: ExecutionPolicy = {
       sizing_mode: sizingMode,
       amount_krw: amountKrw,
+      // Phase 47 Cycle B — 빈 condition.conditions만 가진 modifier는 백엔드에서 skip되지만
+      // 직렬화 시 깨끗하게 전달하기 위해 비어있는 컨디션의 modifier는 필터링.
+      size_modifiers: sizeModifiers.filter((m) => m.condition.conditions.length > 0),
       atr_risk_pct: atrRiskPct,
       atr_mult: atrMult,
       max_position_pct: maxPositionPct,
@@ -294,6 +300,7 @@ export default function Backtest() {
           rebalance={rebalance} setRebalance={setRebalance}
           sizingMode={sizingMode} setSizingMode={setSizingMode}
           amountKrw={amountKrw} setAmountKrw={setAmountKrw}
+          sizeModifiers={sizeModifiers} setSizeModifiers={setSizeModifiers}
           atrRiskPct={atrRiskPct} setAtrRiskPct={setAtrRiskPct}
           atrMult={atrMult} setAtrMult={setAtrMult}
           maxPositionPct={maxPositionPct} setMaxPositionPct={setMaxPositionPct}
@@ -350,6 +357,7 @@ function BuildTab(props: {
   rebalance: RebalanceIO; setRebalance: (r: RebalanceIO) => void;
   sizingMode: SizingMode; setSizingMode: (v: SizingMode) => void;
   amountKrw: number; setAmountKrw: (v: number) => void;
+  sizeModifiers: SizingModifier[]; setSizeModifiers: (v: SizingModifier[]) => void;
   atrRiskPct: number; setAtrRiskPct: (v: number) => void;
   atrMult: number; setAtrMult: (v: number) => void;
   maxPositionPct: number; setMaxPositionPct: (v: number) => void;
@@ -377,6 +385,7 @@ function BuildTab(props: {
     screenerSpec, setScreenerSpec, rebalance, setRebalance,
     sizingMode, setSizingMode,
     amountKrw, setAmountKrw,
+    sizeModifiers, setSizeModifiers,
     atrRiskPct, setAtrRiskPct, atrMult, setAtrMult,
     maxPositionPct, setMaxPositionPct,
     dailyLossLimitPct, setDailyLossLimitPct,
@@ -527,6 +536,11 @@ function BuildTab(props: {
             </div>
           </div>
         )}
+
+        <SizeModifiersPanel
+          modifiers={sizeModifiers} setModifiers={setSizeModifiers}
+          symbols={symbols}
+        />
       </div>
 
       <div className="panel">
@@ -1112,6 +1126,66 @@ function SizingCard({ on, title, desc, onPick }: {
       <div className="sizing-card-title">{title}</div>
       <div className="sizing-card-desc">{desc}</div>
     </button>
+  );
+}
+
+// ── 매수액 수정자 (Phase 47 Cycle B — 조건이 맞으면 매수액에 ×N) ─────────────
+function SizeModifiersPanel({ modifiers, setModifiers, symbols }: {
+  modifiers: SizingModifier[];
+  setModifiers: (v: SizingModifier[]) => void;
+  symbols: SymbolInfo[];
+}) {
+  function addModifier() {
+    setModifiers([
+      ...modifiers,
+      { condition: { conditions: [], logic: "AND" }, multiplier: 0.5 },
+    ]);
+  }
+  function updateModifier(i: number, patch: Partial<SizingModifier>) {
+    setModifiers(modifiers.map((m, idx) => idx === i ? { ...m, ...patch } : m));
+  }
+  function removeModifier(i: number) {
+    setModifiers(modifiers.filter((_, idx) => idx !== i));
+  }
+  return (
+    <div className="size-modifiers">
+      <div className="sub-h" style={{ marginTop: 18 }}>매수액 수정자 (선택)</div>
+      <p className="muted" style={{ margin: "0 0 8px" }}>
+        조건이 충족되면 위의 매수액에 배수를 곱합니다. 여러 개 추가 가능 — 매치된 모든 배수가 누적됩니다.
+        예: 약세장이면 ×0.5, 변동성 급등 시 ×0.3.
+      </p>
+      {modifiers.map((mod, i) => (
+        <div key={i} className="modifier-card">
+          <div className="modifier-head">
+            <span className="modifier-tag">수정자 #{i + 1}</span>
+            <span className="modifier-mul-input">
+              매수액 ×
+              <input type="number" min={0} max={10} step={0.1}
+                     value={mod.multiplier}
+                     onChange={(e) => updateModifier(i, {
+                       multiplier: Number(e.target.value),
+                     })} />
+              {mod.multiplier === 0 && (
+                <span className="muted small" style={{ marginLeft: 6 }}>
+                  (진입 차단)
+                </span>
+              )}
+            </span>
+            <button type="button" className="ghost sm"
+                    onClick={() => removeModifier(i)}>삭제</button>
+          </div>
+          <ConditionBuilder
+            symbols={symbols}
+            group={mod.condition}
+            onChange={(g) => updateModifier(i, { condition: g })}
+            contextNote={"이 조건이 충족되는 날 매수액에 × " + mod.multiplier + " 적용"}
+          />
+        </div>
+      ))}
+      <button type="button" className="ghost sm" onClick={addModifier}>
+        + 수정자 추가
+      </button>
+    </div>
   );
 }
 

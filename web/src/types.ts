@@ -76,6 +76,14 @@ export interface SellRules {
   sell_amount_pct?: number;           // 100=전량 매도
 }
 
+/** 매수액 수정자 (Phase 47 Cycle B) — "조건이 맞으면 매수액에 ×N" 한 줄.
+ *  ConditionGroup은 매수/매도 조건과 동일 표현력 (지표·매크로·이력통계·중첩). */
+export interface SizingModifier {
+  condition: ConditionGroup;              // 빈칸 채우기 조건식 (ConditionBuilder 재사용)
+  multiplier: number;                     // 매치 시 매수액에 곱할 배수 (0 = 진입 차단, 0.5 = 절반 등)
+  note?: string;                          // 사용자 메모 (선택)
+}
+
 /** 체결 정책 — 모든 필드 optional, null/undefined는 글로벌 default 적용.
  *  Backend: quant_core.exec_defaults.DEFAULT_EXECUTION과 병합. */
 export interface ExecutionPolicy {
@@ -86,6 +94,10 @@ export interface ExecutionPolicy {
    *  - atr_risk:    트레이드당 atr_risk_pct% 위험, 손절폭 ATR×atr_mult */
   sizing_mode?: "fixed_amount" | "pct_cash" | "equal_weight" | "atr_risk";
   amount_krw?: number;                    // fixed_amount 모드: 한 종목당 원 단위 금액
+  /** 매수액 수정자 (Phase 47 Cycle B) — 조건이 충족되면 베이스 매수액에 배수 적용.
+   *  여러 개 정의 시 매치된 모든 수정자의 multiplier를 누적 곱셈. 예: "KOSPI 약세장
+   *  때 ×0.5", "VKOSPI 급등 시 ×0.3". ConditionGroup은 매수 조건과 동일 표현력. */
+  size_modifiers?: SizingModifier[];
   atr_risk_pct?: number;                  // atr_risk 모드: 트레이드당 자본의 N% 위험
   atr_mult?: number;                      // ATR × 이 배수 = 1주당 손절폭
   max_position_pct?: number;              // 단일 종목 비중 상한 (자본 %)
@@ -107,6 +119,7 @@ export const EXECUTION_DEFAULTS: Required<ExecutionPolicy> = {
   // 부담이 있어 신규 사용자 진입 장벽이 컸음. 가장 직관적인 정률을 default로.
   sizing_mode: "pct_cash",
   amount_krw: 1_000_000,                  // fixed_amount 전환 시 placeholder (100만원)
+  size_modifiers: [],                     // 기본 비어 있음 (수정자 없음 → 베이스 매수액 그대로)
   atr_risk_pct: 1.0,
   atr_mult: 2.0,
   max_position_pct: 10.0,
