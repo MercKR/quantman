@@ -43,6 +43,26 @@ def pull_strategies() -> list[dict]:
     return r.json()
 
 
+def pull_krx_status() -> dict[str, dict]:
+    """Phase 48 — KRX 종목별 거래 상태 (거래정지·관리종목 등) flag.
+
+    매수 발주 직전 trader가 차단 판단에 사용. 실패 시 빈 dict —
+    안전 fallback: status를 알 수 없으면 일반 종목으로 취급해 매수 통과.
+    (KIS broker가 거래정지 종목 거부로 2차 안전망 제공)
+
+    반환: {symbol: {"is_halt": bool, "is_managed": bool}}
+    """
+    try:
+        r = requests.get(f"{PLATFORM_URL}/krx/status",
+                         headers=_headers(), timeout=15)
+        if not r.ok:
+            return {}
+        return (r.json() or {}).get("status", {}) or {}
+    except Exception as e:
+        log.warning("krx_status pull 실패 (status 차단 skip): %s", e)
+        return {}
+
+
 def pull_risk_limits() -> dict:
     """Phase 38.7/38.10 — 사용자별 kill switch·drawdown 한도.
 

@@ -531,7 +531,14 @@ function PromoteModal({
                   일일 손실 한도·킬스위치 등 안전장치가 동작하지만
                   손실 위험을 완전히 제거하지 않습니다.
                 </div>
-                <p className="small">
+                {/* Phase 48 — 실전 활성 직전 "자문 아님 + 본인 룰 실행" 재확인 */}
+                <div className="muted small" style={{ marginTop: 10, lineHeight: 1.6 }}>
+                  본 서비스는 <b>투자자문업·투자일임업이 아니며</b>,
+                  본인이 직접 입력한 전략 룰만 그대로 실행합니다.
+                  매매 결과에 대한 책임은 전적으로 본인에게 있습니다.
+                </div>
+                <p className="small" style={{ marginTop: 10 }}>
+                  위 내용을 이해했으며, 본인 책임으로 실전 운용을 시작합니다.
                   계속하려면 <strong>실전 시작</strong>을 입력하세요.
                 </p>
                 <input

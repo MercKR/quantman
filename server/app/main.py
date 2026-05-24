@@ -496,6 +496,26 @@ def krx_refresh(_: None = Depends(_require_health_token)):
     return krx_cache.refresh()
 
 
+@app.get("/krx/status")
+def krx_status():
+    """종목별 거래 상태(거래정지·관리·투자위험·투자경고) flag.
+
+    Phase 48 — local app trader가 매수 직전 status 확인용. dataset 컬럼이
+    아닌 별도 메타이므로 별도 endpoint. is_halt/is_managed는 KRX 마감 후
+    NAVER 기준으로 일 1회 갱신되며 장중 새 거래정지는 다음 영업일에 반영된다.
+    KIS broker가 발주 거부로 2차 안전망을 제공.
+    """
+    all_metrics = krx_cache.get_all_metrics()
+    return {
+        "status": {
+            sym: {"is_halt": bool(m.get("is_halt")),
+                   "is_managed": bool(m.get("is_managed"))}
+            for sym, m in all_metrics.items()
+        },
+        "snapshot_date": krx_cache.get_status().get("snapshot_date"),
+    }
+
+
 @app.get("/health/naver")
 def naver_health():
     """NAVER 펀더멘털 캐시 상태."""

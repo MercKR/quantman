@@ -23,8 +23,8 @@ from .config import PENDING_PATH
 from .file_security import restrict_to_owner
 from .logging_setup import setup_logging
 from .secrets_store import load_kis
-from .sync_client import (pull_preview, pull_risk_limits, pull_strategies,
-                            push_snapshot)
+from .sync_client import (pull_krx_status, pull_preview, pull_risk_limits,
+                            pull_strategies, push_snapshot)
 from .trader import Trader
 
 log = logging.getLogger("localapp.runner")
@@ -170,8 +170,11 @@ def run_cycle(market: str = "KRX") -> dict:
 
     # Phase 38.7/38.10 — 사용자 위험 한도. 실패 시 빈 dict → default fallback.
     risk_limits = pull_risk_limits()
+    # Phase 48 — KRX 종목 상태 (거래정지·관리). 매수 직전 trader가 차단 판단.
+    krx_status = pull_krx_status()
     payload = trader.cycle(strategies, dataset, buy_candidates=buy_candidates,
-                             risk_limits=risk_limits, market=market)
+                             risk_limits=risk_limits, market=market,
+                             krx_status=krx_status)
     if preview_missing:
         payload.setdefault("cycle_summary", {})["preview_missing"] = True
 

@@ -8,6 +8,7 @@ import Strategies from "./pages/Strategies";
 import Monitor from "./pages/Monitor";
 import Pair from "./pages/Pair";
 import Settings from "./pages/Settings";
+import Legal from "./pages/Legal";
 
 export default function App() {
   const { email, ready } = useAuth();
@@ -19,6 +20,8 @@ export default function App() {
   if (!email) {
     return (
       <Routes>
+        {/* Phase 48 — 법적 페이지는 미로그인에서도 접근 가능 */}
+        <Route path="/legal/:section" element={<Legal />} />
         <Route path="*" element={<Login />} />
       </Routes>
     );
@@ -33,6 +36,7 @@ export default function App() {
         <Route path="/monitor" element={<Monitor />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/pair" element={<Pair />} />
+        <Route path="/legal/:section" element={<Legal />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

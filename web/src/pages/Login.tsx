@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "../auth";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as
@@ -12,10 +13,19 @@ export default function Login() {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  // Phase 48 — 가입 시 약관·개인정보·자동매매 위험 3중 동의 필수.
+  const [agreeTerms, setAgreeTerms] = useState(false);
+  const [agreePrivacy, setAgreePrivacy] = useState(false);
+  const [agreeRisk, setAgreeRisk] = useState(false);
   const googleBtn = useRef<HTMLDivElement | null>(null);
+  const signupReady = agreeTerms && agreePrivacy && agreeRisk;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (mode === "signup" && !signupReady) {
+      setErr("가입을 위해 세 가지 동의가 모두 필요합니다.");
+      return;
+    }
     setErr("");
     setBusy(true);
     try {
@@ -120,8 +130,37 @@ export default function Login() {
               </p>
             )}
           </div>
+          {mode === "signup" && (
+            <div className="signup-agree">
+              <label className="agree-row">
+                <input type="checkbox" checked={agreeTerms}
+                       onChange={(e) => setAgreeTerms(e.target.checked)} />
+                <span>
+                  <Link to="/legal/terms" target="_blank">이용약관</Link>에 동의합니다 (필수)
+                </span>
+              </label>
+              <label className="agree-row">
+                <input type="checkbox" checked={agreePrivacy}
+                       onChange={(e) => setAgreePrivacy(e.target.checked)} />
+                <span>
+                  <Link to="/legal/privacy" target="_blank">개인정보처리방침</Link>에 동의합니다 (필수)
+                </span>
+              </label>
+              <label className="agree-row">
+                <input type="checkbox" checked={agreeRisk}
+                       onChange={(e) => setAgreeRisk(e.target.checked)} />
+                <span>
+                  본 서비스는 <b>투자자문·투자일임이 아닌 셀프서비스 도구</b>이며,
+                  모든 매매 결과에 대한 책임은 본인에게 있음을 이해합니다 (필수)
+                  &nbsp;— <Link to="/legal/usage" target="_blank">자세히</Link>
+                </span>
+              </label>
+            </div>
+          )}
           {err && <div className="error">{err}</div>}
-          <button type="submit" disabled={busy} style={{ width: "100%" }}>
+          <button type="submit"
+                  disabled={busy || (mode === "signup" && !signupReady)}
+                  style={{ width: "100%" }}>
             {busy ? "처리 중…" : mode === "login" ? "로그인" : "회원가입"}
           </button>
         </form>
@@ -149,6 +188,13 @@ export default function Login() {
           >
             {mode === "login" ? "회원가입" : "로그인"}
           </a>
+        </div>
+        <div className="login-legal-footer">
+          <Link to="/legal/terms">이용약관</Link>
+          <span>·</span>
+          <Link to="/legal/privacy">개인정보처리방침</Link>
+          <span>·</span>
+          <Link to="/legal/usage">이용안내</Link>
         </div>
       </div>
     </div>

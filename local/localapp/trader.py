@@ -636,6 +636,21 @@ class Trader:
                 "전일 종가가 0 — 데이터 이상"))
             return False
 
+        # Phase 48 — 거래정지·관리종목·투자위험 자동 차단. KIS broker가 거부로
+        # 2차 안전망을 제공하나 사이클 중 불필요한 발주 시도를 줄인다. status를
+        # 알 수 없는 종목(서버 데이터 누락)은 일반 종목으로 취급 (보수 안전 fallback).
+        status = (getattr(self, "_krx_status", None) or {}).get(symbol) or {}
+        if status.get("is_halt"):
+            decisions.append(order_log.decision(
+                "skip_halted", strategy_id, strat_name, symbol,
+                "거래정지·정리매매 종목 — 매수 발주 차단"))
+            return False
+        if status.get("is_managed"):
+            decisions.append(order_log.decision(
+                "skip_managed", strategy_id, strat_name, symbol,
+                "관리·투자위험·투자경고 종목 — 매수 발주 차단"))
+            return False
+
         policy = _policy(strat_def)
 
         # 통화별 가용자금 결정.
@@ -1008,7 +1023,8 @@ class Trader:
               today: date | None = None,
               buy_candidates: list[dict] | None = None,
               risk_limits: dict | None = None,
-              market: str = "KRX") -> dict:
+              market: str = "KRX",
+              krx_status: dict[str, dict] | None = None) -> dict:
         """전략 목록을 1회 평가하고 매매한 뒤 동기화용 스냅샷을 반환한다.
 
         market: 이번 사이클이 다룰 시장 그룹('KRX' 또는 'US'). 청산은 해당 시장
@@ -1031,13 +1047,17 @@ class Trader:
         # 중첩 호출하지 않도록 호출 규약으로 강제한다. timeout=None으로 blocking.
         with _CYCLE_LOCK:
             return self._cycle_locked(strategies, dataset, today,
-                                       buy_candidates, risk_limits, market)
+                                       buy_candidates, risk_limits, market,
+                                       krx_status)
 
     def _cycle_locked(self, strategies, dataset, today, buy_candidates,
-                       risk_limits, market) -> dict:
+                       risk_limits, market, krx_status) -> dict:
         # Q5(데드락 방지): _in_cycle 플래그를 try/finally로 보장 — 예외 발생 시에도
         # 반드시 reset되어야 다음 cycle에서 _apply_fill의 평가가 정상 동작.
         self._in_cycle = True
+        # Phase 48 — 종목 상태 dict는 인스턴스에 저장해 _try_buy_one_symbol에서 사용.
+        # cycle 단위 stale 안전 (dict는 cycle 시작 시 fresh, 다음 cycle에서 다시 받음).
+        self._krx_status: dict[str, dict] = krx_status or {}
         try:
             return self._cycle_body(strategies, dataset, today,
                                      buy_candidates, risk_limits, market)

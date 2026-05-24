@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -26,6 +28,42 @@ log = logging.getLogger("localapp.kis_broker")
 _VTS = "https://openapivts.koreainvestment.com:29443"
 _REAL = "https://openapi.koreainvestment.com:9443"
 _TOKEN_CACHE = APP_DIR / ".kis_token.json"
+
+
+class _Throttle:
+    """Sliding window throttle — Phase 48.
+
+    KIS API 공식 한도: 개인 1초당 10건. 안전 마진 8건/초로 운영.
+    EGW00201 reactive retry(_get_retry/_post_retry)와 함께 다층 방어.
+    호출 burst 시 1초 윈도우가 차면 자동 sleep 후 진행.
+    프로세스 전역 단일 인스턴스(_GLOBAL_THROTTLE). 시세·주문·잔고가 모두 공유.
+    """
+
+    def __init__(self, max_calls: int = 8, window_sec: float = 1.0):
+        self.max_calls = max_calls
+        self.window_sec = window_sec
+        self._calls: list[float] = []
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            self._calls = [t for t in self._calls
+                            if now - t < self.window_sec]
+            if len(self._calls) >= self.max_calls:
+                wait = self.window_sec - (now - self._calls[0]) + 0.01
+                if wait > 0:
+                    time.sleep(wait)
+                    now = time.monotonic()
+                    self._calls = [t for t in self._calls
+                                    if now - t < self.window_sec]
+            self._calls.append(now)
+
+
+# 프로세스 전역 단일 throttle — 모든 KisBroker 인스턴스가 공유 (TWS의 50/s와
+# 다른 점: KIS는 계정/앱별 한도이므로 인스턴스가 분리돼도 같은 KIS 계정에
+# 부담을 주면 차단되므로 전역 공유가 안전).
+_GLOBAL_THROTTLE = _Throttle(max_calls=8, window_sec=1.0)
 
 
 def _kis_check(r: requests.Response) -> dict:
@@ -175,11 +213,14 @@ class KisBroker:
         rate limit은 HTTP 500 + msg_cd EGW00201로 오며 일시적 — 짧게 backoff 후
         재시도. 그 외 오류는 _kis_check가 즉시 raise. base 미지정 시 주문/잔고
         도메인(self.base), 시세 조회는 self.quote_base를 넘긴다.
+
+        Phase 48: proactive sliding-window throttle(_GLOBAL_THROTTLE) — 호출 전
+        8건/초 한도 자체 페이싱. EGW00201 reactive retry는 안전망으로 유지.
         """
-        import time
         base = base or self.base
         last = None
         for i in range(tries):
+            _GLOBAL_THROTTLE.acquire()
             r = requests.get(f"{base}{path}",
                              headers=self._headers(tr), timeout=15, params=params)
             if r.status_code == 200:
@@ -204,9 +245,11 @@ class KisBroker:
         재시도한다 — 이 코드는 주문이 생성되기 전에 거부된 것이라 중복 발주
         위험이 없다. 그 외 오류(HTTP 500 등 모호한 응답)는 즉시 raise해 호출자가
         판단하게 한다(섣부른 재시도로 이중 발주 방지).
+
+        Phase 48: proactive throttle(_GLOBAL_THROTTLE) — 호출 전 8건/초 페이싱.
         """
-        import time
         for i in range(tries):
+            _GLOBAL_THROTTLE.acquire()
             r = requests.post(f"{self.base}{path}",
                               headers=self._headers(tr), timeout=timeout, json=body)
             if r.status_code == 200:

@@ -270,6 +270,11 @@ export default function Backtest() {
       <p className="page-sub">
         조건을 문장으로 채우고 → 통계로 발견하고 → 과거 데이터로 검증하세요.
       </p>
+      {/* Phase 48 — 자문 아님 명시 (가입 동의 외에 전략 빌더 진입 시에도 재고지) */}
+      <div className="self-direction-banner">
+        ℹ 본 도구는 <b>본인이 직접 입력한 조건·룰</b>만 실행하는 셀프서비스형 자동매매
+        도구이며, 회사가 종목을 추천하거나 매매 판단을 일임받지 않습니다 (투자자문업·일임업 아님).
+      </div>
 
       <div className="tabs">
         {([
@@ -967,6 +972,17 @@ function ResultTab({
   return (
     <div className="panel">
       <h3>'{name}' 백테스트 결과</h3>
+      {/* Phase 48 — NFA 2-29 수준 가정적 수익률 disclaimer (동일 prominence) */}
+      <div className="hypothetical-banner">
+        <strong>⚠ 가정적(Hypothetical) 결과 — 실제 매매가 아닙니다</strong>
+        <p>
+          본 결과는 과거 데이터로 모의 산출된 <b>가정적 수익률</b>입니다.
+          백테스트와 실거래 사이에는 종종 큰 차이가 발생합니다.
+          과거 성과는 <b>미래 수익을 보장하지 않습니다.</b>
+          슬리피지·수수료·세금은 아래 "백테스트 가정"의 설정값으로 반영되었으며,
+          실제 시장 조건에서는 더 크거나 작을 수 있습니다.
+        </p>
+      </div>
       <Verdict metrics={metrics} />
       <div className="cards metrics" style={{ marginBottom: 18 }}>
         <Stat label="총수익률" value={`${fmt2(metrics.total_return)}%`}
