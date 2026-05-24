@@ -76,6 +76,12 @@ class UserSettings(SQLModel, table=True):
     alert_on_killswitch: bool = True
     alert_on_daily_loss_pct: float = 2.0   # |손실|이 이 % 도달 시 webhook
     alert_on_unfilled_count: int = 5       # 미체결이 N건 이상 누적되면 webhook
+    # Phase 48 P1-C — 슬리피지 임계 초과 알림. 0/null이면 비활성.
+    alert_on_slippage_bps: int = 30        # 평균 슬리피지가 N bps 초과 시 webhook (1bp=0.01%)
+    last_alerted_slippage: Optional[datetime] = None
+    # Phase 48 P1-D — 일일 거래 한도 (0=비활성, 가이드라인 부록2 권장).
+    daily_turnover_limit_krw: int = 0       # 일일 거래 대금 한도(원). 도달 시 신규 진입 차단.
+    daily_trade_count_limit: int = 0        # 일일 거래 횟수 한도. 도달 시 신규 진입 차단.
     last_alerted_killswitch: Optional[datetime] = None
     last_alerted_loss: Optional[datetime] = None
     # Phase 38.7 — kill switch 일일 손실 한도 (자본 대비 %, 1~10 범위 권장).

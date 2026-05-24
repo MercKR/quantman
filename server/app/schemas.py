@@ -145,6 +145,11 @@ class UserSettingsIO(BaseModel):
     alert_on_killswitch: bool = True
     alert_on_daily_loss_pct: float = 2.0
     alert_on_unfilled_count: int = 5
+    # Phase 48 P1-C — 슬리피지 임계 초과 알림 (bps, 0=비활성)
+    alert_on_slippage_bps: int = 30
+    # Phase 48 P1-D — 일일 거래 한도 (0=비활성)
+    daily_turnover_limit_krw: int = 0
+    daily_trade_count_limit: int = 0
     # Phase 38.7 — kill switch 일일 손실 한도. None이면 default(3.0)
     kill_switch_daily_loss_pct: Optional[float] = None
     # Phase 38.10 — 누적 drawdown 한도. None이면 default(20.0)

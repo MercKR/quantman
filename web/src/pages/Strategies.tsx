@@ -414,10 +414,24 @@ function DetailPanel({
                 ) : (
                   <div className="live-active">
                     <span className="sc-badge live">실전 운용 중</span>
-                    <button className="ghost sm"
-                      onClick={() => onChangeMode("paper")}>
-                      모의로 되돌리기
-                    </button>
+                    <div className="live-actions">
+                      <button className="ghost sm"
+                        onClick={() => onChangeMode("paper")}>
+                        모의로 되돌리기
+                      </button>
+                      {/* Phase 48 P1-A — 전략 레벨 일시정지 (mode=draft).
+                          신규 진입만 차단, 보유 종목은 청산 규칙대로 계속 평가. */}
+                      <button className="danger-btn sm"
+                        title="신규 진입 즉시 중지 (보유 종목은 청산 규칙대로 처리)"
+                        onClick={() => {
+                          if (window.confirm("이 전략의 신규 진입을 즉시 중지합니다.\n"
+                            + "보유 종목은 청산 규칙대로 계속 평가됩니다.\n계속할까요?")) {
+                            onChangeMode("draft");
+                          }
+                        }}>
+                        ⏸ 즉시 일시정지
+                      </button>
+                    </div>
                   </div>
                 )}
               </section>

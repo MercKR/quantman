@@ -363,6 +363,11 @@ export interface UserSettingsIO {
   alert_on_killswitch: boolean;
   alert_on_daily_loss_pct: number;
   alert_on_unfilled_count: number;
+  // Phase 48 P1-C — 슬리피지 임계 초과 알림 (bps, 0=비활성)
+  alert_on_slippage_bps: number;
+  // Phase 48 P1-D — 일일 거래 한도 (0=비활성)
+  daily_turnover_limit_krw: number;
+  daily_trade_count_limit: number;
   // Phase 38.7 — kill switch 일일 손실 한도(%). null이면 글로벌 default(3.0).
   kill_switch_daily_loss_pct: number | null;
   // Phase 38.10 — 누적 drawdown 한도(%). null이면 글로벌 default(20.0).

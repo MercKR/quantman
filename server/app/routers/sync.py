@@ -210,6 +210,25 @@ def _check_alerts(session: Session, user_id: int, payload: dict) -> None:
                 s.last_alerted_reconcile = now
                 session.add(s); session.commit()
 
+    # 4. Phase 48 P1-C — 슬리피지 임계 초과 알림 (avg_bps)
+    slip = (payload or {}).get("slippage") or {}
+    avg_bps = slip.get("avg_bps")
+    sample_n = int(slip.get("n") or 0)
+    threshold = int(s.alert_on_slippage_bps or 0)
+    # 표본 5건 이상 + 임계값 활성 시만 평가 (소수 표본은 노이즈)
+    if (threshold > 0 and avg_bps is not None and sample_n >= 5
+            and float(avg_bps) > threshold):
+        last = s.last_alerted_slippage
+        if last is None or now - last > cooldown:
+            ok = _post_webhook(
+                s.alert_webhook_url,
+                f"📉 [Quant] 평균 슬리피지 {float(avg_bps):.1f}bps 초과 "
+                f"(임계 {threshold}bps, 표본 {sample_n}건). "
+                f"체결가가 의도가에서 평균 {float(avg_bps)/100:.2f}%p 벗어남.")
+            if ok:
+                s.last_alerted_slippage = now
+                session.add(s); session.commit()
+
 
 @router.get("/strategies", response_model=list[StrategyOut])
 def pull_strategies(
@@ -245,6 +264,11 @@ def pull_risk_limits(
         "max_drawdown_pct": s.max_drawdown_pct if s else None,
         "us_buying_power_mode": (
             s.us_buying_power_mode if s else "integrated"),
+        # Phase 48 P1-D — 일일 거래 한도 (0이면 비활성)
+        "daily_turnover_limit_krw": (
+            int(s.daily_turnover_limit_krw or 0) if s else 0),
+        "daily_trade_count_limit": (
+            int(s.daily_trade_count_limit or 0) if s else 0),
     }
 
 

@@ -850,6 +850,14 @@ thead th { color: var(--muted); font-weight: 600; }
 }
 .hypothetical-banner strong { display: block; margin-bottom: 6px; color: var(--amber, #b45309); font-size: 14px; }
 .hypothetical-banner p { margin: 0; color: var(--fg); }
+
+/* Phase 48 P1-A — 실전 운용 중 액션 그룹 (모의 되돌리기 + 즉시 일시정지) */
+.live-actions {
+  display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;
+}
+.danger-btn.sm {
+  font-size: 12px; padding: 4px 10px;
+}
 .spacer { height: 10px; }
 .or-divider {
   display: flex; align-items: center; text-align: center;

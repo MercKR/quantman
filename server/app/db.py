@@ -100,6 +100,16 @@ def _migrate() -> None:
                         conn.exec_driver_sql('ALTER TABLE "usersettings" ADD COLUMN last_alerted_reconcile TIMESTAMP')
                     if "us_buying_power_mode" not in us_cols:
                         conn.exec_driver_sql("ALTER TABLE \"usersettings\" ADD COLUMN us_buying_power_mode VARCHAR DEFAULT 'integrated'")
+                    # Phase 48 P1-C — 슬리피지 임계 알림
+                    if "alert_on_slippage_bps" not in us_cols:
+                        conn.exec_driver_sql('ALTER TABLE "usersettings" ADD COLUMN alert_on_slippage_bps INTEGER DEFAULT 30')
+                    if "last_alerted_slippage" not in us_cols:
+                        conn.exec_driver_sql('ALTER TABLE "usersettings" ADD COLUMN last_alerted_slippage TIMESTAMP')
+                    # Phase 48 P1-D — 일일 거래 금액·횟수 한도 (0=비활성)
+                    if "daily_turnover_limit_krw" not in us_cols:
+                        conn.exec_driver_sql('ALTER TABLE "usersettings" ADD COLUMN daily_turnover_limit_krw BIGINT DEFAULT 0')
+                    if "daily_trade_count_limit" not in us_cols:
+                        conn.exec_driver_sql('ALTER TABLE "usersettings" ADD COLUMN daily_trade_count_limit INTEGER DEFAULT 0')
     except Exception:  # noqa: BLE001  — 마이그레이션 실패가 기동을 막지 않도록
         # S-11 — print는 로그 수집기에 안 잡혀 배포 "성공"인데 스키마 손상이
         # 침묵하는 위험. exception 레벨로 traceback까지 남겨야 운영에서 보임.

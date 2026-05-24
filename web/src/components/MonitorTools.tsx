@@ -178,6 +178,45 @@ export function AlertSettings() {
             서버 cron이 N일 연속 preview 생성 실패 시 webhook
           </span>
         </div>
+        {/* Phase 48 P1-C — 슬리피지 임계 초과 알림 */}
+        <div>
+          <label>슬리피지 알림 임계 (bps)</label>
+          <input type="number" min={0} max={500} step={5}
+                 value={s.alert_on_slippage_bps}
+                 onChange={(e) => update("alert_on_slippage_bps",
+                                          Math.max(0, Number(e.target.value)))} />
+          <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
+            평균 슬리피지가 이 bps 초과 시 webhook (0=비활성, 1bp=0.01%)
+          </span>
+        </div>
+      </div>
+
+      <h4 style={{ marginTop: 20, marginBottom: 8 }}>
+        일일 거래 한도 <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>
+          (0이면 비활성, 도달 시 신규 진입 차단)
+        </span>
+      </h4>
+      <div className="alert-form">
+        <div>
+          <label>일일 거래 대금 한도 (원)</label>
+          <input type="number" min={0} step={1000000}
+                 value={s.daily_turnover_limit_krw}
+                 onChange={(e) => update("daily_turnover_limit_krw",
+                                          Math.max(0, Number(e.target.value)))} />
+          <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
+            예: 10000000 = 1천만원. 0이면 비활성
+          </span>
+        </div>
+        <div>
+          <label>일일 거래 횟수 한도</label>
+          <input type="number" min={0} max={1000}
+                 value={s.daily_trade_count_limit}
+                 onChange={(e) => update("daily_trade_count_limit",
+                                          Math.max(0, Number(e.target.value)))} />
+          <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
+            0이면 비활성
+          </span>
+        </div>
         <button disabled={busy} onClick={save}>
           {busy ? "저장 중…" : "설정 저장"}
         </button>

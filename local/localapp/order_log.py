@@ -3,6 +3,13 @@
 - orders.jsonl: 주문 단위 이벤트 (submitted/filled/cancelled/rejected)
 - cycles.jsonl: 사이클 단위 요약 (어떤 전략이 진입·스킵됐고 사유는)
 - slippage.json: 최근 N건의 (intended, fill, bps) 누적 통계
+
+Phase 48 P2-A — 로그 보존 정책:
+모든 jsonl은 append-only이며 자동 rotation·archive를 수행하지 않는다. 자본시장법
+관련 행정처분 시효(5년) + FINRA Reg Notice 15-09 권장(최소 5년)을 충족하도록
+**사용자가 직접 백업·삭제**한다. 운영자가 자동 archival을 도입하려면 5년 retention을
+명시한 별도 정책 필요. orders.jsonl/cycles.jsonl은 텍스트라 1년 운영 누적도
+수십 MB 수준 — 자동 rotation 없이도 일반 PC 디스크에 안전 보관 가능하다.
 """
 
 from __future__ import annotations

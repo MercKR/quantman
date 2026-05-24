@@ -651,6 +651,23 @@ class Trader:
                 "관리·투자위험·투자경고 종목 — 매수 발주 차단"))
             return False
 
+        # Phase 48 P1-D — 일일 거래 한도 차단 (한도 활성 시만 호출).
+        tcount_limit = getattr(self, "_daily_trade_count_limit", 0)
+        tturn_limit = getattr(self, "_daily_turnover_limit_krw", 0)
+        if tcount_limit > 0 or tturn_limit > 0:
+            today_iso = kst_today().isoformat()
+            tcount, tturn = self._today_buy_summary(today_iso)
+            if tcount_limit > 0 and tcount >= tcount_limit:
+                decisions.append(order_log.decision(
+                    "skip_daily_count", strategy_id, strat_name, symbol,
+                    f"일일 거래 횟수 한도 도달 ({tcount}/{tcount_limit}) — 매수 차단"))
+                return False
+            if tturn_limit > 0 and tturn >= tturn_limit:
+                decisions.append(order_log.decision(
+                    "skip_daily_turnover", strategy_id, strat_name, symbol,
+                    f"일일 거래 대금 한도 도달 ({tturn:,}/{tturn_limit:,} KRW) — 매수 차단"))
+                return False
+
         policy = _policy(strat_def)
 
         # 통화별 가용자금 결정.
@@ -926,6 +943,57 @@ class Trader:
             return None                    # 여전히 상위 N — 유지
         return "리밸런싱"
 
+    def _today_buy_summary(self, today_iso: str) -> tuple[int, int]:
+        """오늘자 매수 거래의 (횟수, 누적 금액 KRW) 반환 (Phase 48 P1-D).
+
+        TRADES_PATH(JSONL)를 한 번 스캔. 일 단위 한도 체크용이라 매수만 카운트.
+        한도 비활성(둘 다 0)이면 호출 자체 skip하므로 비용은 활성 사용자만.
+        """
+        count = 0
+        turnover = 0
+        if not TRADES_PATH.exists():
+            return 0, 0
+        try:
+            with open(TRADES_PATH, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    if ev.get("action") != "buy":
+                        continue
+                    ts = str(ev.get("ts") or "")
+                    if not ts.startswith(today_iso):
+                        continue
+                    count += 1
+                    qty = int(ev.get("qty", 0) or 0)
+                    price = float(ev.get("price", 0) or 0)
+                    turnover += qty * int(price)
+        except Exception as e:
+            log.warning("[P1-D] today_buy_summary 읽기 실패: %s", e)
+        return count, turnover
+
+    def _in_kis_maintenance_window(self, now_kst: datetime) -> bool:
+        """KIS 정기 점검 시간대 추정 (Phase 48 P1-B).
+
+        KIS 공식 시간이 문서화되지 않아 eFriend Plus 공지·관찰 기반 보수적 추정:
+          - 평일(월~금) 03:00 ~ 06:00 — 시스템 점검
+          - 토요일 17:00 이후 ~ 일요일 종일 ~ 월요일 07:00 — 주말 점검
+        시장 사이클(08:55, 15:45 등)은 이 윈도우 밖이라 정상 운영 영향 없음.
+        Edge: 사용자가 cycle을 수동 트리거할 때 보호. False면 정상 진행.
+        """
+        wd = now_kst.weekday()  # 0=월, 5=토, 6=일
+        h = now_kst.hour
+        if wd == 5 and h >= 17:                      # 토 저녁
+            return True
+        if wd == 6:                                    # 일 종일
+            return True
+        if wd == 0 and h < 7:                         # 월 새벽
+            return True
+        if wd in (1, 2, 3, 4) and 3 <= h < 6:         # 평일 새벽 점검
+            return True
+        return False
+
     def _evaluate_split_buy_additions(self, dataset: dict,
                                           decisions: list[dict],
                                           sold_this_cycle: set[str],
@@ -1069,18 +1137,39 @@ class Trader:
         today = today or kst_today()
         decisions: list[dict] = []
 
+        # Phase 48 P1-B — KIS 정기 점검 시간대 자동 차단.
+        # 점검 시간에는 사이클 진입 X (KIS 응답이 비정상이라 안전 우선).
+        now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+        if self._in_kis_maintenance_window(now_kst):
+            decisions.append(order_log.decision(
+                "skip_maintenance", "", "", "",
+                "KIS 정기 점검 시간대 — 자동매매 보류 (점검 후 다음 cron에서 자동 재개)"))
+            log.info("[P1-B] KIS 점검 시간대 — cycle skip (%s)",
+                      now_kst.strftime("%a %H:%M"))
+            return {"balance": {"cash": 0, "total_eval": 0},
+                    "positions": [], "equity": self.equity[-365:],
+                    "trades": [], "decisions": decisions,
+                    "cycle_summary": {"skipped_reason": "kis_maintenance"}}
+
         # ── 0. 이전 사이클 미체결 정리 ─────────────────────────────────────
         self._resolve_pending(decisions)
 
         # ── 1. 자본·day_start 갱신, kill switch 평가 ──────────────────────
         # equity는 계좌 전체 통합(국내+해외, KRW) — kill switch는 시장 무관 계좌 단위.
+        # Phase 48 P1-B — 헬스체크 강화. 잔고 조회 실패는 KIS API 단절 신호이므로
+        # 0으로 fallback하지 말고 cycle 전체를 중단 (잘못된 equity로 매도 평가 방지).
         try:
             snap_pre = self.broker.account_snapshot()
             equity_now = _unified_equity_krw(snap_pre["balance"])
         except Exception as e:
-            log.error("잔고 조회 실패: %s", e)
-            equity_now = 0.0
-            snap_pre = {"balance": {"cash": 0, "total_eval": 0}, "positions": []}
+            log.error("[P1-B] KIS 잔고 조회 실패 — cycle 중단: %s", e)
+            decisions.append(order_log.decision(
+                "skip_kis_health", "", "", "",
+                f"KIS API 응답 실패 — 자동매매 보류 (다음 사이클 재시도): {e}"))
+            return {"balance": {"cash": 0, "total_eval": 0},
+                    "positions": [], "equity": self.equity[-365:],
+                    "trades": [], "decisions": decisions,
+                    "cycle_summary": {"skipped_reason": "kis_health_fail"}}
 
         killswitch.update_day_start(equity_now, today.isoformat())
         ks_state = killswitch.load()
@@ -1102,6 +1191,9 @@ class Trader:
         # Q5: 체결 후 즉시 평가용으로 인스턴스에 저장. 같은 사이클 안의 모든
         # _apply_fill 호출이 동일 한도를 본다.
         self._daily_loss_limit_pct = float(daily_loss_limit_pct)
+        # Phase 48 P1-D — 일일 거래 한도 (0 = 비활성).
+        self._daily_turnover_limit_krw = int(rl.get("daily_turnover_limit_krw") or 0)
+        self._daily_trade_count_limit = int(rl.get("daily_trade_count_limit") or 0)
 
         if not ks_active:
             reason = killswitch.check_daily_loss(
