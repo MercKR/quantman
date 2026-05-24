@@ -468,18 +468,28 @@ def refresh_all_users_preview(data_source: str) -> dict:
 
     cron 종료 시 호출됨. KIS 호출 0회, 가벼움 (사용자당 수십ms 예상).
     data_source == 'dataset_kr' (마지막 cron, 18:15) 일 때만 webhook 발송 — 스팸 방지.
+
+    Phase 49 — per-user session 격리: 한 user의 SQL error가
+    InFailedSqlTransaction으로 다른 user를 cascade로 죽이지 않도록 사용자마다
+    새 Session 생성. 이전엔 하나의 session 공유로 첫 user fail 시 14명+ 전원
+    "current transaction is aborted" 로 실패하던 패턴 차단.
     """
     n_ok = n_skipped = n_failed = n_alerted = 0
     is_final_cron = data_source == "dataset_kr"
+    # 1) 사용자 ID 목록만 가벼운 세션으로 가져옴
     with Session(engine) as session:
-        users = session.exec(select(User)).all()
-        for u in users:
-            try:
-                preview = build_user_preview(session, u.id, data_source)
+        user_ids = [u.id for u in session.exec(select(User)).all()]
+
+    # 2) 각 사용자마다 독립 세션 — transaction 격리
+    for uid in user_ids:
+        webhook_sent = False
+        try:
+            with Session(engine) as session:
+                preview = build_user_preview(session, uid, data_source)
                 if not preview.get("available"):
                     n_skipped += 1
                     continue
-                snap = _latest_snapshot(session, u.id)
+                snap = _latest_snapshot(session, uid)
                 if snap is None:
                     n_skipped += 1
                     continue
@@ -487,18 +497,23 @@ def refresh_all_users_preview(data_source: str) -> dict:
                 new_payload["next_day_preview"] = preview
                 snap.payload = new_payload
                 session.add(snap)
-                n_ok += 1
 
                 # 최종 cron 후 webhook 발송 (사용자가 webhook URL 설정한 경우)
                 if is_final_cron:
-                    s = session.get(UserSettings, u.id)
+                    s = session.get(UserSettings, uid)
                     if s and s.alert_webhook_url:
-                        if _post_preview_webhook(s.alert_webhook_url, preview):
-                            n_alerted += 1
-            except Exception as e:
-                _log.exception("user %d preview 실패: %s", u.id, e)
-                n_failed += 1
-        session.commit()
+                        # _post_preview_webhook은 자체 try/except 처리 — bool 반환
+                        webhook_sent = _post_preview_webhook(
+                            s.alert_webhook_url, preview)
+
+                session.commit()
+            # commit 성공 후 카운트
+            n_ok += 1
+            if webhook_sent:
+                n_alerted += 1
+        except Exception as e:
+            _log.exception("user %d preview 실패: %s", uid, e)
+            n_failed += 1
 
     _log.info("preview 갱신 [%s]: 성공 %d · skip %d · 실패 %d · 알림 %d",
               data_source, n_ok, n_skipped, n_failed, n_alerted)
