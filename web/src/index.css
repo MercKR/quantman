@@ -933,6 +933,14 @@ thead th { color: var(--muted); font-weight: 600; }
   z-index: 60;
 }
 .metric-hint:hover::after { opacity: 1; }
+/* Phase 55 — lg variant: 16px ⓘ + wider tooltip (280px). long description hover 전환용. */
+.metric-hint.lg {
+  width: 16px; height: 16px; font-size: 11px;
+  background: var(--accent-soft); color: var(--accent-strong);
+}
+.metric-hint.lg::after { width: 280px; }
+/* 인라인 hint (텍스트 옆이 아닌 단독 위치). 부모가 inline일 필요 없음. */
+.hint-row { display: inline-flex; align-items: center; gap: 6px; }
 
 /* 결과 해석 카드 */
 .verdict {

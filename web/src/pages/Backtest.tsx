@@ -450,10 +450,9 @@ function BuildTab(props: {
 
       {/* Phase 49 — 매수 조건 통합 문장 sentence. ①조건 · ②가격 · ③수량 · ④종목 4 절. */}
       <div className="panel buy-sentence-panel">
-        <h3>2. 매수 조건</h3>
-        <p className="muted" style={{ margin: "0 0 16px" }}>
-          한 문장으로 표현 — <strong>① 조건이 충족되는 날 · ② 정해진 가격으로 · ③ 정해진 금액만큼 · ④ 매수후보를 매수합니다.</strong>
-        </p>
+        <h3>2. 매수 조건
+          <span className="metric-hint lg" data-tip="한 문장으로 표현 — ① 조건이 충족되는 날 · ② 정해진 가격으로 · ③ 정해진 금액만큼 · ④ 매수후보를 매수합니다.">ⓘ</span>
+        </h3>
 
         {/* ① 조건 절 */}
         <section className="sentence-clause">
@@ -461,10 +460,8 @@ function BuildTab(props: {
             <span className="sentence-clause-num">①</span>
             <span className="sentence-clause-label">조건 —</span>
             <span className="muted small">아래 조건이 충족되는 날</span>
+            <span className="metric-hint lg" data-tip="가격·수익률 지표는 모두 정규장 종가(15:30 마감) 기준. 시간외 단일가는 반영되지 않습니다.">ⓘ</span>
           </div>
-          <p className="muted small" style={{ margin: "0 0 10px" }}>
-            가격·수익률 지표는 모두 <strong>정규장 종가</strong>(15:30 마감) 기준이며, 시간외 단일가는 반영되지 않습니다.
-          </p>
           <ConditionBuilder
             symbols={symbols} group={buy} onChange={setBuy}
             contextNote={
@@ -496,9 +493,6 @@ function BuildTab(props: {
             <span className="sentence-clause-label">만큼 —</span>
             <span className="muted small">한 종목당 투입 금액</span>
           </div>
-          <p className="muted small" style={{ margin: "0 0 10px" }}>
-            4가지 방식 중 하나를 선택하세요.
-          </p>
           <div className="sizing-cards">
             <SizingCard
               on={sizingMode === "pct_cash"} title="정률"
@@ -630,10 +624,8 @@ function BuildTab(props: {
 
         <div className="sub-h" style={{ marginTop: 4 }}>
           실시간 매도 <span className="muted">— tick마다 평가, 즉시 발주</span>
+          <span className="metric-hint lg" data-tip="09:00~15:30 정규장 중 KIS 시세 WebSocket으로 매 tick 평가. 가격이 닿는 즉시 매도 발주.">ⓘ</span>
         </div>
-        <p className="muted" style={{ margin: "0 0 8px" }}>
-          09:00 ~ 15:30 정규장 중 KIS 시세 WebSocket으로 매 tick 평가합니다. 가격이 닿는 즉시 매도 발주.
-        </p>
         <div className="rule-list">
           {RULE_DEFS.filter((r) => r.phase === "realtime").map((r) => {
             const st = exits[r.key];
@@ -655,11 +647,9 @@ function BuildTab(props: {
         </div>
 
         <div className="sub-h" style={{ marginTop: 18 }}>
-          시가 매도 <span className="muted">— 매일 08:55 사이클에서 평가, 09:00 시초가 매도</span>
+          시가 매도 <span className="muted">— 매일 08:55 사이클, 09:00 시초가 매도</span>
+          <span className="metric-hint lg" data-tip="정규장 종가 데이터로 일봉 단위 평가. 보유기간 만료·지표 기반 조건이 여기 해당.">ⓘ</span>
         </div>
-        <p className="muted" style={{ margin: "0 0 8px" }}>
-          정규장 종가 데이터로 일봉 단위 평가합니다. 보유기간 만료·지표 기반 조건이 여기 해당.
-        </p>
         <div className="rule-list">
           {RULE_DEFS.filter((r) => r.phase === "eod").map((r) => {
             const st = exits[r.key];
@@ -679,9 +669,10 @@ function BuildTab(props: {
             );
           })}
         </div>
-        <p className="muted" style={{ margin: "8px 0 4px" }}>
-          추가 조건 — dataset 지표 기반 매도 트리거. 위 룰과 함께 평가, 먼저 트리거되는 쪽으로 매도.
-        </p>
+        <div className="sub-h" style={{ marginTop: 18 }}>
+          추가 조건 <span className="muted">— dataset 지표 기반 매도 트리거</span>
+          <span className="metric-hint lg" data-tip="위 룰과 함께 평가, 먼저 트리거되는 쪽으로 매도.">ⓘ</span>
+        </div>
         <ConditionBuilder symbols={symbols} group={sell} onChange={setSell} />
 
         <div className="amount-row" style={{ marginTop: 16 }}>
@@ -779,10 +770,6 @@ function BuildTab(props: {
             <span className="muted">% — 이 이상 갭이면 추가 비용 발생. default 1.0%.</span>
           </div>
         )}
-        <div className="muted small" style={{ marginTop: 6 }}>
-          ⓘ 이 4 항목은 <strong>백테스트 결과의 보수성</strong>에만 영향을 줍니다.
-          실제 모의투자·실전 매매에선 KIS 실 수수료·실 슬리피지가 적용됩니다.
-        </div>
       </details>
 
       {/* Phase 51 — 6. 자금 details. default 1,000만원이라 접혀도 백테스트 가능. */}
@@ -1355,10 +1342,8 @@ function BuyPricePanel({ useLimit, setUseLimit, buyTolerancePct, setBuyTolerance
             <input type="number" min={0.1} max={5} step={0.1} value={buyTolerancePct}
                    onChange={(e) => setBuyTolerancePct(Number(e.target.value))} />
             <span className="muted">% 까지 매수 허용</span>
-          </div>
-          <div className="muted small" style={{ marginTop: 4 }}>
-            ⓘ 발주가 = 전일 종가 × (1 + {fmt2(buyTolerancePct)}%). 시초가가 이보다 높으면 미체결 폐기.
-            변동성 큰 종목은 N 키우면 잡힐 확률 ↑, 작으면 갭상승 자동 회피. default 1%.
+            <span className="metric-hint lg"
+                  data-tip={`발주가 = 전일 종가 × (1 + ${fmt2(buyTolerancePct)}%). 시초가가 이보다 높으면 미체결 폐기. 변동성 큰 종목은 N 키우면 잡힐 확률↑, 작으면 갭상승 자동 회피. default 1%.`}>ⓘ</span>
           </div>
         </>
       ) : (
@@ -1405,11 +1390,10 @@ function SizeModifiersPanel({ modifiers, setModifiers, symbols }: {
   }
   return (
     <div className="size-modifiers">
-      <div className="sub-h" style={{ marginTop: 18 }}>매수액 수정자 (선택)</div>
-      <p className="muted" style={{ margin: "0 0 8px" }}>
-        조건이 충족되면 위의 매수액에 배수를 곱합니다. 여러 개 추가 가능 — 매치된 모든 배수가 누적됩니다.
-        예: 약세장이면 ×0.5, 변동성 급등 시 ×0.3.
-      </p>
+      <div className="sub-h" style={{ marginTop: 18 }}>
+        매수액 수정자 <span className="muted small">(선택)</span>
+        <span className="metric-hint lg" data-tip="조건이 충족되면 위의 매수액에 배수를 곱합니다. 여러 개 추가 가능 — 매치된 모든 배수가 누적. 예: 약세장이면 ×0.5, 변동성 급등 시 ×0.3.">ⓘ</span>
+      </div>
       {modifiers.map((mod, i) => (
         <div key={i} className="modifier-card">
           <div className="modifier-head">
@@ -1479,10 +1463,9 @@ function SplitBuyPanel({ rule, setRule, symbols }: {
           활성
         </label>
       </div>
-      <p className="muted" style={{ margin: "0 0 8px" }}>
-        베이스 매수액을 차수별로 나눠 진입합니다. 1차는 매수 신호 발생 시,
-        2차 이후는 조건 충족 시 추가 매수. 평단은 차수 진입마다 가중평균으로 갱신.
-      </p>
+      <span className="metric-hint lg"
+            style={{ marginLeft: 0, marginBottom: 8, display: "inline-flex" }}
+            data-tip="베이스 매수액을 차수별로 나눠 진입. 1차는 매수 신호 발생 시, 2차 이후는 조건 충족 시 추가 매수. 평단은 차수 진입마다 가중평균으로 갱신.">ⓘ 분할매수 동작 안내</span>
       {rule.enabled && (
         <>
           {phases.map((ph, i) => (
