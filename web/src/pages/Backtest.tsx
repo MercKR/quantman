@@ -947,7 +947,7 @@ function BuyTargetPanel({
         <ScreenerPickerModal
           symbols={symbols}
           tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
-          screenerLimit={screenerLimit} setScreenerLimit={setScreenerLimit}
+          setScreenerLimit={setScreenerLimit}
           screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
           rebalance={rebalance} setRebalance={setRebalance}
           onClose={() => setModalOpen(null)}
@@ -1012,12 +1012,12 @@ function ManualPickerModal({
 
 /** 자동 선택 모달 — 시총·등락률 등 조건으로 매일 후보 자동 선정. 라이브 전용. */
 function ScreenerPickerModal({
-  symbols, tradeSymbol, setTradeSymbol, screenerLimit, setScreenerLimit,
+  symbols, tradeSymbol, setTradeSymbol, setScreenerLimit,
   screenerSpec, setScreenerSpec, rebalance, setRebalance, onClose,
 }: {
   symbols: SymbolInfo[];
   tradeSymbol: string; setTradeSymbol: (v: string) => void;
-  screenerLimit: number; setScreenerLimit: (v: number) => void;
+  setScreenerLimit: (v: number) => void;
   screenerSpec: ScreenerSpecIO | null; setScreenerSpec: (s: ScreenerSpecIO | null) => void;
   rebalance: RebalanceIO; setRebalance: (r: RebalanceIO) => void;
   onClose: () => void;
