@@ -76,34 +76,8 @@ function findIndicator(symbols: SymbolInfo[], sym?: string, key?: string):
     ?.indicators.find((i) => i.key === key);
 }
 
-function indLabel(symbols: SymbolInfo[], sym?: string, key?: string): string {
-  return findIndicator(symbols, sym, key)?.label ?? key ?? "";
-}
-
 function compareGroupOf(symbols: SymbolInfo[], sym?: string, key?: string): string {
   return findIndicator(symbols, sym, key)?.compare_group ?? "other";
-}
-
-/** G1 — 아핀(× / +) 꼬리표. " ×1.05", " +2", " ×1.05 +2". */
-function affineSuffix(o: Operand): string {
-  const parts: string[] = [];
-  if (o.mul != null) parts.push(`×${o.mul}`);
-  if (o.add != null) parts.push(`${o.add >= 0 ? "+" : ""}${o.add}`);
-  return parts.length ? ` ${parts.join(" ")}` : "";
-}
-
-function operandSummary(o: Operand | undefined, symbols: SymbolInfo[]): string {
-  if (!o) return "?";
-  if (o.kind === "constant") {
-    if (Array.isArray(o.value)) return `${o.value[0]} ~ ${o.value[1]}`;
-    return o.value != null ? String(o.value) : "0";
-  }
-  const symLabel = o.symbol === SELF_SYMBOL ? SELF_LABEL : (o.symbol ?? "");
-  const lbl = indLabel(symbols, o.symbol, o.indicator);
-  if (o.kind === "history") {
-    return `${symLabel} ${lbl} ${o.window ?? 20}일 ${STAT_LABEL[o.stat ?? "mean"]}${affineSuffix(o)}`;
-  }
-  return `${symLabel} · ${lbl}${affineSuffix(o)}`;
 }
 
 // ── 메인 ──────────────────────────────────────────────────────────────────────
@@ -254,7 +228,7 @@ function GroupEditor({ symbols, group, onChange, depth }: {
   );
 }
 
-/** 단일 조건 문장 한 줄 — 좌변(종목·지표) · 수식어 · 우변 · 연산자 · 삭제. */
+/** 단일 조건 문장 한 줄 — 좌변(종목·지표) · 수식어 · 우변(종목·지표 또는 숫자) · 연산자 · 삭제. */
 function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
   symbols: SymbolInfo[];
   c: Condition;
@@ -265,11 +239,11 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
   const leftGroup = compareGroupOf(symbols, c.left.symbol, c.left.indicator);
   return (
     <div className="sentence">
-      <LeftSymbolChip
+      <SymbolChip
         symbols={symbols} operand={c.left}
         onChange={(o) => onPatch({ left: o })}
       />
-      <LeftIndicatorChip
+      <IndicatorChip
         symbols={symbols} operand={c.left}
         onChange={(o) => onPatch({ left: o })}
       />
@@ -289,11 +263,10 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
           onChange={(v) => onPatch({ right: { kind: "constant", value: v } })}
         />
       ) : (
-        <OperandChip
+        <RightOperand
           symbols={symbols}
-          value={c.right ?? { kind: "constant", value: 0 }}
-          allowConstant
-          compatGroup={leftGroup}
+          operand={c.right ?? { kind: "constant", value: 0 }}
+          leftGroup={leftGroup}
           onChange={(o) => onPatch({ right: o })}
         />
       )}
@@ -360,223 +333,53 @@ function AffineFields({ value, onChange }: {
   );
 }
 
-function OperandChip({ symbols, value, allowConstant, compatGroup, onChange }: {
+/** 우변 피연산자 — kind=constant면 인라인 숫자 입력, indicator/history면 [종목 chip]+[지표 chip]+숫자↔지표 토글. */
+function RightOperand({ symbols, operand, leftGroup, onChange }: {
   symbols: SymbolInfo[];
-  value: Operand;
-  allowConstant: boolean;
-  compatGroup?: string;            // 우측 피연산자에서, 좌측과 호환되는 지표만 노출
+  operand: Operand;
+  leftGroup: string;
   onChange: (o: Operand) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = usePopoverDismiss<HTMLSpanElement>(open, setOpen);
+  const hint = COMPARE_GROUP_HINTS[leftGroup] ?? COMPARE_GROUP_HINTS.other;
 
+  // 숫자 → 지표 전환: 좌변과 호환되는 첫 종목·지표 자동 선택. 호환 데이터가 전혀
+  // 없으면 무동작(사용자 데이터 부재 — 강제 변환은 misleading).
+  function toIndicator() {
+    const compat = (i: { compare_group?: string | null }) =>
+      leftGroup === "other" || (i.compare_group ?? "other") === leftGroup;
+    const sym = symbols.find((s) => s.indicators.some(compat));
+    if (!sym) return;
+    const inds = sym.indicators.filter(compat);
+    onChange({ kind: "indicator", symbol: sym.symbol, indicator: inds[0]?.key ?? "" });
+  }
+
+  if (operand.kind === "constant") {
+    const v = typeof operand.value === "number" ? operand.value : 0;
+    return (
+      <>
+        <span className="operand">
+          <input type="number" step="any" value={v} placeholder={hint.range}
+                 onChange={(e) => onChange({ kind: "constant", value: Number(e.target.value) })} />
+        </span>
+        <button type="button" className="chip ghost-chip kind-toggle"
+                title="지표 값과 비교하도록 전환" onClick={toIndicator}>
+          ↔ 지표
+        </button>
+      </>
+    );
+  }
   return (
-    <span className="chip-wrap" ref={ref}>
-      <button type="button" className="chip" onClick={() => setOpen((v) => !v)}>
-        {operandSummary(value, symbols)}
-        <span className="chip-caret">▾</span>
+    <>
+      <SymbolChip symbols={symbols} operand={operand} compatGroup={leftGroup}
+                  onChange={onChange} />
+      <IndicatorChip symbols={symbols} operand={operand} compatGroup={leftGroup}
+                     onChange={onChange} />
+      <button type="button" className="chip ghost-chip kind-toggle"
+              title="숫자와 비교하도록 전환"
+              onClick={() => onChange({ kind: "constant", value: 0 })}>
+        ↔ 숫자
       </button>
-      {open && (
-        <div className="popover">
-          <OperandEditor
-            symbols={symbols} value={value}
-            allowConstant={allowConstant}
-            compatGroup={compatGroup}
-            onChange={onChange}
-          />
-        </div>
-      )}
-    </span>
-  );
-}
-
-function OperandEditor({ symbols, value, allowConstant, compatGroup, onChange }: {
-  symbols: SymbolInfo[];
-  value: Operand;
-  allowConstant: boolean;
-  compatGroup?: string;
-  onChange: (o: Operand) => void;
-}) {
-  const symList = symbols.filter((s) => s.indicators.length > 0);
-  // Phase 41 — SELF_SYMBOL은 KR 개별종목 indicators fallback
-  const indicatorsOf = (sym?: string) =>
-    sym === SELF_SYMBOL
-      ? _selfIndicators(symbols)
-      : symbols.find((s) => s.symbol === sym)?.indicators ?? [];
-
-  // 지표/숫자 2개 탭만 유지. "이력통계"는 지표 탭의 "최근 N일" 토글로 통합.
-  const tabKind: "indicator" | "constant" =
-    value.kind === "constant" ? "constant" : "indicator";
-
-  function setTab(k: "indicator" | "constant") {
-    if (k === "constant") { onChange({ kind: "constant", value: 0 }); return; }
-    const sym = value.symbol ?? symList[0]?.symbol ?? "";
-    const inds = indicatorsOf(sym);
-    const ind = inds.some((i) => i.key === value.indicator)
-      ? value.indicator : inds[0]?.key ?? "";
-    onChange({ kind: "indicator", symbol: sym, indicator: ind });
-  }
-
-  function pickSymbol(sym: string) {
-    const inds = indicatorsOf(sym).filter((i) =>
-      !compatGroup || compatGroup === "other"
-        || (i.compare_group ?? "other") === compatGroup);
-    const ind = inds.some((i) => i.key === value.indicator)
-      ? value.indicator : inds[0]?.key ?? "";
-    onChange({ ...value, kind: value.kind === "constant" ? "indicator" : value.kind,
-                symbol: sym, indicator: ind });
-  }
-
-  function pickIndicator(key: string) {
-    onChange({ ...value, kind: value.kind === "constant" ? "indicator" : value.kind,
-                indicator: key });
-  }
-
-  function toggleHistory(enabled: boolean) {
-    if (enabled) {
-      onChange({ kind: "history",
-                  symbol: value.symbol, indicator: value.indicator,
-                  stat: value.stat ?? "mean", window: value.window ?? 20,
-                  percentile: value.percentile });
-    } else {
-      onChange({ kind: "indicator",
-                  symbol: value.symbol, indicator: value.indicator });
-    }
-  }
-
-  // 좌측과 호환되는 지표만 노출 (compatGroup이 있을 때)
-  const symHasCompat = (s: SymbolInfo) => {
-    if (!compatGroup || compatGroup === "other") return s.indicators.length > 0;
-    return s.indicators.some((i) =>
-      (i.compare_group ?? "other") === compatGroup);
-  };
-
-  const visibleSymbols = symList.filter(symHasCompat);
-  const visibleIndicators = indicatorsOf(value.symbol).filter((i) =>
-    !compatGroup || compatGroup === "other"
-      || (i.compare_group ?? "other") === compatGroup);
-
-  const constVal = typeof value.value === "number" ? value.value : 0;
-  const hint = COMPARE_GROUP_HINTS[compatGroup ?? "other"] ?? COMPARE_GROUP_HINTS.other;
-
-  return (
-    <div className="op-editor">
-      {allowConstant && (
-        <div className="seg">
-          <button type="button" className={tabKind === "indicator" ? "on" : ""}
-                  onClick={() => setTab("indicator")}>지표</button>
-          <button type="button" className={tabKind === "constant" ? "on" : ""}
-                  onClick={() => setTab("constant")}>숫자</button>
-        </div>
-      )}
-
-      {tabKind === "constant" && (
-        <div className="op-field op-const">
-          <label>값</label>
-          <input
-            type="number" step="any" autoFocus
-            value={constVal}
-            placeholder={hint.range}
-            onChange={(e) => onChange({ kind: "constant", value: Number(e.target.value) })}
-          />
-          {hint.tip && <div className="op-hint">{hint.tip}</div>}
-        </div>
-      )}
-
-      {tabKind === "indicator" && (
-        <>
-          {/* Step 1: 종목 선택 (탭 기반) */}
-          <div className="op-label">① 종목 선택</div>
-          {/* Phase 41 — [이 종목] placeholder — 우변에도 동일 옵션 */}
-          <div className="self-option">
-            <button type="button"
-                    className={"self-option-btn"
-                      + (isSelfRef(value) ? " on" : "")}
-                    onClick={() => pickSymbol(SELF_SYMBOL)}>
-              <strong>{SELF_LABEL}</strong>
-              <span className="muted small">
-                — 각 매수 대상 종목에 자동 적용
-              </span>
-            </button>
-          </div>
-          <TabbedSymbolList
-            items={visibleSymbols.map((s) =>
-              ({ key: s.symbol, label: s.symbol, cat: s.category }))}
-            order={OPERAND_TAB_ORDER}
-            selected={isSelfRef(value) ? "" : value.symbol}
-            placeholder="종목 검색…"
-            emptyMessage="호환되는 종목이 없습니다."
-            onPick={pickSymbol}
-          />
-
-          {/* Step 2: 그 종목이 지원하는 지표 (종목별로 다름) */}
-          {value.symbol && (
-            <>
-              <div className="op-label" style={{ marginTop: 14 }}>
-                ② 지표 선택
-                <span className="op-label-sub">
-                  ({value.symbol === SELF_SYMBOL ? SELF_LABEL : value.symbol}
-                  · {visibleIndicators.length}개 지원)
-                </span>
-              </div>
-              {visibleIndicators.length === 0 ? (
-                <div className="cat-empty">
-                  {compatGroup && compatGroup !== "other"
-                    ? "이 종목엔 호환되는 지표가 없습니다."
-                    : "이 종목엔 사용 가능한 지표가 없습니다. (라이브 매매 전용)"}
-                </div>
-              ) : (
-                <CategoryList
-                  items={visibleIndicators.map((i) =>
-                    ({ key: i.key, label: i.label, cat: i.group }))}
-                  order={INDICATOR_GROUP_ORDER}
-                  selected={value.indicator}
-                  onPick={pickIndicator}
-                />
-              )}
-
-              {value.indicator && (
-                <div className="op-field hist-toggle">
-                  <label className="hist-toggle-row">
-                    <input type="checkbox"
-                          checked={value.kind === "history"}
-                          onChange={(e) => toggleHistory(e.target.checked)} />
-                    <span>최근 N일 ___ 으로 비교</span>
-                  </label>
-                  {value.kind === "history" && (
-                    <div className="op-field hist-row">
-                      <label>최근</label>
-                      <input
-                        type="number" min={1} value={value.window ?? 20}
-                        onChange={(e) => onChange({ ...value, window: Number(e.target.value) })}
-                      />
-                      <span className="txt">일</span>
-                      <select
-                        value={value.stat ?? "mean"}
-                        onChange={(e) => onChange({ ...value, stat: e.target.value as Stat })}
-                      >
-                        {STAT_OPTIONS.map((o) => (
-                          <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                      </select>
-                      {value.stat === "percentile" && (
-                        <input
-                          type="number" min={0} max={100} title="백분위(%)"
-                          value={value.percentile ?? 50}
-                          onChange={(e) => onChange({ ...value, percentile: Number(e.target.value) })}
-                        />
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {value.indicator && <AffineFields value={value} onChange={onChange} />}
-            </>
-          )}
-        </>
-      )}
-    </div>
+    </>
   );
 }
 
@@ -620,15 +423,21 @@ function ActiveModifierChip({ value, onChange }: {
   );
 }
 
-/** 좌측 operand의 종목 chip — 종목만 선택. 변경 시 호환 안되는 지표는 첫 지표로 reset. */
-function LeftSymbolChip({ symbols, operand, onChange }: {
+/** 종목 chip — 좌·우 공용. compatGroup 지정(우변) 시 호환 종목만 노출 + 선택 시 호환되는 첫 지표로 자동 swap. */
+function SymbolChip({ symbols, operand, onChange, compatGroup }: {
   symbols: SymbolInfo[];
   operand: Operand;
   onChange: (o: Operand) => void;
+  compatGroup?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss<HTMLSpanElement>(open, setOpen);
-  const symList = symbols.filter((s) => s.indicators.length > 0);
+  const compat = (i: { compare_group?: string | null }) =>
+    !compatGroup || compatGroup === "other"
+      || (i.compare_group ?? "other") === compatGroup;
+  const symList = symbols.filter((s) =>
+    s.indicators.length > 0 && (!compatGroup || compatGroup === "other"
+      || s.indicators.some(compat)));
   const isSelf = isSelfRef(operand);
   const sel = symbols.find((s) => s.symbol === operand.symbol);
   // Phase 41 — SELF_SYMBOL이면 [이 종목] 라벨로 표시
@@ -638,9 +447,10 @@ function LeftSymbolChip({ symbols, operand, onChange }: {
 
   function pickSymbol(sym: string) {
     // Phase 41 — SELF_SYMBOL은 KR 개별종목 indicators fallback
-    const inds = sym === SELF_SYMBOL
+    const allInds = sym === SELF_SYMBOL
       ? _selfIndicators(symbols)
       : symbols.find((s) => s.symbol === sym)?.indicators ?? [];
+    const inds = compatGroup ? allInds.filter(compat) : allInds;
     const ind = inds.some((i) => i.key === operand.indicator)
       ? operand.indicator : inds[0]?.key ?? "";
     onChange({ ...operand, symbol: sym, indicator: ind });
@@ -663,7 +473,7 @@ function LeftSymbolChip({ symbols, operand, onChange }: {
                     onClick={() => pickSymbol(SELF_SYMBOL)}>
               <strong>{SELF_LABEL}</strong>
               <span className="muted small">
-                — 각 매수 대상 종목에 자동 적용
+                — 각 매수후보 종목에 자동 적용
               </span>
             </button>
           </div>
@@ -676,6 +486,7 @@ function LeftSymbolChip({ symbols, operand, onChange }: {
             order={OPERAND_TAB_ORDER}
             selected={isSelf ? "" : operand.symbol}
             placeholder="종목 검색…"
+            emptyMessage="호환되는 종목이 없습니다."
             onPick={pickSymbol}
           />
         </div>
@@ -684,18 +495,22 @@ function LeftSymbolChip({ symbols, operand, onChange }: {
   );
 }
 
-/** 좌측 operand의 지표 chip — 선택된 종목이 지원하는 지표 + 이력 토글. */
-function LeftIndicatorChip({ symbols, operand, onChange }: {
+/** 지표 chip — 좌·우 공용. compatGroup 지정(우변) 시 호환 지표만 노출 + history 토글 + affine. */
+function IndicatorChip({ symbols, operand, onChange, compatGroup }: {
   symbols: SymbolInfo[];
   operand: Operand;
   onChange: (o: Operand) => void;
+  compatGroup?: string;
 }) {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss<HTMLSpanElement>(open, setOpen);
   // Phase 41 — SELF_SYMBOL은 KR 개별종목 indicators fallback
-  const inds = operand.symbol === SELF_SYMBOL
+  const allInds = operand.symbol === SELF_SYMBOL
     ? _selfIndicators(symbols)
     : symbols.find((s) => s.symbol === operand.symbol)?.indicators ?? [];
+  const inds = compatGroup && compatGroup !== "other"
+    ? allInds.filter((i) => (i.compare_group ?? "other") === compatGroup)
+    : allInds;
   const found = inds.find((i) => i.key === operand.indicator);
   const baseLabel = found?.label ?? operand.indicator ?? "지표 선택";
   const histSuffix = operand.kind === "history"
@@ -729,7 +544,9 @@ function LeftIndicatorChip({ symbols, operand, onChange }: {
         <div className="popover">
           {inds.length === 0 ? (
             <div className="cat-empty">
-              이 종목엔 사용 가능한 지표가 없습니다. (라이브 매매 전용)
+              {compatGroup && compatGroup !== "other"
+                ? "이 종목엔 호환되는 지표가 없습니다."
+                : "이 종목엔 사용 가능한 지표가 없습니다. (라이브 매매 전용)"}
             </div>
           ) : (
             <>

@@ -506,7 +506,7 @@ function PromoteModal({
               <section>
                 <h4>전략 정보</h4>
                 <div className="rule-row">
-                  <span className="rule-label">매수 대상</span>
+                  <span className="rule-label">매수후보</span>
                   <span className="rule-val">{summarizeTargets(s.definition.trade_symbol)}</span>
                 </div>
                 <div className="rule-row">

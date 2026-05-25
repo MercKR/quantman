@@ -69,6 +69,8 @@ export default function Backtest() {
   const [maxPositionPct, setMaxPositionPct] = useState(EXECUTION_DEFAULTS.max_position_pct);
   const [dailyLossLimitPct, setDailyLossLimitPct] = useState(EXECUTION_DEFAULTS.daily_loss_limit_pct);
   const [maxDrawdownPct, setMaxDrawdownPct] = useState(EXECUTION_DEFAULTS.max_drawdown_pct);
+  // Phase 49 — 시장가/지정가 토글. 시장가는 시초가 갭 무방비라 default 지정가.
+  const [useLimit, setUseLimit] = useState<boolean>(EXECUTION_DEFAULTS.use_limit);
   const [buyTolerancePct, setBuyTolerancePct] = useState(EXECUTION_DEFAULTS.buy_tolerance_pct);
   const [sellTolerancePct, setSellTolerancePct] = useState(EXECUTION_DEFAULTS.sell_tolerance_pct);
   // Phase 39 + C-01 — 백테스트 비용 가정 (실매매 영향 없음)
@@ -144,6 +146,7 @@ export default function Backtest() {
       max_position_pct: maxPositionPct,
       daily_loss_limit_pct: dailyLossLimitPct,
       max_drawdown_pct: maxDrawdownPct,
+      use_limit: useLimit,
       buy_tolerance_pct: buyTolerancePct,
       sell_tolerance_pct: sellTolerancePct,
       // Phase 39 + C-01 — 백테스트 비용 가정
@@ -316,6 +319,7 @@ export default function Backtest() {
           maxPositionPct={maxPositionPct} setMaxPositionPct={setMaxPositionPct}
           dailyLossLimitPct={dailyLossLimitPct} setDailyLossLimitPct={setDailyLossLimitPct}
           maxDrawdownPct={maxDrawdownPct} setMaxDrawdownPct={setMaxDrawdownPct}
+          useLimit={useLimit} setUseLimit={setUseLimit}
           buyTolerancePct={buyTolerancePct} setBuyTolerancePct={setBuyTolerancePct}
           sellTolerancePct={sellTolerancePct} setSellTolerancePct={setSellTolerancePct}
           btCommissionBps={btCommissionBps} setBtCommissionBps={setBtCommissionBps}
@@ -374,6 +378,7 @@ function BuildTab(props: {
   maxPositionPct: number; setMaxPositionPct: (v: number) => void;
   dailyLossLimitPct: number; setDailyLossLimitPct: (v: number) => void;
   maxDrawdownPct: number; setMaxDrawdownPct: (v: number) => void;
+  useLimit: boolean; setUseLimit: (v: boolean) => void;
   buyTolerancePct: number; setBuyTolerancePct: (v: number) => void;
   sellTolerancePct: number; setSellTolerancePct: (v: number) => void;
   btCommissionBps: number; setBtCommissionBps: (v: number) => void;
@@ -402,6 +407,7 @@ function BuildTab(props: {
     maxPositionPct, setMaxPositionPct,
     dailyLossLimitPct, setDailyLossLimitPct,
     maxDrawdownPct, setMaxDrawdownPct,
+    useLimit, setUseLimit,
     buyTolerancePct, setBuyTolerancePct,
     sellTolerancePct, setSellTolerancePct,
     btCommissionBps, setBtCommissionBps,
@@ -440,124 +446,168 @@ function BuildTab(props: {
         rebalance={rebalance} setRebalance={setRebalance}
       />
 
-      <div className="panel">
+      {/* Phase 49 — 매수 조건 통합 문장 sentence. ①조건 · ②가격 · ③수량 · ④종목 4 절. */}
+      <div className="panel buy-sentence-panel">
         <h3>2. 매수 조건</h3>
-        <p className="muted" style={{ margin: "0 0 12px" }}>
-          지정한 조건이 충족되는 날 해당 종목을 매수합니다.
-          가격·수익률 지표는 모두 <strong>정규장 종가</strong>(15:30 마감) 기준이며,
-          시간외 단일가는 반영되지 않습니다.
+        <p className="muted" style={{ margin: "0 0 16px" }}>
+          한 문장으로 표현 — <strong>① 조건이 충족되는 날 · ② 정해진 가격으로 · ③ 정해진 금액만큼 · ④ 매수후보를 매수합니다.</strong>
         </p>
-        <ConditionBuilder
-          symbols={symbols} group={buy} onChange={setBuy}
-          contextNote={
-            tradeSymbol.startsWith("screener:")
-              || tradeSymbol.split(",").map((s) => s.trim()).filter(Boolean).length > 1
-              ? "아래 조건을 만족하는 종목만 매수합니다. [각 종목]은 매수 후보 각각에 적용됩니다."
-              : "아래 조건이 충족되는 날 매수합니다."
-          }
-        />
 
-        <div className="sub-h" style={{ marginTop: 14 }}>한 종목당 매수액</div>
-        <p className="muted" style={{ margin: "0 0 10px" }}>
-          한 종목에 얼마를 투입할지 결정합니다. 4가지 방식 중 하나를 선택하세요.
-        </p>
-        <div className="sizing-cards">
-          <SizingCard
-            on={sizingMode === "pct_cash"} title="정률"
-            desc={`자본의 N%를 한 종목에 — 자본이 늘면 매수액도 자동 증가`}
-            onPick={() => setSizingMode("pct_cash")} />
-          <SizingCard
-            on={sizingMode === "fixed_amount"} title="정액"
-            desc={`한 종목당 고정 금액 — "이 종목 100만원어치 사라"`}
-            onPick={() => setSizingMode("fixed_amount")} />
-          <SizingCard
-            on={sizingMode === "equal_weight"} title="균등 분배"
-            desc={`자본을 동시 보유 종목 수로 나눔 — 종목당 동일 금액`}
-            onPick={() => setSizingMode("equal_weight")} />
-          <SizingCard
-            on={sizingMode === "atr_risk"} title="리스크 기반 (ATR)"
-            desc={`변동성에 반비례 — 종목별 동일 손실 위험`}
-            onPick={() => setSizingMode("atr_risk")} />
-        </div>
+        {/* ① 조건 절 */}
+        <section className="sentence-clause">
+          <div className="sentence-clause-head">
+            <span className="sentence-clause-num">①</span>
+            <span className="sentence-clause-label">조건 —</span>
+            <span className="muted small">아래 조건이 충족되는 날</span>
+          </div>
+          <p className="muted small" style={{ margin: "0 0 10px" }}>
+            가격·수익률 지표는 모두 <strong>정규장 종가</strong>(15:30 마감) 기준이며, 시간외 단일가는 반영되지 않습니다.
+          </p>
+          <ConditionBuilder
+            symbols={symbols} group={buy} onChange={setBuy}
+            contextNote={
+              tradeSymbol.startsWith("screener:")
+                || tradeSymbol.split(",").map((s) => s.trim()).filter(Boolean).length > 1
+                ? "아래 조건을 만족하는 종목만 매수합니다. [이 종목]은 매수후보 각각에 적용됩니다."
+                : "아래 조건이 충족되는 날 매수합니다."
+            }
+          />
+        </section>
 
-        {/* 선택한 모드에 필요한 입력만 노출 — dim/disabled 패턴 제거 (Phase 47). */}
-        {sizingMode === "pct_cash" && (
-          <>
+        {/* ② 가격 절 — 시장가/지정가 토글 + tolerance (Phase 49 — 4-3 섹션에서 이동) */}
+        <section className="sentence-clause">
+          <div className="sentence-clause-head">
+            <span className="sentence-clause-num">②</span>
+            <span className="sentence-clause-label">가격으로 —</span>
+            <span className="muted small">매수 발주 방식</span>
+          </div>
+          <BuyPricePanel
+            useLimit={useLimit} setUseLimit={setUseLimit}
+            buyTolerancePct={buyTolerancePct} setBuyTolerancePct={setBuyTolerancePct}
+          />
+        </section>
+
+        {/* ③ 수량 절 — 사이징 4지 + 펼침형 고급(modifier·split) */}
+        <section className="sentence-clause">
+          <div className="sentence-clause-head">
+            <span className="sentence-clause-num">③</span>
+            <span className="sentence-clause-label">만큼 —</span>
+            <span className="muted small">한 종목당 투입 금액</span>
+          </div>
+          <p className="muted small" style={{ margin: "0 0 10px" }}>
+            4가지 방식 중 하나를 선택하세요.
+          </p>
+          <div className="sizing-cards">
+            <SizingCard
+              on={sizingMode === "pct_cash"} title="정률"
+              desc={`자본의 N%를 한 종목에 — 자본이 늘면 매수액도 자동 증가`}
+              onPick={() => setSizingMode("pct_cash")} />
+            <SizingCard
+              on={sizingMode === "fixed_amount"} title="정액"
+              desc={`한 종목당 고정 금액 — "이 종목 100만원어치 사라"`}
+              onPick={() => setSizingMode("fixed_amount")} />
+            <SizingCard
+              on={sizingMode === "equal_weight"} title="균등 분배"
+              desc={`자본을 동시 보유 종목 수로 나눔 — 종목당 동일 금액`}
+              onPick={() => setSizingMode("equal_weight")} />
+            <SizingCard
+              on={sizingMode === "atr_risk"} title="리스크 기반 (ATR)"
+              desc={`변동성에 반비례 — 종목별 동일 손실 위험`}
+              onPick={() => setSizingMode("atr_risk")} />
+          </div>
+
+          {sizingMode === "pct_cash" && (
+            <>
+              <div className="amount-row">
+                <label>자본의</label>
+                <input type="number" min={1} max={100} value={buyAmountPct}
+                       onChange={(e) => setBuyAmountPct(Number(e.target.value))} />
+                <span className="muted">
+                  % &nbsp;=&nbsp; {wonReadable(capital * buyAmountPct / 100)}
+                </span>
+              </div>
+              {screenerLimit > 1 && (
+                <div
+                  className={"muted small" + (screenerLimit * buyAmountPct > 100 ? " warn" : "")}
+                  style={{ marginTop: 4 }}
+                >
+                  ⚠ 자동 선택 {screenerLimit}종목 × {fmt2(buyAmountPct)}% ={" "}
+                  <b>{fmt2(screenerLimit * buyAmountPct)}%</b> 전체 노출
+                  {screenerLimit * buyAmountPct > 100 && " (100% 초과 — 현금 부족 시 일부 종목 매수 실패)"}
+                </div>
+              )}
+            </>
+          )}
+
+          {sizingMode === "fixed_amount" && (
             <div className="amount-row">
-              <label>자본의</label>
-              <input type="number" min={1} max={100} value={buyAmountPct}
-                     onChange={(e) => setBuyAmountPct(Number(e.target.value))} />
+              <label>한 종목당</label>
+              <input type="number" min={0} step={10000} value={amountKrw}
+                     onChange={(e) => setAmountKrw(Number(e.target.value))} />
               <span className="muted">
-                % &nbsp;=&nbsp; {wonReadable(capital * buyAmountPct / 100)}
+                원 &nbsp;=&nbsp; {wonReadable(amountKrw)}
+                {amountKrw > 0 && capital > 0
+                  && ` (자본의 ${fmt2(amountKrw / capital * 100)}%)`}
               </span>
             </div>
-            {screenerLimit > 1 && (
-              <div
-                className={"muted small" + (screenerLimit * buyAmountPct > 100 ? " warn" : "")}
-                style={{ marginTop: 4 }}
-              >
-                ⚠ 자동 선택 {screenerLimit}종목 × {fmt2(buyAmountPct)}% ={" "}
-                <b>{fmt2(screenerLimit * buyAmountPct)}%</b> 전체 노출
-                {screenerLimit * buyAmountPct > 100 && " (100% 초과 — 현금 부족 시 일부 종목 매수 실패)"}
-              </div>
-            )}
-          </>
-        )}
+          )}
 
-        {sizingMode === "fixed_amount" && (
-          <div className="amount-row">
-            <label>한 종목당</label>
-            <input type="number" min={0} step={10000} value={amountKrw}
-                   onChange={(e) => setAmountKrw(Number(e.target.value))} />
-            <span className="muted">
-              원 &nbsp;=&nbsp; {wonReadable(amountKrw)}
-              {amountKrw > 0 && capital > 0
-                && ` (자본의 ${fmt2(amountKrw / capital * 100)}%)`}
-            </span>
-          </div>
-        )}
-
-        {sizingMode === "equal_weight" && (
-          <div className="muted small">
-            동시 보유 한도 <b>{screenerLimit}종목</b> 기준 한 종목당{" "}
-            <b>{wonReadable(capital / Math.max(screenerLimit, 1))}</b>
-            ({fmt2(100 / Math.max(screenerLimit, 1))}%) 투입.
-            <br />
-            동시 보유 한도는 아래 "매수 대상 — 자동 선택" 섹션에서 조정합니다.
-          </div>
-        )}
-
-        {sizingMode === "atr_risk" && (
-          <div className="atr-detail">
-            <div className="amount-row">
-              <label>트레이드당 자본 위험</label>
-              <input type="number" min={0.1} max={10} step={0.1} value={atrRiskPct}
-                     onChange={(e) => setAtrRiskPct(Number(e.target.value))} />
-              <span className="muted">%</span>
-            </div>
-            <div className="amount-row">
-              <label>ATR 배수 (손절폭)</label>
-              <input type="number" min={0.5} max={5} step={0.1} value={atrMult}
-                     onChange={(e) => setAtrMult(Number(e.target.value))} />
-              <span className="muted">× ATR</span>
-            </div>
-            <div className="muted small" style={{ marginTop: 6 }}>
-              ⓘ 각 종목이 ATR×{fmt2(atrMult)} 만큼 하락하면 자본의 {fmt2(atrRiskPct)}% 손실
+          {sizingMode === "equal_weight" && (
+            <div className="muted small">
+              동시 보유 한도 <b>{screenerLimit}종목</b> 기준 한 종목당{" "}
+              <b>{wonReadable(capital / Math.max(screenerLimit, 1))}</b>
+              ({fmt2(100 / Math.max(screenerLimit, 1))}%) 투입.
               <br />
-              ⚠ ATR 데이터가 없는 종목은 자동 fallback하지 않고 매수를 건너뜁니다.
+              동시 보유 한도는 위 "매수후보 — 자동 선택" 모달에서 조정합니다.
             </div>
+          )}
+
+          {sizingMode === "atr_risk" && (
+            <div className="atr-detail">
+              <div className="amount-row">
+                <label>트레이드당 자본 위험</label>
+                <input type="number" min={0.1} max={10} step={0.1} value={atrRiskPct}
+                       onChange={(e) => setAtrRiskPct(Number(e.target.value))} />
+                <span className="muted">%</span>
+              </div>
+              <div className="amount-row">
+                <label>ATR 배수 (손절폭)</label>
+                <input type="number" min={0.5} max={5} step={0.1} value={atrMult}
+                       onChange={(e) => setAtrMult(Number(e.target.value))} />
+                <span className="muted">× ATR</span>
+              </div>
+              <div className="muted small" style={{ marginTop: 6 }}>
+                ⓘ 각 종목이 ATR×{fmt2(atrMult)} 만큼 하락하면 자본의 {fmt2(atrRiskPct)}% 손실
+                <br />
+                ⚠ ATR 데이터가 없는 종목은 자동 fallback하지 않고 매수를 건너뜁니다.
+              </div>
+            </div>
+          )}
+
+          <details className="sentence-advanced">
+            <summary>+ 고급 옵션 — 조건별 ×배수 · 분할매수</summary>
+            <SizeModifiersPanel
+              modifiers={sizeModifiers} setModifiers={setSizeModifiers}
+              symbols={symbols}
+            />
+            <SplitBuyPanel
+              rule={splitBuy} setRule={setSplitBuy}
+              symbols={symbols}
+            />
+          </details>
+        </section>
+
+        {/* ④ 종목 절 — 매수후보 요약 (read-only, 1번에서 결정) */}
+        <section className="sentence-clause sentence-clause-target">
+          <div className="sentence-clause-head">
+            <span className="sentence-clause-num">④</span>
+            <span className="sentence-clause-label">매수후보를 매수한다.</span>
           </div>
-        )}
-
-        <SizeModifiersPanel
-          modifiers={sizeModifiers} setModifiers={setSizeModifiers}
-          symbols={symbols}
-        />
-
-        <SplitBuyPanel
-          rule={splitBuy} setRule={setSplitBuy}
-          symbols={symbols}
-        />
+          <p className="muted small" style={{ margin: 0 }}>
+            위 "1. 매수후보"에서 선정된 종목에 적용됩니다.
+            {tradeSymbol.startsWith("screener:") && " (자동 선택 모드)"}
+          </p>
+        </section>
       </div>
 
       <div className="panel">
@@ -665,19 +715,7 @@ function BuildTab(props: {
           <span className="muted">% (자본 고점 대비) — 도달 시 알림 + 신규 진입 차단</span>
         </div>
 
-        <div className="sub-h" style={{ marginTop: 18 }}>4-3. 매수 발주 가격 범위</div>
-        <div className="amount-row">
-          <label>전일 종가 + 최대</label>
-          <input type="number" min={0.1} max={5} step={0.1} value={buyTolerancePct}
-                 onChange={(e) => setBuyTolerancePct(Number(e.target.value))} />
-          <span className="muted">
-            % 까지 매수 허용 — 시초가가 이보다 높으면 미체결 폐기 (갭상승 자동 회피)
-          </span>
-        </div>
-        <div className="muted small" style={{ marginTop: 4 }}>
-          ⓘ 발주가 = 전일 종가 × (1 + N%). 변동성 큰 종목은 N 키우면 잡힐 확률 ↑,
-          {" "}작으면 갭상승 종목 자동 회피. default 1%.
-        </div>
+        {/* Phase 49 — 4-3 "매수 발주 가격 범위"는 2번 매수 조건의 ② 가격 절로 이동. */}
       </details>
 
       {/* Phase 39 — 백테스트 비용 가정 (실매매 영향 없음) */}
@@ -799,7 +837,7 @@ function BuildTab(props: {
   );
 }
 
-/** 매수 대상 panel — 수동(단일/다중) ↔ 자동 선택 모드 토글. */
+/** 매수후보 panel — 두 큰 버튼(수동/자동)으로 모달 호출. 모달 안 탭으로 모드 전환. */
 function BuyTargetPanel({
   name, setName, symbols, tradeSymbol, setTradeSymbol,
   screenerLimit, setScreenerLimit,
@@ -813,22 +851,32 @@ function BuyTargetPanel({
   rebalance: RebalanceIO; setRebalance: (r: RebalanceIO) => void;
 }) {
   const isScreener = tradeSymbol.startsWith("screener:");
-  // buyMode는 사용자 선택을 그대로 보존 — tradeSymbol이 비어도 모드는 유지된다.
-  // 초기값은 현재 tradeSymbol에서 유추(편집 시 원래 모드 복원).
-  const [buyMode, setBuyMode] = useState<"manual" | "screener">(
-    isScreener ? "screener" : "manual");
-  const manualSymbols = buyMode === "screener"
+  const manualSymbols = isScreener
     ? [] : tradeSymbol.split(",").map((s) => s.trim()).filter(Boolean);
 
-  function selectMode(m: "manual" | "screener") {
-    if (m === buyMode) return;
-    setBuyMode(m);
-    setTradeSymbol("");
+  // 모달이 열려있는 경우 어느 탭으로 열렸는지. null = 닫힘.
+  const [modalOpen, setModalOpen] = useState<null | "manual" | "screener">(null);
+
+  // 요약 라인: 모드 + 선정된 후보 압축
+  let summary: string;
+  let summaryCls = "buy-target-summary";
+  if (isScreener) {
+    const key = tradeSymbol.slice("screener:".length);
+    const label = key === "custom" ? "커스텀 스펙" : key;
+    summary = `자동선택 — ${label} (상위 ${screenerLimit}종목)`;
+  } else if (manualSymbols.length === 0) {
+    summary = "(아직 선정된 매수후보가 없습니다 — 위 버튼으로 선택)";
+    summaryCls += " empty";
+  } else if (manualSymbols.length === 1) {
+    summary = `수동 — ${manualSymbols[0]}`;
+  } else {
+    summary = `수동 — ${manualSymbols[0]} 외 ${manualSymbols.length - 1}종목`
+      + ` · 최대 ${screenerLimit}개 동시 보유`;
   }
 
   return (
     <div className="panel">
-      <h3>1. 매수 대상</h3>
+      <h3>1. 매수후보</h3>
       <div className="row" style={{ marginBottom: 12 }}>
         <div style={{ flex: 1 }}>
           <label>전략 이름</label>
@@ -837,79 +885,145 @@ function BuyTargetPanel({
       </div>
 
       <div className="sub-h">선정 방식</div>
-      <div className="seg" style={{ marginBottom: 12 }}>
+      <div className="buy-target-buttons">
         <button type="button"
-                className={buyMode === "manual" ? "on" : ""}
-                onClick={() => selectMode("manual")}>
-          수동 선택
+                className={"buy-target-btn"
+                  + (!isScreener && manualSymbols.length > 0 ? " on" : "")}
+                onClick={() => setModalOpen("manual")}>
+          <strong>수동 선택</strong>
+          <span className="muted small">매수할 종목을 직접 고르기</span>
         </button>
         <button type="button"
-                className={buyMode === "screener" ? "on" : ""}
-                onClick={() => selectMode("screener")}>
-          자동 선택
+                className={"buy-target-btn" + (isScreener ? " on" : "")}
+                onClick={() => setModalOpen("screener")}>
+          <strong>자동 선택</strong>
+          <span className="muted small">시총·등락률 등 조건으로 매일 자동 선정</span>
         </button>
       </div>
 
-      {buyMode === "manual" ? (
-        <>
-          <label className="small muted">매수 후보 종목 (여러 개 선택 가능)</label>
-          <MultiSymbolPicker
-            symbols={symbols}
-            value={tradeSymbol}
-            onChange={setTradeSymbol}
-          />
-        </>
-      ) : (
-        <>
-          <label className="small muted">자동 선택 세트</label>
-          <div>
-            <SymbolPicker
-              symbols={symbols} value={tradeSymbol} tradableOnly
-              lockMode="screener"
-              onChange={setTradeSymbol}
-              screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
-              setScreenerLimit={setScreenerLimit}
-            />
-          </div>
-        </>
-      )}
+      <div className={summaryCls}>{summary}</div>
 
-      {buyMode === "manual" && manualSymbols.length > 1 && (
-        <div className="amount-row" style={{ marginTop: 12 }}>
-          <label>최대 동시 보유 종목 수</label>
-          <input type="number" min={1} max={20} value={screenerLimit}
-                 onChange={(e) => setScreenerLimit(Number(e.target.value))} />
-          <span className="muted">
-            {`선택한 ${manualSymbols.length}종목 중 최대 ${screenerLimit}개 동시 보유`}
-          </span>
-        </div>
+      {modalOpen && (
+        <BuyTargetModal
+          initialTab={modalOpen}
+          symbols={symbols}
+          tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
+          screenerLimit={screenerLimit} setScreenerLimit={setScreenerLimit}
+          screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
+          rebalance={rebalance} setRebalance={setRebalance}
+          onClose={() => setModalOpen(null)}
+        />
       )}
+    </div>
+  );
+}
 
-      {buyMode === "screener" && (
-        <div className="rebalance-row">
-          <label className="rebalance-toggle">
-            <input type="checkbox" checked={rebalance.enabled}
-                   onChange={(e) => setRebalance({ ...rebalance, enabled: e.target.checked })} />
-            <span>일일 리밸런싱 — 상위 N에서 탈락한 보유 종목을 매도하고 새 종목으로 교체</span>
-          </label>
-          {rebalance.enabled && (
-            <div className="rebalance-detail">
-              <label>주기</label>
-              <select value={rebalance.period}
-                      onChange={(e) => setRebalance({
-                        ...rebalance, period: e.target.value as RebalanceIO["period"],
-                      })}>
-                <option value="daily">매일</option>
-                <option value="weekly">매주</option>
-                <option value="monthly">매월</option>
-              </select>
-              <span className="muted small">
-                ⚠ 라이브 전용. 회전율↑ → 거래비용·세금↑. 모의투자로 충분히 검증 후 사용하세요.
-              </span>
-            </div>
+/** 매수후보 선택 모달 — 수동/자동 탭. 변경은 실시간 부모 state에 반영. */
+function BuyTargetModal({
+  initialTab, symbols, tradeSymbol, setTradeSymbol,
+  screenerLimit, setScreenerLimit,
+  screenerSpec, setScreenerSpec, rebalance, setRebalance,
+  onClose,
+}: {
+  initialTab: "manual" | "screener";
+  symbols: SymbolInfo[];
+  tradeSymbol: string; setTradeSymbol: (v: string) => void;
+  screenerLimit: number; setScreenerLimit: (v: number) => void;
+  screenerSpec: ScreenerSpecIO | null; setScreenerSpec: (s: ScreenerSpecIO | null) => void;
+  rebalance: RebalanceIO; setRebalance: (r: RebalanceIO) => void;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<"manual" | "screener">(initialTab);
+  const manualSymbols = tradeSymbol.startsWith("screener:")
+    ? [] : tradeSymbol.split(",").map((s) => s.trim()).filter(Boolean);
+
+  // 모드 전환 시 기존 선택 초기화 (수동 콤마 vs screener: prefix가 호환 안 됨)
+  function switchTab(t: "manual" | "screener") {
+    if (t === tab) return;
+    setTab(t);
+    setTradeSymbol("");
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal buy-target-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-head">
+          <h2>매수후보 선택</h2>
+          <button className="ghost sm" onClick={onClose}>✕</button>
+        </header>
+
+        <nav className="detail-tabs buy-target-modal-tabs">
+          <button className={"detail-tab" + (tab === "manual" ? " on" : "")}
+                  onClick={() => switchTab("manual")}>수동 선택</button>
+          <button className={"detail-tab" + (tab === "screener" ? " on" : "")}
+                  onClick={() => switchTab("screener")}>자동 선택</button>
+        </nav>
+
+        <div className="modal-body">
+          {tab === "manual" ? (
+            <>
+              <p className="muted small" style={{ marginTop: 0, marginBottom: 10 }}>
+                매수 후보로 사용할 종목을 직접 선택합니다 (여러 개 선택 가능).
+              </p>
+              <MultiSymbolPicker
+                symbols={symbols}
+                value={tradeSymbol}
+                onChange={setTradeSymbol}
+              />
+              {manualSymbols.length > 1 && (
+                <div className="amount-row" style={{ marginTop: 14 }}>
+                  <label>최대 동시 보유 종목 수</label>
+                  <input type="number" min={1} max={20} value={screenerLimit}
+                         onChange={(e) => setScreenerLimit(Number(e.target.value))} />
+                  <span className="muted">
+                    {`선택한 ${manualSymbols.length}종목 중 최대 ${screenerLimit}개 동시 보유`}
+                  </span>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="muted small" style={{ marginTop: 0, marginBottom: 10 }}>
+                매일 시가총액·등락률·거래대금 등 조건으로 후보를 자동 선정합니다 (라이브 전용).
+              </p>
+              <SymbolPicker
+                symbols={symbols} value={tradeSymbol} tradableOnly
+                lockMode="screener"
+                onChange={setTradeSymbol}
+                screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
+                setScreenerLimit={setScreenerLimit}
+              />
+              <div className="rebalance-row" style={{ marginTop: 14 }}>
+                <label className="rebalance-toggle">
+                  <input type="checkbox" checked={rebalance.enabled}
+                         onChange={(e) => setRebalance({ ...rebalance, enabled: e.target.checked })} />
+                  <span>일일 리밸런싱 — 상위 N에서 탈락한 보유 종목을 매도하고 새 종목으로 교체</span>
+                </label>
+                {rebalance.enabled && (
+                  <div className="rebalance-detail">
+                    <label>주기</label>
+                    <select value={rebalance.period}
+                            onChange={(e) => setRebalance({
+                              ...rebalance, period: e.target.value as RebalanceIO["period"],
+                            })}>
+                      <option value="daily">매일</option>
+                      <option value="weekly">매주</option>
+                      <option value="monthly">매월</option>
+                    </select>
+                    <span className="muted small">
+                      ⚠ 라이브 전용. 회전율↑ → 거래비용·세금↑. 모의투자로 충분히 검증 후 사용하세요.
+                    </span>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
-      )}
+
+        <footer className="modal-foot">
+          <button onClick={onClose}>적용</button>
+        </footer>
+      </div>
     </div>
   );
 }
@@ -1139,6 +1253,54 @@ function Stat({ label, value, hint, colorBy }: {
         {hint && <span className="metric-hint" data-tip={hint}>?</span>}
       </div>
       <div className={"value" + tone}>{value}</div>
+    </div>
+  );
+}
+
+// ── 매수 가격 모드 (Phase 49 — 시장가/지정가 토글 + tolerance) ──────────────
+function BuyPricePanel({ useLimit, setUseLimit, buyTolerancePct, setBuyTolerancePct }: {
+  useLimit: boolean; setUseLimit: (v: boolean) => void;
+  buyTolerancePct: number; setBuyTolerancePct: (v: number) => void;
+}) {
+  return (
+    <div>
+      <div className="price-mode-row">
+        <label className={"price-mode-btn" + (useLimit ? " on" : "")}>
+          <input type="radio" name="buy-price-mode" checked={useLimit}
+                 onChange={() => setUseLimit(true)} />
+          <div className="price-mode-text">
+            <strong>지정가 (±tolerance%)</strong>
+            <span className="muted small">전일 종가 ±N% 내에서만 매수 — 갭상승 자동 회피</span>
+          </div>
+        </label>
+        <label className={"price-mode-btn" + (!useLimit ? " on" : "")}>
+          <input type="radio" name="buy-price-mode" checked={!useLimit}
+                 onChange={() => setUseLimit(false)} />
+          <div className="price-mode-text">
+            <strong>시장가</strong>
+            <span className="muted small">즉시 체결 — 시초가 갭에 무방비, 변동성 큰 종목 주의</span>
+          </div>
+        </label>
+      </div>
+      {useLimit ? (
+        <>
+          <div className="amount-row" style={{ marginTop: 10 }}>
+            <label>전일 종가 + 최대</label>
+            <input type="number" min={0.1} max={5} step={0.1} value={buyTolerancePct}
+                   onChange={(e) => setBuyTolerancePct(Number(e.target.value))} />
+            <span className="muted">% 까지 매수 허용</span>
+          </div>
+          <div className="muted small" style={{ marginTop: 4 }}>
+            ⓘ 발주가 = 전일 종가 × (1 + {fmt2(buyTolerancePct)}%). 시초가가 이보다 높으면 미체결 폐기.
+            변동성 큰 종목은 N 키우면 잡힐 확률 ↑, 작으면 갭상승 자동 회피. default 1%.
+          </div>
+        </>
+      ) : (
+        <div className="warn-box" style={{ marginTop: 10 }}>
+          ⚠ 시장가 매수는 시초가 동시호가에서 발주됩니다. 큰 갭상승 종목도 그대로 잡힙니다 —
+          예상 외 진입가를 피하려면 [지정가 + tolerance]를 권장합니다.
+        </div>
+      )}
     </div>
   );
 }

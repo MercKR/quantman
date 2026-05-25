@@ -1435,6 +1435,99 @@ thead th { color: var(--muted); font-weight: 600; }
   display: flex; justify-content: flex-end; gap: 10px;
 }
 
+/* 매수후보 모달 — 종목 picker가 들어가야 해서 표준 .modal 보다 넓게 */
+.modal.buy-target-modal { max-width: 760px; }
+.buy-target-modal-tabs {
+  padding: 0 22px; margin-top: 4px;
+}
+
+/* 매수후보 panel — 큰 버튼 2개 + 요약 라인 */
+.buy-target-buttons {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  margin-bottom: 12px;
+}
+.buy-target-btn {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 18px 18px; min-height: 72px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer; text-align: left;
+  /* 전역 `button { color: #fff }`가 accent-soft/panel 위 글자를 invisible로 만든다.
+     DESIGN.md 룰: accent 채움 위 글자는 ink. */
+  color: var(--ink);
+  transition: background 0.12s, border-color 0.12s;
+}
+.buy-target-btn:hover { background: var(--bg); border-color: var(--accent); }
+.buy-target-btn.on {
+  background: var(--accent-soft); border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.buy-target-btn strong { font-size: 15px; }
+.buy-target-summary {
+  padding: 10px 14px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--border);
+  font-size: 13px; color: var(--ink);
+}
+.buy-target-summary.empty { color: var(--muted); font-style: italic; }
+@media (max-width: 560px) {
+  .buy-target-buttons { grid-template-columns: 1fr; }
+}
+
+/* Phase 49 — 매수 조건 통합 문장 sentence (4 절) */
+.sentence-clause {
+  padding: 16px 0; border-top: 1px dashed var(--border);
+}
+.sentence-clause:first-of-type { border-top: none; padding-top: 4px; }
+.sentence-clause-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 8px; flex-wrap: wrap;
+}
+.sentence-clause-num {
+  font-size: 18px; font-weight: 700; color: var(--accent-strong);
+}
+.sentence-clause-label {
+  font-size: 15px; font-weight: 600; color: var(--ink);
+}
+.sentence-clause-target {
+  background: var(--bg); padding: 14px; border-radius: 8px;
+  border-top: 1px dashed var(--border);
+}
+.sentence-advanced {
+  margin-top: 16px; padding: 12px 14px;
+  border: 1px dashed var(--border); border-radius: 8px; background: var(--bg);
+}
+.sentence-advanced > summary {
+  cursor: pointer; font-weight: 600; padding: 4px 0;
+  color: var(--accent-strong); list-style: none;
+}
+.sentence-advanced > summary::-webkit-details-marker { display: none; }
+.sentence-advanced > summary::before { content: "▸ "; transition: transform 0.15s; display: inline-block; }
+.sentence-advanced[open] > summary::before { content: "▾ "; }
+
+/* Phase 49 — 매수 가격 모드 (시장가/지정가) */
+.price-mode-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+.price-mode-btn {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 14px; border: 1px solid var(--border); border-radius: 10px;
+  cursor: pointer; background: var(--panel);
+  transition: background 0.12s, border-color 0.12s;
+}
+.price-mode-btn:hover { border-color: var(--accent); }
+.price-mode-btn.on {
+  border-color: var(--accent); background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.price-mode-btn input[type="radio"] { margin-top: 4px; width: auto; }
+.price-mode-text { display: flex; flex-direction: column; gap: 2px; }
+@media (max-width: 560px) {
+  .price-mode-row { grid-template-columns: 1fr; }
+}
+
+/* Phase 49 — ConditionBuilder 우변 숫자 ↔ 지표 토글 */
+.kind-toggle { font-size: 11px; padding: 2px 8px; }
+
 .step-pills {
   display: flex; gap: 8px; margin-bottom: 18px;
   padding-bottom: 12px; border-bottom: 1px solid var(--border);
