@@ -20,6 +20,17 @@ const OPERAND_TAB_ORDER = [
   "자산", "변동성", "금리·환율", "신용", "거시지표", "심리",
 ];
 
+/** Phase 56 — compare_group별 constant 값 허용 범위. backend가 silent false
+ *  내는 unrealistic 값(예: RSI > 5000) 입력 차단. 무한대(price·money·other)는
+ *  엔트리 없음(자유 입력). */
+const GROUP_RANGES: Record<string, { min: number; max: number }> = {
+  pct:   { min: -100, max: 100 },
+  rsi:   { min: 0,    max: 100 },
+  bbpct: { min: 0,    max: 1 },
+  flag:  { min: 0,    max: 1 },
+  z:     { min: -10,  max: 10 },
+};
+
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 
 const OP_GROUPS: { label: string; ops: { value: Op; label: string }[] }[] = [
@@ -227,6 +238,18 @@ function GroupEditor({ symbols, group, onChange, depth }: {
   );
 }
 
+/** Phase 56 — 부정합 검출 헬퍼. */
+function operandsEqual(a: Operand, b: Operand | undefined): boolean {
+  if (!b || a.kind === "constant" || b.kind === "constant") return false;
+  return a.kind === b.kind
+      && a.symbol === b.symbol
+      && a.indicator === b.indicator
+      && (a.stat ?? null) === (b.stat ?? null)
+      && (a.window ?? null) === (b.window ?? null)
+      && (a.mul ?? null) === (b.mul ?? null)
+      && (a.add ?? null) === (b.add ?? null);
+}
+
 /** 단일 조건 문장 한 줄 — 좌변(종목·지표) · 수식어 · 우변(종목·지표 또는 숫자) · 연산자 · 삭제. */
 function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
   symbols: SymbolInfo[];
@@ -236,6 +259,8 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
   onRemove: () => void;
 }) {
   const leftGroup = compareGroupOf(symbols, c.left.symbol, c.left.indicator);
+  // Phase 56 — 좌변=우변 완전 동일 detection. 항상 false 평가 = 무의미 조건.
+  const sameOperand = operandsEqual(c.left, c.right);
   return (
     <div className="sentence">
       <SymbolChip
@@ -247,6 +272,11 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
         onChange={(o) => onPatch({ left: o })}
       />
       <span className="txt">가(이)</span>
+
+      {sameOperand && (
+        <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+              data-tip="좌변과 우변이 완전히 동일합니다. 조건이 항상 false로 평가되어 매수 신호가 발생하지 않습니다.">⚠</span>
+      )}
 
       {c.modifier && (
         <ActiveModifierChip
@@ -354,12 +384,19 @@ function RightOperand({ symbols, operand, leftGroup, onChange }: {
 
   if (operand.kind === "constant") {
     const v = typeof operand.value === "number" ? operand.value : 0;
+    const range = GROUP_RANGES[leftGroup];
+    const outOfRange = !!range && (v < range.min || v > range.max);
     return (
       <>
         <span className="operand">
           <input type="number" step="any" value={v} placeholder={hint.range}
+                 min={range?.min} max={range?.max}
                  onChange={(e) => onChange({ kind: "constant", value: Number(e.target.value) })} />
         </span>
+        {outOfRange && range && (
+          <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+                data-tip={`이 지표는 ${range.min}~${range.max} 범위입니다. 벗어난 값은 조건이 항상 false로 평가됩니다.`}>⚠</span>
+        )}
         <button type="button" className="chip ghost-chip kind-toggle"
                 title="지표 값과 비교하도록 전환" onClick={toIndicator}>
           ↔ 지표
@@ -382,7 +419,7 @@ function RightOperand({ symbols, operand, leftGroup, onChange }: {
   );
 }
 
-/** between 연산자용 [min ~ max] 입력. */
+/** between 연산자용 [min ~ max] 입력. Phase 56 — min>max 시 ⚠ + onBlur swap. */
 function RangeInline({ value, hintGroup, onChange }: {
   value: number[];
   hintGroup?: string;
@@ -391,26 +428,34 @@ function RangeInline({ value, hintGroup, onChange }: {
   const lo = value[0] ?? 0;
   const hi = value[1] ?? 0;
   const hint = COMPARE_GROUP_HINTS[hintGroup ?? "other"] ?? COMPARE_GROUP_HINTS.other;
+  const invalid = lo > hi;
   return (
     <span className="operand">
       <input type="number" step="any" value={lo} placeholder={hint.range}
-             onChange={(e) => onChange([Number(e.target.value), hi])} />
+             onChange={(e) => onChange([Number(e.target.value), hi])}
+             onBlur={() => { if (invalid) onChange([hi, lo]); }} />
       <span className="txt">~</span>
       <input type="number" step="any" value={hi} placeholder={hint.range}
-             onChange={(e) => onChange([lo, Number(e.target.value)])} />
+             onChange={(e) => onChange([lo, Number(e.target.value)])}
+             onBlur={() => { if (invalid) onChange([hi, lo]); }} />
+      {invalid && (
+        <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+              data-tip="시작 값이 끝 값보다 큽니다. 조건이 항상 false. 입력 포커스 해제 시 자동 swap됩니다.">⚠</span>
+      )}
     </span>
   );
 }
 
-/** 활성 수식어 — "OO가 [3일 연속] OO 미만일 때" 위치에 표시. */
+/** 활성 수식어 — "OO가 [3일 연속] OO 미만일 때" 위치에 표시.
+ *  Phase 56 — min=2 (1일은 modifier 효과 없음, backend가 silent skip). */
 function ActiveModifierChip({ value, onChange }: {
   value: { kind: ModifierKind; days: number };
   onChange: (m: { kind: ModifierKind; days: number } | null) => void;
 }) {
   return (
     <span className="modifier">
-      <input type="number" min={1} value={value.days}
-             onChange={(e) => onChange({ ...value, days: Number(e.target.value) })} />
+      <input type="number" min={2} value={value.days}
+             onChange={(e) => onChange({ ...value, days: Math.max(2, Number(e.target.value)) })} />
       <span className="txt">일</span>
       <select value={value.kind}
               onChange={(e) => onChange({ ...value, kind: e.target.value as ModifierKind })}>
@@ -575,9 +620,14 @@ function IndicatorChip({ symbols, operand, onChange, compatGroup }: {
                   {operand.kind === "history" && (
                     <div className="op-field hist-row">
                       <label>최근</label>
-                      <input type="number" min={1} value={operand.window ?? 20}
-                        onChange={(e) => onChange({ ...operand, window: Number(e.target.value) })} />
+                      <input type="number" min={1} max={500} value={operand.window ?? 20}
+                        onChange={(e) => onChange({ ...operand, window: Math.max(1, Number(e.target.value)) })} />
                       <span className="txt">일</span>
+                      {(operand.window ?? 20) > 250 && (
+                        <span className="metric-hint lg"
+                              style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+                              data-tip="긴 window는 신생 종목·짧은 데이터에서 NaN(데이터 부족)으로 평가되어 조건 false. 250일 이하 권장.">⚠</span>
+                      )}
                       <select value={operand.stat ?? "mean"}
                         onChange={(e) => onChange({ ...operand, stat: e.target.value as Stat })}>
                         {STAT_OPTIONS.map((o) => (

@@ -196,6 +196,25 @@ export default function Backtest() {
     return null;
   }
 
+  /** Phase 56 — 매수 조건 정의 검증.
+   *  매수 조건 0개 → build_signal_mask가 빈 Series 반환 → 매수 0건. silent fail 차단. */
+  function hasBuySetup(): string | null {
+    if (buy.conditions.length === 0) {
+      return "매수 조건을 1개 이상 설정하세요. (조건 없이는 매수 신호가 발생하지 않습니다)";
+    }
+    return null;
+  }
+
+  /** Phase 56 — 매수=매도 동일 조건 detection. 매수 즉시 매도 whipsaw. */
+  function sameBuySellWarning(): string | null {
+    if (buy.conditions.length === 0 || sell.conditions.length === 0) return null;
+    if (JSON.stringify(buy.conditions) === JSON.stringify(sell.conditions)
+        && buy.logic === sell.logic) {
+      return "매수 조건과 매도 조건이 완전히 동일합니다. 매수 즉시 매도되어 거래가 무의미합니다. 계속할까요?";
+    }
+    return null;
+  }
+
   async function runAnalysis() {
     setErr("");
     if (parseScreenerKey(tradeSymbol)) {
@@ -203,6 +222,8 @@ export default function Backtest() {
               "수동 종목으로 분석하세요.");
       return;
     }
+    const buyErr = hasBuySetup();
+    if (buyErr) { setErr(buyErr); return; }
     setBusy("analysis"); setAnalysis(null);
     try {
       const r = await api.runAnalysis({
@@ -222,8 +243,13 @@ export default function Backtest() {
               "수동 종목으로 백테스트하거나, [내 전략에 적용]으로 모의투자만 진행하세요.");
       return;
     }
+    const buyErr = hasBuySetup();
+    if (buyErr) { setErr(buyErr); return; }
     const sellErr = hasSellSetup();
     if (sellErr) { setErr(sellErr); return; }
+    // Phase 56 — 매수=매도 동일 조건 confirm
+    const whipsawWarn = sameBuySellWarning();
+    if (whipsawWarn && !window.confirm(whipsawWarn)) return;
     setBusy("backtest"); setBacktest(null);
     try {
       const r = await api.runBacktest(buildDef(), capital);
