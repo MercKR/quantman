@@ -41,9 +41,10 @@ export default function Pair() {
     loadDevices();
   }
 
-  // 기본은 GitHub Releases의 latest — 매 release 시 코드 수정 없이 자동 최신.
+  // 기본은 GitHub Releases의 latest zip 직접 다운로드 — 클릭 시 redirect되어
+  // 파일 다운로드 시작. release에 고정 이름 `QuantPlatformLocal.zip` 첨부 정책.
   const DOWNLOAD_URL = import.meta.env.VITE_LOCAL_APP_URL
-    || "https://github.com/MercKR/quantman-releases/releases/latest";
+    || "https://github.com/MercKR/quantman-releases/releases/latest/download/QuantPlatformLocal.zip";
 
   return (
     <div>

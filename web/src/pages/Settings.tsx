@@ -43,10 +43,11 @@ export default function Settings() {
     loadDevices();
   }
 
-  // 기본은 GitHub Releases의 latest — 매 release 시 코드 수정 없이 자동 최신.
-  // 환경변수(VITE_LOCAL_APP_URL)로 override 가능(특정 버전 핀 시).
+  // 기본은 GitHub Releases의 latest zip 직접 다운로드 — 클릭 시 redirect되어
+  // 파일 다운로드 시작. 매 release 시 고정 이름 `QuantPlatformLocal.zip` 첨부
+  // 정책 유지하면 코드 수정 없이 영구 동작.
   const DOWNLOAD_URL = import.meta.env.VITE_LOCAL_APP_URL
-    || "https://github.com/MercKR/quantman-releases/releases/latest";
+    || "https://github.com/MercKR/quantman-releases/releases/latest/download/QuantPlatformLocal.zip";
 
   return (
     <div>
