@@ -420,7 +420,14 @@ details.section-collapsible > summary::before {
 }
 details.section-collapsible[open] > summary::before { content: "▾"; }
 details.section-collapsible > summary h3 { margin: 0; }
-details.section-collapsible[open] > summary { margin-bottom: 14px; }
+details.section-collapsible[open] > summary {
+  margin-bottom: 14px;
+  /* Phase 53 — 펼쳤을 때 summary가 viewport 위로 사라지지 않도록 sticky.
+     사용자가 클릭한 위치(summary)가 펼침 본문 위에 항상 보임 = "아래로 펼침" 인지. */
+  position: sticky; top: 0; z-index: 5;
+  background: var(--panel);
+  padding-top: 4px; padding-bottom: 4px;
+}
 /* Phase 51 — summary 우측에 접힘 상태 미리보기 (활성 룰 수·기본값 등) */
 details.section-collapsible > summary .sect-summary-meta {
   margin-left: auto; font-size: 12px; color: var(--muted);
@@ -1566,6 +1573,12 @@ thead th { color: var(--muted); font-weight: 600; }
 .sentence-advanced > summary::-webkit-details-marker { display: none; }
 .sentence-advanced > summary::before { content: "▸ "; transition: transform 0.15s; display: inline-block; }
 .sentence-advanced[open] > summary::before { content: "▾ "; }
+/* Phase 53 — 펼쳤을 때 summary가 viewport 위로 사라지지 않게 sticky (요청자 인지: "위로 펼침"). */
+.sentence-advanced[open] > summary {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--bg);
+  padding: 8px 0 6px;
+}
 
 /* Phase 49 — 매수 가격 모드 (시장가/지정가) */
 .price-mode-row {
@@ -1710,6 +1723,13 @@ thead th { color: var(--muted); font-weight: 600; }
   }
 
   .main-inner { padding: 18px 16px; }
+
+  /* Phase 53 — 모바일에서 mobile-header sticky(top:0)가 details summary 가림.
+     summary sticky top을 mobile-header 높이만큼 offset해 가려지지 않게. */
+  details.section-collapsible[open] > summary,
+  .sentence-advanced[open] > summary {
+    top: 60px;
+  }
   /* 결과 지표 카드가 한 줄에 다 들어가도록 최소폭 완화 */
   .stat { min-width: 120px; }
   /* 넓은 표는 가로 스크롤 허용 (글자 깨짐 방지) */
