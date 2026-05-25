@@ -1,0 +1,7 @@
+﻿Mounting volume on: /var/lib/containers/railwayapp/bind-mounts/08e1adfc-b5a3-450a-8dfb-adeddea6d234/vol_7v64s5uw2j0d26ii
+Starting Container
+INFO:     Started server process [2]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+한국 종목 fetch 완료: 총 4288 → 성공 0 · 신규없음 3889 · 실패 399

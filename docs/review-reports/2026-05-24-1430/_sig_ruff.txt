@@ -1,0 +1,109 @@
+E702 Multiple statements on one line (semicolon)
+  --> app\routers\portfolio.py:93:15
+   |
+91 |     if n < 2:
+92 |         return 0.0
+93 |     a = a[-n:]; b = b[-n:]
+   |               ^
+94 |     ma = sum(a) / n; mb = sum(b) / n
+95 |     num = sum((a[i] - ma) * (b[i] - mb) for i in range(n))
+   |
+
+E702 Multiple statements on one line (semicolon)
+  --> app\routers\portfolio.py:94:20
+   |
+92 |         return 0.0
+93 |     a = a[-n:]; b = b[-n:]
+94 |     ma = sum(a) / n; mb = sum(b) / n
+   |                    ^
+95 |     num = sum((a[i] - ma) * (b[i] - mb) for i in range(n))
+96 |     da = math.sqrt(sum((x - ma) ** 2 for x in a))
+   |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:107:31
+    |
+105 |             if ok:
+106 |                 s.last_alerted_killswitch = now
+107 |                 session.add(s); session.commit()
+    |                               ^
+108 |         elif not is_active and was_alerted:
+109 |             # 해제 알림
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:115:31
+    |
+113 |             if ok:
+114 |                 s.last_alerted_killswitch = None
+115 |                 session.add(s); session.commit()
+    |                               ^
+116 |
+117 |     # 1b. Drawdown 한도 알림 (Phase 38.10) — last_alerted_loss를 공유해 스팸 방지
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:133:31
+    |
+131 |             if ok:
+132 |                 s.last_alerted_loss = now
+133 |                 session.add(s); session.commit()
+    |                               ^
+134 |
+135 |     # 1c. Preview 누락 연속 카운터 + 알림 (Phase 38.5)
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:149:23
+    |
+147 |                 if ok:
+148 |                     s.last_alerted_preview_missing = now
+149 |         session.add(s); session.commit()
+    |                       ^
+150 |     elif (s.preview_missing_streak or 0) > 0:
+151 |         # 회복: 카운터 리셋
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:154:23
+    |
+152 |         s.preview_missing_streak = 0
+153 |         s.last_alerted_preview_missing = None
+154 |         session.add(s); session.commit()
+    |                       ^
+155 |
+156 |     # 1d. 미국 실시간 시세 미신청 (장중 실시간 손절 미제공) — kind=us_realtime_unavailable
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:181:35
+    |
+179 |                 if ok:
+180 |                     s.last_alerted_loss = now
+181 |                     session.add(s); session.commit()
+    |                                   ^
+182 |
+183 |     # 3. Phase 40 — 잔고 정합성 drift 알림 (HTS/MTS 수동 매매 추정)
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:211:31
+    |
+209 |             if ok:
+210 |                 s.last_alerted_reconcile = now
+211 |                 session.add(s); session.commit()
+    |                               ^
+212 |
+213 |     # 4. Phase 48 P1-C — 슬리피지 임계 초과 알림 (avg_bps)
+    |
+
+E702 Multiple statements on one line (semicolon)
+   --> app\routers\sync.py:230:31
+    |
+228 |             if ok:
+229 |                 s.last_alerted_slippage = now
+230 |                 session.add(s); session.commit()
+    |                               ^
+    |
+
+Found 10 errors.
