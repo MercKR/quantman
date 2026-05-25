@@ -1370,6 +1370,11 @@ function BuyPricePanel({ useLimit, setUseLimit, buyTolerancePct, setBuyTolerance
             <span className="muted">% 까지 매수 허용</span>
             <span className="metric-hint lg"
                   data-tip={`발주가 = 전일 종가 × (1 + ${fmt2(buyTolerancePct)}%). 시초가가 이보다 높으면 미체결 폐기. 변동성 큰 종목은 N 키우면 잡힐 확률↑, 작으면 갭상승 자동 회피. default 1%.`}>ⓘ</span>
+            {/* NEW-15 — tolerance=0이면 시초가가 정확히 전일 종가와 같아야 체결. 거의 미체결. */}
+            {buyTolerancePct < 0.1 && (
+              <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+                    data-tip="0%(또는 0.1% 미만)은 시초가가 정확히 전일 종가와 같아야 체결. 실제로는 거의 미체결됩니다. 0.5% 이상 권장.">⚠</span>
+            )}
           </div>
         </>
       ) : (
@@ -1451,6 +1456,20 @@ function SizeModifiersPanel({ modifiers, setModifiers, symbols }: {
       <button type="button" className="ghost sm" onClick={addModifier}>
         + 수정자 추가
       </button>
+      {/* NEW-18 — 여러 수정자 모두 매치 시 누적 곱셈. extreme 값 ⚠. */}
+      {modifiers.length > 1 && (() => {
+        const cumul = modifiers.reduce((s, m) => s * (m.multiplier ?? 1), 1);
+        const extreme = cumul > 0 && (cumul <= 0.1 || cumul >= 5);
+        return (
+          <div className="muted small" style={{ marginTop: 8 }}>
+            모두 매치 시 누적 배수: <b>×{cumul.toFixed(2)}</b>
+            {extreme && (
+              <span className="metric-hint lg" style={{ marginLeft: 6, background: "var(--amber-soft)", color: "var(--amber)" }}
+                    data-tip={`누적 ×${cumul.toFixed(2)}은 베이스 매수액의 ${(cumul * 100).toFixed(0)}%. 너무 작거나 큰 결과는 의도 외 위험.`}>⚠</span>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1529,6 +1548,11 @@ function SplitBuyPanel({ rule, setRule, symbols }: {
               합계 <b>{totalRatio.toFixed(0)}%</b>
               {totalRatio < 100 && ` — 베이스의 ${(100 - totalRatio).toFixed(0)}%는 미사용`}
               {totalRatio > 100 && " — 베이스 매수액을 초과 (현금 부족 시 일부 차수 미진입)"}
+              {/* NEW-17 — 너무 많은 차수는 거래비용 폭증·평단 추적 복잡. */}
+              {phases.length > 5 && (
+                <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+                      data-tip={`차수 ${phases.length}개는 매수 횟수 ${phases.length}배 + 거래비용·세금 폭증. 5차 이하 권장.`}>⚠</span>
+              )}
             </div>
             <button type="button" className="ghost sm" onClick={addPhase}>
               + 차수 추가

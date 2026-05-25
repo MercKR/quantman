@@ -41,9 +41,10 @@ const OP_GROUPS: { label: string; ops: { value: Op; label: string }[] }[] = [
     { value: "<=", label: "이하일 때" },
     { value: "between", label: "범위 안일 때" },
   ]},
-  { label: "크로스", ops: [
-    { value: "cross_up",   label: "상향돌파할 때" },
-    { value: "cross_down", label: "하향돌파할 때" },
+  // Phase 56 — cross는 일봉 단위 평가(우리 dataset 일봉). intraday tick cross 아님 명시.
+  { label: "크로스 (일봉 기준)", ops: [
+    { value: "cross_up",   label: "상향돌파할 때 (일봉)" },
+    { value: "cross_down", label: "하향돌파할 때 (일봉)" },
   ]},
 ];
 
@@ -180,6 +181,11 @@ function GroupEditor({ symbols, group, onChange, depth }: {
             <div className="cond-subgroup-wrap">
               <div className="cond-subgroup-head">
                 <span className="cond-subgroup-tag">묶음 조건</span>
+                {/* NEW-12 — 빈 sub-group은 평가 실패로 전체 조건 무효화. */}
+                {(node.conditions?.length ?? 0) === 0 && (
+                  <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+                        data-tip="빈 묶음은 평가 실패로 전체 조건이 무효화됩니다. 조건을 추가하거나 묶음을 삭제하세요.">⚠</span>
+                )}
                 <button type="button" className="ghost sm" onClick={() => remove(i)}>
                   묶음 삭제
                 </button>
@@ -250,6 +256,21 @@ function operandsEqual(a: Operand, b: Operand | undefined): boolean {
       && (a.add ?? null) === (b.add ?? null);
 }
 
+/** NEW-11 — `>` / `>=` / `<` / `<=` + constant value가 GROUP_RANGES boundary와 충돌해
+ *  항상 false 조건이 되는지 검출. */
+function boundaryAlwaysFalse(op: Op, right: Operand | undefined, leftGroup: string): string | null {
+  if (!right || right.kind !== "constant") return null;
+  const v = typeof right.value === "number" ? right.value : NaN;
+  if (isNaN(v)) return null;
+  const range = GROUP_RANGES[leftGroup];
+  if (!range) return null;
+  if (op === ">" && v >= range.max) return `이 지표는 최대 ${range.max}. "${range.max} 초과" 조건은 항상 false.`;
+  if (op === ">=" && v > range.max) return `이 지표는 최대 ${range.max}. 초과 값으로 조건이 항상 false.`;
+  if (op === "<" && v <= range.min) return `이 지표는 최소 ${range.min}. "${range.min} 미만" 조건은 항상 false.`;
+  if (op === "<=" && v < range.min) return `이 지표는 최소 ${range.min}. 미만 값으로 조건이 항상 false.`;
+  return null;
+}
+
 /** 단일 조건 문장 한 줄 — 좌변(종목·지표) · 수식어 · 우변(종목·지표 또는 숫자) · 연산자 · 삭제. */
 function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
   symbols: SymbolInfo[];
@@ -261,6 +282,8 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
   const leftGroup = compareGroupOf(symbols, c.left.symbol, c.left.indicator);
   // Phase 56 — 좌변=우변 완전 동일 detection. 항상 false 평가 = 무의미 조건.
   const sameOperand = operandsEqual(c.left, c.right);
+  // NEW-11 — > or < boundary 값 검출.
+  const boundaryWarn = boundaryAlwaysFalse(c.op, c.right, leftGroup);
   return (
     <div className="sentence">
       <SymbolChip
@@ -276,6 +299,18 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove }: {
       {sameOperand && (
         <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
               data-tip="좌변과 우변이 완전히 동일합니다. 조건이 항상 false로 평가되어 매수 신호가 발생하지 않습니다.">⚠</span>
+      )}
+
+      {boundaryWarn && (
+        <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+              data-tip={boundaryWarn}>⚠</span>
+      )}
+
+      {/* NEW-10 — cross + streak/within 조합 ⚠. cross는 1일 이벤트, N일 연속 거의 불가. */}
+      {(c.op === "cross_up" || c.op === "cross_down")
+        && c.modifier?.kind === "streak" && (c.modifier?.days ?? 0) >= 2 && (
+        <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+              data-tip="cross_up/down은 1일 이벤트입니다. N일 연속(streak)은 거의 발생하지 않아 매수 신호 0건이 될 가능성이 큽니다. within(최근 N일 내)을 권장합니다.">⚠</span>
       )}
 
       {c.modifier && (
@@ -336,6 +371,8 @@ function AffineFields({ value, onChange }: {
   onChange: (o: Operand) => void;
 }) {
   if (value.kind === "constant") return null;
+  // NEW-13 — mul=0이면 indicator 시계열을 모두 0으로 만듦. 비교 의미 무.
+  const mulZero = value.mul === 0;
   return (
     <div className="op-field affine-row">
       <label>값 조정 <span className="muted small">(선택)</span></label>
@@ -356,6 +393,10 @@ function AffineFields({ value, onChange }: {
             ...value, add: e.target.value === "" ? null : Number(e.target.value),
           })}
         />
+        {mulZero && (
+          <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
+                data-tip="× 0은 모든 시계열을 0으로 만들어 비교 의미가 사라집니다. 1 이상 권장.">⚠</span>
+        )}
       </div>
       <div className="op-hint">예: MA20 ×1.05 = "5% 위", 등락률 +2</div>
     </div>
