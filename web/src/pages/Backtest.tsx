@@ -920,9 +920,16 @@ function BuyTargetPanel({
 
       <div className={summaryCls}>{summary}</div>
 
-      {modalOpen && (
-        <BuyTargetModal
-          initialTab={modalOpen}
+      {modalOpen === "manual" && (
+        <ManualPickerModal
+          symbols={symbols}
+          tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
+          screenerLimit={screenerLimit} setScreenerLimit={setScreenerLimit}
+          onClose={() => setModalOpen(null)}
+        />
+      )}
+      {modalOpen === "screener" && (
+        <ScreenerPickerModal
           symbols={symbols}
           tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
           screenerLimit={screenerLimit} setScreenerLimit={setScreenerLimit}
@@ -935,14 +942,63 @@ function BuyTargetPanel({
   );
 }
 
-/** 매수후보 선택 모달 — 수동/자동 탭. 변경은 실시간 부모 state에 반영. */
-function BuyTargetModal({
-  initialTab, symbols, tradeSymbol, setTradeSymbol,
-  screenerLimit, setScreenerLimit,
-  screenerSpec, setScreenerSpec, rebalance, setRebalance,
-  onClose,
+/** 수동 선택 모달 — 매수 후보 종목 직접 선택. 변경은 실시간 부모 state에 반영. */
+function ManualPickerModal({
+  symbols, tradeSymbol, setTradeSymbol, screenerLimit, setScreenerLimit, onClose,
 }: {
-  initialTab: "manual" | "screener";
+  symbols: SymbolInfo[];
+  tradeSymbol: string; setTradeSymbol: (v: string) => void;
+  screenerLimit: number; setScreenerLimit: (v: number) => void;
+  onClose: () => void;
+}) {
+  // 이전이 자동 선택 모드(screener: prefix)였다면 첫 진입 시 초기화 — 수동과 데이터 호환 안 됨.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (tradeSymbol.startsWith("screener:")) setTradeSymbol("");
+  }, []);
+  const manualSymbols = tradeSymbol.startsWith("screener:")
+    ? [] : tradeSymbol.split(",").map((s) => s.trim()).filter(Boolean);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal buy-target-modal" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-head">
+          <h2>수동 선택 — 매수후보 종목</h2>
+          <button className="ghost sm" onClick={onClose}>✕</button>
+        </header>
+        <div className="modal-body">
+          <p className="muted small" style={{ marginTop: 0, marginBottom: 10 }}>
+            매수 후보로 사용할 종목을 직접 선택합니다 (여러 개 선택 가능).
+          </p>
+          <MultiSymbolPicker
+            symbols={symbols}
+            value={tradeSymbol}
+            onChange={setTradeSymbol}
+          />
+          {manualSymbols.length > 1 && (
+            <div className="amount-row" style={{ marginTop: 14 }}>
+              <label>최대 동시 보유 종목 수</label>
+              <input type="number" min={1} max={20} value={screenerLimit}
+                     onChange={(e) => setScreenerLimit(Number(e.target.value))} />
+              <span className="muted">
+                {`선택한 ${manualSymbols.length}종목 중 최대 ${screenerLimit}개 동시 보유`}
+              </span>
+            </div>
+          )}
+        </div>
+        <footer className="modal-foot">
+          <button onClick={onClose}>적용</button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+/** 자동 선택 모달 — 시총·등락률 등 조건으로 매일 후보 자동 선정. 라이브 전용. */
+function ScreenerPickerModal({
+  symbols, tradeSymbol, setTradeSymbol, screenerLimit, setScreenerLimit,
+  screenerSpec, setScreenerSpec, rebalance, setRebalance, onClose,
+}: {
   symbols: SymbolInfo[];
   tradeSymbol: string; setTradeSymbol: (v: string) => void;
   screenerLimit: number; setScreenerLimit: (v: number) => void;
@@ -950,93 +1006,54 @@ function BuyTargetModal({
   rebalance: RebalanceIO; setRebalance: (r: RebalanceIO) => void;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<"manual" | "screener">(initialTab);
-  const manualSymbols = tradeSymbol.startsWith("screener:")
-    ? [] : tradeSymbol.split(",").map((s) => s.trim()).filter(Boolean);
-
-  // 모드 전환 시 기존 선택 초기화 (수동 콤마 vs screener: prefix가 호환 안 됨)
-  function switchTab(t: "manual" | "screener") {
-    if (t === tab) return;
-    setTab(t);
-    setTradeSymbol("");
-  }
+  // 이전이 수동(콤마 list)이었다면 초기화 — screener: prefix와 호환 안 됨.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => {
+    if (tradeSymbol && !tradeSymbol.startsWith("screener:")) setTradeSymbol("");
+  }, []);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal buy-target-modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-head">
-          <h2>매수후보 선택</h2>
+          <h2>자동 선택 — 매수후보 세트</h2>
           <button className="ghost sm" onClick={onClose}>✕</button>
         </header>
-
-        <nav className="detail-tabs buy-target-modal-tabs">
-          <button className={"detail-tab" + (tab === "manual" ? " on" : "")}
-                  onClick={() => switchTab("manual")}>수동 선택</button>
-          <button className={"detail-tab" + (tab === "screener" ? " on" : "")}
-                  onClick={() => switchTab("screener")}>자동 선택</button>
-        </nav>
-
         <div className="modal-body">
-          {tab === "manual" ? (
-            <>
-              <p className="muted small" style={{ marginTop: 0, marginBottom: 10 }}>
-                매수 후보로 사용할 종목을 직접 선택합니다 (여러 개 선택 가능).
-              </p>
-              <MultiSymbolPicker
-                symbols={symbols}
-                value={tradeSymbol}
-                onChange={setTradeSymbol}
-              />
-              {manualSymbols.length > 1 && (
-                <div className="amount-row" style={{ marginTop: 14 }}>
-                  <label>최대 동시 보유 종목 수</label>
-                  <input type="number" min={1} max={20} value={screenerLimit}
-                         onChange={(e) => setScreenerLimit(Number(e.target.value))} />
-                  <span className="muted">
-                    {`선택한 ${manualSymbols.length}종목 중 최대 ${screenerLimit}개 동시 보유`}
-                  </span>
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <p className="muted small" style={{ marginTop: 0, marginBottom: 10 }}>
-                매일 시가총액·등락률·거래대금 등 조건으로 후보를 자동 선정합니다 (라이브 전용).
-              </p>
-              <SymbolPicker
-                symbols={symbols} value={tradeSymbol} tradableOnly
-                lockMode="screener"
-                onChange={setTradeSymbol}
-                screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
-                setScreenerLimit={setScreenerLimit}
-              />
-              <div className="rebalance-row" style={{ marginTop: 14 }}>
-                <label className="rebalance-toggle">
-                  <input type="checkbox" checked={rebalance.enabled}
-                         onChange={(e) => setRebalance({ ...rebalance, enabled: e.target.checked })} />
-                  <span>일일 리밸런싱 — 상위 N에서 탈락한 보유 종목을 매도하고 새 종목으로 교체</span>
-                </label>
-                {rebalance.enabled && (
-                  <div className="rebalance-detail">
-                    <label>주기</label>
-                    <select value={rebalance.period}
-                            onChange={(e) => setRebalance({
-                              ...rebalance, period: e.target.value as RebalanceIO["period"],
-                            })}>
-                      <option value="daily">매일</option>
-                      <option value="weekly">매주</option>
-                      <option value="monthly">매월</option>
-                    </select>
-                    <span className="muted small">
-                      ⚠ 라이브 전용. 회전율↑ → 거래비용·세금↑. 모의투자로 충분히 검증 후 사용하세요.
-                    </span>
-                  </div>
-                )}
+          <p className="muted small" style={{ marginTop: 0, marginBottom: 10 }}>
+            매일 시가총액·등락률·거래대금 등 조건으로 후보를 자동 선정합니다 (라이브 전용).
+          </p>
+          <SymbolPicker
+            symbols={symbols} value={tradeSymbol} tradableOnly
+            lockMode="screener"
+            onChange={setTradeSymbol}
+            screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
+            setScreenerLimit={setScreenerLimit}
+          />
+          <div className="rebalance-row" style={{ marginTop: 14 }}>
+            <label className="rebalance-toggle">
+              <input type="checkbox" checked={rebalance.enabled}
+                     onChange={(e) => setRebalance({ ...rebalance, enabled: e.target.checked })} />
+              <span>일일 리밸런싱 — 상위 N에서 탈락한 보유 종목을 매도하고 새 종목으로 교체</span>
+            </label>
+            {rebalance.enabled && (
+              <div className="rebalance-detail">
+                <label>주기</label>
+                <select value={rebalance.period}
+                        onChange={(e) => setRebalance({
+                          ...rebalance, period: e.target.value as RebalanceIO["period"],
+                        })}>
+                  <option value="daily">매일</option>
+                  <option value="weekly">매주</option>
+                  <option value="monthly">매월</option>
+                </select>
+                <span className="muted small">
+                  ⚠ 라이브 전용. 회전율↑ → 거래비용·세금↑. 모의투자로 충분히 검증 후 사용하세요.
+                </span>
               </div>
-            </>
-          )}
+            )}
+          </div>
         </div>
-
         <footer className="modal-foot">
           <button onClick={onClose}>적용</button>
         </footer>
