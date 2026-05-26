@@ -100,8 +100,6 @@ def run_backtest(
     rebalance_every_n_days: int | None = None,
     start=None,
     end=None,
-    gap_extra_cost: bool = False,
-    gap_threshold_pct: float = 1.0,
 ) -> dict:
     """매매 전략을 과거 데이터로 시뮬레이션한다. 결과 dict를 반환한다.
 
@@ -128,7 +126,6 @@ def run_backtest(
             sell_tax=sell_tax, currency=currency,
             initial_capital=initial_capital, amount_pct=amount_pct,
             start=start, end=end,
-            gap_extra_cost=gap_extra_cost, gap_threshold_pct=gap_threshold_pct,
         )
     # Phase 57 — 다종목 라우팅. 1종목은 그대로 single path.
     symbols_list = [s.strip() for s in (trade_symbol or "").split(",") if s.strip()]
@@ -146,7 +143,6 @@ def run_backtest(
             sell_tax=sell_tax, currency=currency,
             initial_capital=initial_capital, amount_pct=amount_pct,
             start=start, end=end,
-            gap_extra_cost=gap_extra_cost, gap_threshold_pct=gap_threshold_pct,
         )
     trade_symbol = symbols_list[0]   # whitespace strip 후 단일 종목
     if trade_symbol not in data or data[trade_symbol].empty:
@@ -233,25 +229,11 @@ def run_backtest(
     trades: list[dict] = []
     equity = np.empty(n, dtype=float)
 
-    def _gap_extra(i: int) -> float:
-        """전일 종가 → 당일 시가 갭이 임계값 초과 시 추가 슬리피지 (편도)."""
-        if not gap_extra_cost or i == 0:
-            return 0.0
-        prev_close = closes[i - 1]
-        if prev_close <= 0:
-            return 0.0
-        gap_pct = abs(opens[i] - prev_close) / prev_close * 100
-        if gap_pct <= gap_threshold_pct:
-            return 0.0
-        # 임계값 초과분의 절반을 추가 비용으로 계상
-        return (gap_pct - gap_threshold_pct) / 100 * 0.5
-
     def _open(i: int, raw_price: float):
         nonlocal cash, shares, position, entry_price, entry_i
         nonlocal peak_high, peak_close
-        extra = _gap_extra(i) if next_open else 0.0
         # C-03 — 슬리피지 적용 후 호가단위로 라운딩(매수는 up = 매수자 불리).
-        slipped = raw_price * (1 + slippage + extra)
+        slipped = raw_price * (1 + slippage)
         price = round_to_tick(slipped, direction="up", currency=currency)
         if price <= 0:
             return
@@ -279,9 +261,8 @@ def run_backtest(
         sell_pct = max(0.0, min(100.0, float(sell_pct)))
         if sell_pct <= 0:
             return
-        extra = _gap_extra(i) if next_open else 0.0
         # C-03 — 슬리피지 적용 후 호가단위로 라운딩(매도는 down = 매도자 불리).
-        slipped = raw_price * (1 - slippage - extra)
+        slipped = raw_price * (1 - slippage)
         price = round_to_tick(slipped, direction="down", currency=currency)
         if price <= 0:
             # 가격 산정 불가 — 전량 강제 종료 (safety, 기존 동작 유지)
@@ -439,8 +420,6 @@ def _run_portfolio_backtest(
     amount_pct: float = 10.0,
     start=None,
     end=None,
-    gap_extra_cost: bool = False,
-    gap_threshold_pct: float = 1.0,
 ) -> dict:
     """다종목 portfolio 백테스트.
 
@@ -548,25 +527,12 @@ def _run_portfolio_backtest(
                 return key
         return None
 
-    def _gap_extra(sym: str, i: int) -> float:
-        if not gap_extra_cost or i == 0:
-            return 0.0
-        prev_close = aligned[sym]["close"][i - 1]
-        cur_open = aligned[sym]["open"][i]
-        if np.isnan(prev_close) or np.isnan(cur_open) or prev_close <= 0:
-            return 0.0
-        gap_pct = abs(cur_open - prev_close) / prev_close * 100
-        if gap_pct <= gap_threshold_pct:
-            return 0.0
-        return (gap_pct - gap_threshold_pct) / 100 * 0.5
-
     def _open(sym: str, i: int, raw_price: float, budget: float):
         """portfolio 매수. `budget`=이번 매수에 쓸 수 있는 최대 금액."""
         nonlocal cash
         if np.isnan(raw_price) or raw_price <= 0 or budget <= 0:
             return
-        extra = _gap_extra(sym, i) if next_open else 0.0
-        slipped = raw_price * (1 + slippage + extra)
+        slipped = raw_price * (1 + slippage)
         price = round_to_tick(slipped, direction="up",
                               currency=aligned[sym]["currency"])
         if price <= 0:
@@ -601,8 +567,7 @@ def _run_portfolio_backtest(
             return
         if np.isnan(raw_price) or raw_price <= 0:
             return   # 가격 산정 불가 — skip (기간종료는 별도 final_close 사용)
-        extra = _gap_extra(sym, i) if next_open else 0.0
-        slipped = raw_price * (1 - slippage - extra)
+        slipped = raw_price * (1 - slippage)
         price = round_to_tick(slipped, direction="down",
                               currency=aligned[sym]["currency"])
         if price <= 0:
@@ -948,8 +913,6 @@ def _run_screener_backtest(
     amount_pct: float = 10.0,
     start=None,
     end=None,
-    gap_extra_cost: bool = False,
-    gap_threshold_pct: float = 1.0,
 ) -> dict:
     """자동선택(screener) 백테스트.
 
@@ -1091,26 +1054,12 @@ def _run_screener_backtest(
                 return key
         return None
 
-    def _gap_extra(sym: str, i: int) -> float:
-        if not gap_extra_cost or i == 0:
-            return 0.0
-        a = _aligned(sym)
-        prev_close = a["close"][i - 1]
-        cur_open = a["open"][i]
-        if np.isnan(prev_close) or np.isnan(cur_open) or prev_close <= 0:
-            return 0.0
-        gap_pct = abs(cur_open - prev_close) / prev_close * 100
-        if gap_pct <= gap_threshold_pct:
-            return 0.0
-        return (gap_pct - gap_threshold_pct) / 100 * 0.5
-
     def _open(sym: str, i: int, raw_price: float, budget: float):
         nonlocal cash
         if np.isnan(raw_price) or raw_price <= 0 or budget <= 0:
             return
         a = _aligned(sym)
-        extra = _gap_extra(sym, i) if next_open else 0.0
-        slipped = raw_price * (1 + slippage + extra)
+        slipped = raw_price * (1 + slippage)
         price = round_to_tick(slipped, direction="up", currency=a["currency"])
         if price <= 0:
             return
@@ -1145,8 +1094,7 @@ def _run_screener_backtest(
         if np.isnan(raw_price) or raw_price <= 0:
             return
         a = _aligned(sym)
-        extra = _gap_extra(sym, i) if next_open else 0.0
-        slipped = raw_price * (1 - slippage - extra)
+        slipped = raw_price * (1 - slippage)
         price = round_to_tick(slipped, direction="down", currency=a["currency"])
         if price <= 0:
             return

@@ -315,8 +315,8 @@ export default function ScreenerPanel({
               : items && items.length === 0
                 ? <span className="muted small">매칭 종목 없음</span>
                 : items
-                  ? <ul className="screener-preview-list">
-                      {items.slice(0, 5).map((m) => (
+                  ? <ul className="screener-preview-list scrollable">
+                      {items.map((m) => (
                         <li key={m.symbol}>
                           <span>{m.symbol} {m.name}</span>
                           <span className="muted small">
@@ -337,11 +337,14 @@ export default function ScreenerPanel({
   return (
     <div className="screener-panel">
       <div className="screener-panel-top">
+        <span className="screener-panel-spacer" />
         <button type="button" className="screener-new-btn"
                 onClick={() => setEditor({ kind: "new", name: "", spec: JSON.parse(JSON.stringify(DEFAULT_SPEC)) })}>
           + 새로운 세트 만들기
         </button>
-        {asOf && <span className="muted small">{fmtAsOf(asOf)} 기준</span>}
+        <span className="screener-panel-asof muted small">
+          {asOf ? `${fmtAsOf(asOf)} 기준` : ""}
+        </span>
       </div>
 
       {err && <div className="error" style={{ fontSize: 12 }}>{err}</div>}
@@ -531,8 +534,8 @@ function SetEditor({
       {pvErr && <div className="error" style={{ fontSize: 12 }}>{pvErr}</div>}
       {err && <div className="error" style={{ fontSize: 12 }}>{err}</div>}
       {preview && preview.matches.length > 0 && (
-        <ul className="screener-preview-list">
-          {preview.matches.slice(0, 8).map((m) => (
+        <ul className="screener-preview-list scrollable">
+          {preview.matches.map((m) => (
             <li key={m.symbol}>
               <span>{m.name} <span className="muted small">{m.symbol}</span></span>
               <span className="muted small">
@@ -540,7 +543,6 @@ function SetEditor({
               </span>
             </li>
           ))}
-          {preview.count > 8 && <li className="muted small">…외 {preview.count - 8}종목</li>}
         </ul>
       )}
     </div>

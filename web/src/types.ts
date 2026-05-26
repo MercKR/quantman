@@ -102,8 +102,6 @@ export interface ExecutionPolicy {
   bt_commission_bps?: number;             // 편도 위탁수수료 (bps). 3 = 0.03% (KIS 평균)
   bt_sell_tax_bps?: number;               // 매도 단방향 거래세 (bps). 23 = 0.23% (KOSPI/KOSDAQ 평균)
   bt_slippage_bps?: number;               // 편도 슬리피지 (bps). 10 = 0.10%
-  bt_gap_extra_cost?: boolean;            // 갭일 추가 비용 산입 여부 (갭의 절반)
-  bt_gap_threshold_pct?: number;          // 이 % 이상 갭이면 추가 비용 발생
 }
 
 /** 사이징·리스크 default — exec_defaults.py와 동기. UI placeholder 및 신규 전략 default로 사용. */
@@ -124,8 +122,6 @@ export const EXECUTION_DEFAULTS: Required<ExecutionPolicy> = {
   bt_commission_bps: 3,                   // 편도 위탁수수료만 (C-01 — 매도세 분리)
   bt_sell_tax_bps: 23,                    // 매도세 (편도, KOSPI/KOSDAQ 평균)
   bt_slippage_bps: 10,
-  bt_gap_extra_cost: true,
-  bt_gap_threshold_pct: 1.0,
 };
 
 export interface StrategyDef {

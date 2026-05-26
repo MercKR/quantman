@@ -207,7 +207,7 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
   const [screenerSpec, setScreenerSpec] = useState<ScreenerSpecIO | null>(
     d.screener_spec ?? null);
   const [rebalance, setRebalance] = useState<RebalanceIO>(
-    d.rebalance ?? { mode: "hold", period: "weekly" });
+    d.rebalance ?? { mode: "off", period: "weekly" });
   const [sizingMode, setSizingMode] = useState<SizingMode>(
     (e.sizing_mode ?? EXECUTION_DEFAULTS.sizing_mode) as SizingMode);
   const [amountKrw, setAmountKrw] = useState(e.amount_krw ?? EXECUTION_DEFAULTS.amount_krw);
@@ -222,8 +222,6 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
   const [btCommissionBps, setBtCommissionBps] = useState(e.bt_commission_bps ?? EXECUTION_DEFAULTS.bt_commission_bps);
   const [btSellTaxBps, setBtSellTaxBps] = useState(e.bt_sell_tax_bps ?? EXECUTION_DEFAULTS.bt_sell_tax_bps);
   const [btSlippageBps, setBtSlippageBps] = useState(e.bt_slippage_bps ?? EXECUTION_DEFAULTS.bt_slippage_bps);
-  const [btGapExtraCost, setBtGapExtraCost] = useState<boolean>(e.bt_gap_extra_cost ?? EXECUTION_DEFAULTS.bt_gap_extra_cost);
-  const [btGapThresholdPct, setBtGapThresholdPct] = useState(e.bt_gap_threshold_pct ?? EXECUTION_DEFAULTS.bt_gap_threshold_pct);
   const [capital, setCapital] = useState(10_000_000);
   const [forwardDays, setForwardDays] = useState(1);
 
@@ -257,8 +255,6 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
       bt_commission_bps: btCommissionBps,
       bt_sell_tax_bps: btSellTaxBps,
       bt_slippage_bps: btSlippageBps,
-      bt_gap_extra_cost: btGapExtraCost,
-      bt_gap_threshold_pct: btGapThresholdPct,
     };
     const ruleSellPcts: Record<string, number> = {};
     for (const [k, v] of Object.entries(exits)) {
@@ -369,8 +365,6 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
         btCommissionBps={btCommissionBps} setBtCommissionBps={setBtCommissionBps}
         btSellTaxBps={btSellTaxBps} setBtSellTaxBps={setBtSellTaxBps}
         btSlippageBps={btSlippageBps} setBtSlippageBps={setBtSlippageBps}
-        btGapExtraCost={btGapExtraCost} setBtGapExtraCost={setBtGapExtraCost}
-        btGapThresholdPct={btGapThresholdPct} setBtGapThresholdPct={setBtGapThresholdPct}
         capital={capital} setCapital={setCapital}
         forwardDays={forwardDays} setForwardDays={setForwardDays}
         busy={busy} runAnalysis={runAnalysis} runBacktest={runBacktest}

@@ -69,7 +69,7 @@ export default function Backtest() {
   const [screenerLimit, setScreenerLimit] = useState(() => loadDraft("screenerLimit", 5));
   const [screenerSpec, setScreenerSpec] = useState<ScreenerSpecIO | null>(() => loadDraft("screenerSpec", null));
   const [rebalance, setRebalance] = useState<RebalanceIO>(() =>
-    loadDraft("rebalance", { mode: "hold", period: "weekly" }));
+    loadDraft("rebalance", { mode: "off", period: "weekly" }));
   const [sizingMode, setSizingMode] = useState<SizingMode>(() => loadDraft("sizingMode", EXECUTION_DEFAULTS.sizing_mode));
   const [amountKrw, setAmountKrw] = useState(() => loadDraft("amountKrw", EXECUTION_DEFAULTS.amount_krw));
   const [atrRiskPct, setAtrRiskPct] = useState(() => loadDraft("atrRiskPct", EXECUTION_DEFAULTS.atr_risk_pct));
@@ -83,8 +83,6 @@ export default function Backtest() {
   const [btCommissionBps, setBtCommissionBps] = useState(() => loadDraft("btCommissionBps", EXECUTION_DEFAULTS.bt_commission_bps));
   const [btSellTaxBps, setBtSellTaxBps] = useState(() => loadDraft("btSellTaxBps", EXECUTION_DEFAULTS.bt_sell_tax_bps));
   const [btSlippageBps, setBtSlippageBps] = useState(() => loadDraft("btSlippageBps", EXECUTION_DEFAULTS.bt_slippage_bps));
-  const [btGapExtraCost, setBtGapExtraCost] = useState(() => loadDraft("btGapExtraCost", EXECUTION_DEFAULTS.bt_gap_extra_cost));
-  const [btGapThresholdPct, setBtGapThresholdPct] = useState(() => loadDraft("btGapThresholdPct", EXECUTION_DEFAULTS.bt_gap_threshold_pct));
   const [capital, setCapital] = useState(() => loadDraft("capital", 10_000_000));
   const [forwardDays, setForwardDays] = useState(() => loadDraft("forwardDays", 1));
 
@@ -122,7 +120,6 @@ export default function Backtest() {
       maxPositionPct, dailyLossLimitPct, maxDrawdownPct,
       useLimit, buyTolerancePct, sellTolerancePct,
       btCommissionBps, btSellTaxBps, btSlippageBps,
-      btGapExtraCost, btGapThresholdPct,
       capital, forwardDays,
     };
     try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); }
@@ -134,7 +131,6 @@ export default function Backtest() {
       maxPositionPct, dailyLossLimitPct, maxDrawdownPct,
       useLimit, buyTolerancePct, sellTolerancePct,
       btCommissionBps, btSellTaxBps, btSlippageBps,
-      btGapExtraCost, btGapThresholdPct,
       capital, forwardDays]);
 
   function buildDef(): StrategyDef {
@@ -153,8 +149,6 @@ export default function Backtest() {
       bt_commission_bps: btCommissionBps,
       bt_sell_tax_bps: btSellTaxBps,
       bt_slippage_bps: btSlippageBps,
-      bt_gap_extra_cost: btGapExtraCost,
-      bt_gap_threshold_pct: btGapThresholdPct,
     };
     // Phase 56 — 룰별 sell_pct (ON 룰만). backend SellRules.rule_sell_pcts로 전달.
     const ruleSellPcts: Record<string, number> = {};
@@ -342,8 +336,6 @@ export default function Backtest() {
         btCommissionBps={btCommissionBps} setBtCommissionBps={setBtCommissionBps}
         btSellTaxBps={btSellTaxBps} setBtSellTaxBps={setBtSellTaxBps}
         btSlippageBps={btSlippageBps} setBtSlippageBps={setBtSlippageBps}
-        btGapExtraCost={btGapExtraCost} setBtGapExtraCost={setBtGapExtraCost}
-        btGapThresholdPct={btGapThresholdPct} setBtGapThresholdPct={setBtGapThresholdPct}
         capital={capital} setCapital={setCapital}
         forwardDays={forwardDays} setForwardDays={setForwardDays}
         busy={busy} runAnalysis={runAnalysis} runBacktest={runBacktest}
@@ -398,8 +390,6 @@ export function BuildTab(props: {
   btCommissionBps: number; setBtCommissionBps: (v: number) => void;
   btSellTaxBps: number; setBtSellTaxBps: (v: number) => void;
   btSlippageBps: number; setBtSlippageBps: (v: number) => void;
-  btGapExtraCost: boolean; setBtGapExtraCost: (v: boolean) => void;
-  btGapThresholdPct: number; setBtGapThresholdPct: (v: number) => void;
   capital: number; setCapital: (v: number) => void;
   forwardDays: number; setForwardDays: (v: number) => void;
   busy: string;
@@ -428,8 +418,6 @@ export function BuildTab(props: {
     btCommissionBps, setBtCommissionBps,
     btSellTaxBps, setBtSellTaxBps,
     btSlippageBps, setBtSlippageBps,
-    btGapExtraCost, setBtGapExtraCost,
-    btGapThresholdPct, setBtGapThresholdPct,
     capital, setCapital, forwardDays, setForwardDays,
     busy, runAnalysis, runBacktest, analysis, resetStrategy,
   } = props;
@@ -450,15 +438,57 @@ export function BuildTab(props: {
   const [atrRiskPctTouched, setAtrRiskPctTouched] = useState(() => buy.conditions.length > 0);
   const [atrMultTouched, setAtrMultTouched] = useState(() => buy.conditions.length > 0);
 
+  // ── 섹션 단위 wizard ────────────────────────────────────────────────────────
+  // 큰 섹션(1~6)은 "다음" 클릭 시 진행. 이전 섹션은 collapsed summary로 변환.
+  // 세부섹션(매수방식의 ①②③④)은 위 touched flag로 자동 진행 (변경 없음).
+  type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
+  const [furthestStep, setFurthestStep] = useState<WizardStep>(() => {
+    const hasSellInit = Object.values(exits).some((r) => r.on) || sell.conditions.length > 0;
+    if (hasSellInit) return 6;
+    if (buy.conditions.length > 0 && tradeSymbol) return 3;
+    if (tradeSymbol) return 2;
+    return 1;
+  });
+  const [editStep, setEditStep] = useState<WizardStep | null>(null);
+
+  // 사용자가 초기화(resetStrategy) 직후엔 모든 state empty — wizard도 1로.
+  const allEmpty = !tradeSymbol
+    && buy.conditions.length === 0
+    && sell.conditions.length === 0
+    && !Object.values(exits).some((r) => r.on);
+  useEffect(() => {
+    if (allEmpty) {
+      setFurthestStep(1);
+      setEditStep(null);
+    }
+  }, [allEmpty]);
+
   if (symbols.length === 0) return <p className="muted">데이터 불러오는 중…</p>;
+
+  const activeStep: WizardStep = (editStep ?? furthestStep) as WizardStep;
+  const isStepActive = (n: WizardStep) => activeStep === n && n <= furthestStep;
+  const isStepCollapsed = (n: WizardStep) => n <= furthestStep && !isStepActive(n);
+  function advanceStep(n: WizardStep) {
+    if (editStep === n) {
+      setEditStep(null);
+      return;
+    }
+    if (n < 6) {
+      setFurthestStep(((n as number) + 1) as WizardStep);
+    }
+    setEditStep(null);
+  }
+  function editSection(n: WizardStep) {
+    setEditStep(n);
+  }
 
   const hasBuyTarget = tradeSymbol.trim().length > 0;
   const hasBuyConditions = buy.conditions.length > 0;
   const hasSellSetup = Object.values(exits).some((r) => r.on)
     || sell.conditions.length > 0;
-  const showBuyCond = hasBuyTarget;
-  // ② 노출: 매수후보 + 매수조건 1개 이상 + 사용자가 [▶ 다음] 명시 click
-  const showBuyPrice = showBuyCond && hasBuyConditions && buyConditionsConfirmed;
+  // 매수방식 내부 세부섹션 (자동 진행) — wizard active 2에서만 노출됨
+  // ② 노출: 매수조건 1개 이상 + 사용자가 [+ 조건 추가] click
+  const showBuyPrice = hasBuyConditions && buyConditionsConfirmed;
   // ③ 노출: priceTouched 후. 지정가는 tolerance 입력까지 필수, 시장가는 라디오 선택만으로 OK
   const showBuySize = showBuyPrice && priceTouched && (!useLimit || toleranceTouched);
   // 모드별 값 입력 완료 판정 — 균등분배는 입력 없음, 나머지는 사용자 명시 입력 필요
@@ -469,9 +499,43 @@ export function BuildTab(props: {
     (sizingMode === "atr_risk" && atrRiskPctTouched && atrMultTouched);
   // ④ 요약 노출: 모드 카드 + 모드별 값 입력까지 완료
   const showBuySummary = showBuySize && sizingTouched && sizingValueOk;
-  // 매도 panel 노출은 ④까지 완료해야.
-  const showSell = showBuySummary;
-  const showRest = showSell && hasSellSetup;
+
+  // ── 섹션 collapsed 요약 텍스트 ───────────────────────────────────────────────
+  const buyTargetSummary = (() => {
+    if (!tradeSymbol) return "";
+    if (tradeSymbol.startsWith("screener:")) {
+      const key = tradeSymbol.slice("screener:".length);
+      if (key === "custom") return `${screenerSpec?.label || "커스텀 스펙"} (상위 ${screenerLimit}종목)`;
+      return `자동 선택 · ${key} (상위 ${screenerLimit}종목)`;
+    }
+    const syms = tradeSymbol.split(",").map((s) => s.trim()).filter(Boolean);
+    if (syms.length === 0) return "";
+    const names = syms.map((sym) => symbols.find((s) => s.symbol === sym)?.name || sym);
+    const shown = names.slice(0, 4).join(", ");
+    return names.length > 4 ? `${shown} 외 ${names.length - 4}개` : shown;
+  })();
+  const buyMethodSummary = (() => {
+    if (!showBuySummary) return "";
+    const price = useLimit ? `지정가(+${fmt2(buyTolerancePct)}%)` : "시장가";
+    let size = "";
+    if (sizingMode === "pct_cash") size = `정률 ${fmt2(buyAmountPct)}%`;
+    else if (sizingMode === "fixed_amount") size = `정액 ${wonReadable(amountKrw)}`;
+    else if (sizingMode === "equal_weight") size = "균등분배";
+    else if (sizingMode === "atr_risk") size = `ATR×${fmt2(atrMult)}·위험 ${fmt2(atrRiskPct)}%`;
+    return `${price} · ${size}`;
+  })();
+  const sellSummary = (() => {
+    const active = Object.values(exits).filter((v) => v.on).length;
+    const cond = sell.conditions.length;
+    const parts: string[] = [];
+    if (active > 0) parts.push(`실시간 ${active}룰`);
+    if (cond > 0) parts.push(`일일 매도 ${cond}조건`);
+    return parts.join(" · ");
+  })();
+  const riskSummary =
+    `한 종목 ≤${fmt2(maxPositionPct)}% · 일일 -${fmt2(dailyLossLimitPct)}% · 누적 -${fmt2(maxDrawdownPct)}%`;
+  const btAssumeSummary = `수수료 ${btCommissionBps}·세 ${btSellTaxBps}·슬리 ${btSlippageBps}bps`;
+  const capitalSummary = wonReadable(capital);
 
   return (
     <>
@@ -489,15 +553,33 @@ export function BuildTab(props: {
           </p>
         </div>
       )}
-      <BuyTargetPanel
-        symbols={symbols}
-        tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
-        screenerLimit={screenerLimit} setScreenerLimit={setScreenerLimit}
-        screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
-        rebalance={rebalance} setRebalance={setRebalance}
-      />
+      {/* 섹션 1: 매수후보 */}
+      {isStepCollapsed(1) ? (
+        <SectionCollapsedHeader num={1} title="매수후보"
+          summary={buyTargetSummary} onEdit={() => editSection(1)} />
+      ) : (
+        <BuyTargetPanel
+          symbols={symbols}
+          tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
+          screenerLimit={screenerLimit} setScreenerLimit={setScreenerLimit}
+          screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
+          rebalance={rebalance} setRebalance={setRebalance}
+          footer={
+            <SectionNextRow
+              valid={hasBuyTarget}
+              editing={editStep === 1}
+              isLast={false}
+              onNext={() => advanceStep(1)}
+            />
+          }
+        />
+      )}
 
-      {showBuyCond && (
+      {/* 섹션 2: 매수방식 */}
+      {isStepCollapsed(2) ? (
+        <SectionCollapsedHeader num={2} title="매수방식"
+          summary={buyMethodSummary} onEdit={() => editSection(2)} />
+      ) : isStepActive(2) ? (
       <>
       {/* Phase 49 — 매수 조건 통합 문장 sentence. ①조건 · ②가격 · ③수량 · ④종목 4 절. */}
       <div className="panel buy-sentence-panel">
@@ -713,15 +795,23 @@ export function BuildTab(props: {
           </p>
         </section>
         )}
+        <SectionNextRow
+          valid={showBuySummary}
+          editing={editStep === 2}
+          isLast={false}
+          onNext={() => advanceStep(2)}
+        />
       </div>
       </>
-      )}
+      ) : null}
 
-      {showSell && (
+      {/* 섹션 3: 매도조건 */}
+      {isStepCollapsed(3) ? (
+        <SectionCollapsedHeader num={3} title="매도조건"
+          summary={sellSummary} onEdit={() => editSection(3)} />
+      ) : isStepActive(3) ? (
       <>
-      {/* Phase 51 — 3. 매도 조건 details. default 매도 룰(익절10·손절-5·보유5)이
-          ON이라 접혀도 매매 안전. summary에 활성 룰 미리보기. */}
-      <details className="panel section-collapsible">
+      <details className="panel section-collapsible" open>
         <summary>
           <h3>3. 매도 조건 <span className="muted">(하나 이상 설정 필수 · 먼저 트리거되는 규칙으로 매도)</span></h3>
           <span className="sect-summary-meta">
@@ -824,13 +914,22 @@ export function BuildTab(props: {
             )}
           </div>
         )}
+        <SectionNextRow
+          valid={hasSellSetup}
+          editing={editStep === 3}
+          isLast={false}
+          onNext={() => advanceStep(3)}
+        />
       </details>
       </>
-      )}
+      ) : null}
 
-      {showRest && (
-      <>
-      <details className="panel section-collapsible">
+      {/* 섹션 4: 리스크 한도 */}
+      {isStepCollapsed(4) ? (
+        <SectionCollapsedHeader num={4} title="리스크 한도"
+          summary={riskSummary} onEdit={() => editSection(4)} />
+      ) : isStepActive(4) ? (
+      <details className="panel section-collapsible" open>
         <summary><h3>4. 리스크 한도 <span className="muted">(선택 — 미설정 시 기본값 적용)</span></h3></summary>
 
         <div className="sub-h">4-1. 단일 종목 상한</div>
@@ -860,10 +959,21 @@ export function BuildTab(props: {
         </div>
 
         {/* Phase 49 — 4-3 "매수 발주 가격 범위"는 2번 매수 조건의 ② 가격 절로 이동. */}
+        <SectionNextRow
+          valid={true}
+          editing={editStep === 4}
+          isLast={false}
+          onNext={() => advanceStep(4)}
+        />
       </details>
+      ) : null}
 
-      {/* Phase 39 — 백테스트 비용 가정 (실매매 영향 없음) */}
-      <details className="panel section-collapsible">
+      {/* 섹션 5: 백테스트 가정 */}
+      {isStepCollapsed(5) ? (
+        <SectionCollapsedHeader num={5} title="백테스트 가정"
+          summary={btAssumeSummary} onEdit={() => editSection(5)} />
+      ) : isStepActive(5) ? (
+      <details className="panel section-collapsible" open>
         <summary><h3>5. 백테스트 가정 <span className="muted">(백테스트 결과의 보수성에만 영향 · 실매매(모의/실전) 영향 없음)</span></h3></summary>
         <div className="amount-row">
           <label>위탁수수료 (편도)</label>
@@ -889,29 +999,21 @@ export function BuildTab(props: {
             bps — 호가 갭/체결 지연으로 인한 가격 차이. default 10 (= 0.10%).
           </span>
         </div>
-        <div className="amount-row">
-          <label>
-            <input type="checkbox" checked={btGapExtraCost}
-                   onChange={(e) => setBtGapExtraCost(e.target.checked)}
-                   style={{ marginRight: 6 }} />
-            갭일 추가 비용
-          </label>
-          <span className="muted">
-            전일 종가 대비 시초가 갭이 임계값 초과 시, 갭의 절반을 추가 비용으로 산입 (보수적 가정).
-          </span>
-        </div>
-        {btGapExtraCost && (
-          <div className="amount-row">
-            <label>갭 임계값</label>
-            <input type="number" min={0.1} max={10} step={0.1} value={btGapThresholdPct}
-                   onChange={(e) => setBtGapThresholdPct(Number(e.target.value))} />
-            <span className="muted">% — 이 이상 갭이면 추가 비용 발생. default 1.0%.</span>
-          </div>
-        )}
+        <SectionNextRow
+          valid={true}
+          editing={editStep === 5}
+          isLast={false}
+          onNext={() => advanceStep(5)}
+        />
       </details>
+      ) : null}
 
-      {/* Phase 51 — 6. 자금 details. default 1,000만원이라 접혀도 백테스트 가능. */}
-      <details className="panel section-collapsible">
+      {/* 섹션 6: 자금 */}
+      {isStepCollapsed(6) ? (
+        <SectionCollapsedHeader num={6} title="자금"
+          summary={capitalSummary} onEdit={() => editSection(6)} />
+      ) : isStepActive(6) ? (
+      <details className="panel section-collapsible" open>
         <summary>
           <h3>6. 자금</h3>
           <span className="sect-summary-meta">{wonReadable(capital)}</span>
@@ -925,8 +1027,16 @@ export function BuildTab(props: {
             </div>
           </div>
         </div>
+        <SectionNextRow
+          valid={true}
+          editing={editStep === 6}
+          isLast={true}
+          onNext={() => advanceStep(6)}
+        />
       </details>
+      ) : null}
 
+      {furthestStep >= 6 && editStep === null && (
       <div className="action-bar">
         <div className="action-bar-info">
           <strong>{name || "새 전략"}</strong> · {tradeSymbol || "종목 미선택"} 매수
@@ -959,7 +1069,6 @@ export function BuildTab(props: {
           </button>
         </div>
       </div>
-      </>
       )}
 
       {analysis && (
@@ -988,17 +1097,56 @@ export function BuildTab(props: {
   );
 }
 
+/** wizard collapsed 섹션 헤더 — 번호·제목·요약·수정 버튼. 클릭/Enter로 편집 진입. */
+function SectionCollapsedHeader({
+  num, title, summary, onEdit,
+}: { num: number; title: string; summary: string; onEdit: () => void }) {
+  const stop = (e: React.MouseEvent | React.KeyboardEvent) => e.stopPropagation();
+  return (
+    <div className="panel section-collapsed"
+         role="button" tabIndex={0}
+         onClick={onEdit}
+         onKeyDown={(e) => {
+           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onEdit(); }
+         }}>
+      <h3 className="section-collapsed-title">{num}. {title}</h3>
+      <span className="section-collapsed-summary muted small">{summary || "—"}</span>
+      <button type="button" className="ghost sm section-collapsed-edit"
+              onClick={(e) => { stop(e); onEdit(); }}>
+        수정
+      </button>
+    </div>
+  );
+}
+
+/** wizard 진행 버튼 — 펼친 섹션 우측 하단. */
+function SectionNextRow({
+  valid, editing, isLast, onNext,
+}: { valid: boolean; editing: boolean; isLast: boolean; onNext: () => void }) {
+  const label = editing ? "확인 ✓" : (isLast ? "완료 ✓" : "다음 ▶");
+  return (
+    <div className="section-next-row">
+      <button type="button" className="step-next-btn"
+              disabled={!valid} onClick={onNext}>
+        {label}
+      </button>
+    </div>
+  );
+}
+
 /** 매수후보 panel — 두 큰 버튼(수동/자동)으로 모달 호출. 모달 안 탭으로 모드 전환. */
 function BuyTargetPanel({
   symbols, tradeSymbol, setTradeSymbol,
   screenerLimit, setScreenerLimit,
   screenerSpec, setScreenerSpec, rebalance, setRebalance,
+  footer,
 }: {
   symbols: SymbolInfo[];
   tradeSymbol: string; setTradeSymbol: (v: string) => void;
   screenerLimit: number; setScreenerLimit: (v: number) => void;
   screenerSpec: ScreenerSpecIO | null; setScreenerSpec: (s: ScreenerSpecIO | null) => void;
   rebalance: RebalanceIO; setRebalance: (r: RebalanceIO) => void;
+  footer?: React.ReactNode;
 }) {
   const isScreener = tradeSymbol.startsWith("screener:");
   const manualSymbols = isScreener
@@ -1073,6 +1221,7 @@ function BuyTargetPanel({
           onClose={() => setModalOpen(null)}
         />
       )}
+      {footer}
     </div>
   );
 }

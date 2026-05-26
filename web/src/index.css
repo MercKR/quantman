@@ -1176,8 +1176,8 @@ thead th { color: var(--muted); font-weight: 600; }
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--text); flex-wrap: wrap;
 }
-.screener-card-rule .rule-field { flex: 1; color: var(--text); }
-.screener-card-rule .rule-op,
+.screener-card-rule .rule-field { color: var(--text); margin-right: 4px; }
+.screener-card-rule .rule-op { margin-left: auto; color: var(--muted); }
 .screener-card-rule .rule-unit,
 .screener-card-rule .rule-sep { color: var(--muted); }
 .screener-card-rules input[type="number"] {
@@ -1210,14 +1210,29 @@ thead th { color: var(--muted); font-weight: 600; }
   display: flex; flex-direction: column; gap: 3px;
   font-size: 12px;
 }
+.screener-preview-list.scrollable {
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
 .screener-preview-list li {
   display: flex; justify-content: space-between; gap: 8px;
 }
 
 /* 자동 선택 세트 — 통합 팝오버 */
 .screener-panel-top {
-  display: flex; align-items: center; justify-content: center; gap: 12px;
-  padding: 8px 0 12px; border-bottom: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.screener-panel-spacer { display: block; }
+.screener-panel-asof {
+  text-align: right;
+  white-space: nowrap;
+  font-size: 11px;
 }
 .screener-new-btn {
   padding: 10px 20px; font-size: 14px; font-weight: 600;
@@ -1890,3 +1905,56 @@ thead th { color: var(--muted); font-weight: 600; }
   .kpi-box { flex: 1; min-width: 0; padding: 10px 10px; }
 }
 
+/* ── 섹션 wizard (BuildTab) ───────────────────────────────────────────────── */
+.section-collapsed {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.section-collapsed:hover {
+  background: var(--panel-hover, var(--panel));
+  border-color: var(--accent);
+}
+.section-collapsed-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+.section-collapsed-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.section-collapsed-edit {
+  white-space: nowrap;
+}
+.section-next-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.step-next-btn {
+  padding: 10px 22px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #ffffff;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.step-next-btn:hover:not(:disabled) {
+  background: var(--accent-hover, var(--accent));
+}
+.step-next-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

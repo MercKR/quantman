@@ -65,8 +65,6 @@ DEFAULT_EXECUTION: dict[str, Any] = {
     "bt_commission_bps": 3,            # 편도 0.03% (KIS 위탁수수료, 매수·매도 모두)
     "bt_sell_tax_bps": 23,             # 매도 0.23% (거래세 + 농특세, 매도 단방향)
     "bt_slippage_bps": 10,             # 편도 0.10% 기본 슬리피지
-    "bt_gap_extra_cost": True,         # 갭일에 갭의 절반을 추가 비용으로 산입
-    "bt_gap_threshold_pct": 1.0,       # 이 이상 갭이면 추가 비용 발생
 }
 
 

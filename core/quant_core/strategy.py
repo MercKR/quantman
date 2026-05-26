@@ -204,8 +204,6 @@ class ExecutionPolicy(BaseModel):
     bt_commission_bps: Optional[float] = None
     bt_sell_tax_bps: Optional[float] = None
     bt_slippage_bps: Optional[float] = None
-    bt_gap_extra_cost: Optional[bool] = None
-    bt_gap_threshold_pct: Optional[float] = None
 
 
 def parse_trade_symbols(trade_symbol: str) -> tuple[str, list[str]]:

@@ -76,8 +76,6 @@ def run_strategy_backtest(
         rebalance_every_n_days=strategy.rebalance.every_n_days,
         start=start,
         end=end,
-        gap_extra_cost=bool(pol["bt_gap_extra_cost"]),
-        gap_threshold_pct=float(pol["bt_gap_threshold_pct"]),
     )
 
 
