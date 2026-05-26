@@ -594,7 +594,16 @@ function BuildTab(props: {
             buyTolerancePct={buyTolerancePct}
             selected={priceTouched} onSelect={() => setPriceTouched(true)}
             toleranceTouched={toleranceTouched}
-            onToleranceChange={(v) => { setBuyTolerancePct(v); setToleranceTouched(true); }}
+            onToleranceChange={(v) => {
+              if (isNaN(v)) {
+                // 사용자가 입력을 모두 지움 — 빈칸 상태로 되돌리고 다음 단계 잠금
+                setBuyTolerancePct(0);
+                setToleranceTouched(false);
+              } else {
+                setBuyTolerancePct(v);
+                setToleranceTouched(true);
+              }
+            }}
           />
         </section>
         )}
@@ -610,19 +619,19 @@ function BuildTab(props: {
           <div className="sizing-cards">
             <SizingCard
               on={sizingTouched && sizingMode === "pct_cash"} title="정률"
-              desc={`자본의 N%를 한 종목에 — 자본이 늘면 매수액도 자동 증가`}
+              tip="자본의 N%를 한 종목에 — 자본이 늘면 매수액도 자동 증가"
               onPick={() => { setSizingTouched(true); setSizingMode("pct_cash"); }} />
             <SizingCard
               on={sizingTouched && sizingMode === "fixed_amount"} title="정액"
-              desc={`한 종목당 고정 금액 — "이 종목 100만원어치 사라"`}
+              tip="한 종목당 고정 금액 — 예: '이 종목 100만원어치 사라'"
               onPick={() => { setSizingTouched(true); setSizingMode("fixed_amount"); }} />
             <SizingCard
-              on={sizingTouched && sizingMode === "equal_weight"} title="균등 분배"
-              desc={`자본을 동시 보유 종목 수로 나눔 — 종목당 동일 금액`}
+              on={sizingTouched && sizingMode === "equal_weight"} title="균등분배"
+              tip="자본을 동시 보유 종목 수로 나눔 — 종목당 동일 금액"
               onPick={() => { setSizingTouched(true); setSizingMode("equal_weight"); }} />
             <SizingCard
-              on={sizingTouched && sizingMode === "atr_risk"} title="리스크 기반 (ATR)"
-              desc={`변동성에 반비례 — 종목별 동일 손실 위험`}
+              on={sizingTouched && sizingMode === "atr_risk"} title="ATR 기반"
+              tip="변동성에 반비례 — 종목별 동일 손실 위험"
               onPick={() => { setSizingTouched(true); setSizingMode("atr_risk"); }} />
           </div>
 
@@ -659,17 +668,26 @@ function BuildTab(props: {
           {sizingTouched && sizingMode === "fixed_amount" && (
             <div className="amount-row">
               <label>한 종목당</label>
-              <input type="number" min={0} step={10000}
-                     value={amountKrwTouched ? amountKrw : ""}
-                     placeholder="예: 1000000"
-                     onChange={(e) => {
-                       setAmountKrw(Number(e.target.value));
-                       setAmountKrwTouched(true);
-                     }} />
-              <span className="muted">
+              <span className="input-suffix">
+                <input type="number" min={0} step={1}
+                       value={amountKrwTouched ? amountKrw / 10000 : ""}
+                       placeholder="100"
+                       onChange={(e) => {
+                         const v = e.target.value;
+                         if (v === "") {
+                           setAmountKrw(0);
+                           setAmountKrwTouched(false);
+                         } else {
+                           setAmountKrw(Number(v) * 10000);
+                           setAmountKrwTouched(true);
+                         }
+                       }} />
+                <span className="suffix">만원</span>
+              </span>
+              <span className="muted small">
                 {amountKrwTouched
-                  ? `원  =  ${wonReadable(amountKrw)}${amountKrw > 0 && capital > 0 ? ` (자본의 ${fmt2(amountKrw / capital * 100)}%)` : ""}`
-                  : "원 ← 직접 입력 (예: 100만원)"}
+                  ? `= ${wonReadable(amountKrw)}${amountKrw > 0 && capital > 0 ? ` (자본의 ${fmt2(amountKrw / capital * 100)}%)` : ""}`
+                  : "← 직접 입력 (예: 100 = 100만원)"}
               </span>
             </div>
           )}
@@ -1539,8 +1557,8 @@ function BuyPricePanel({ useLimit, setUseLimit, buyTolerancePct,
                  checked={selected && useLimit}
                  onChange={() => pickLimit(true)} />
           <div className="price-mode-text">
-            <strong>지정가 (±tolerance%)</strong>
-            <span className="muted small">전일 종가 ±N% 내에서만 매수 — 갭상승 자동 회피</span>
+            <strong>지정가</strong>
+            <span className="info-tip" title="전일 종가 ±N% 내에서만 매수 — 갭상승 자동 회피">ⓘ</span>
           </div>
         </label>
         <label className={"price-mode-btn" + (selected && !useLimit ? " on" : "")}>
@@ -1549,21 +1567,31 @@ function BuyPricePanel({ useLimit, setUseLimit, buyTolerancePct,
                  onChange={() => pickLimit(false)} />
           <div className="price-mode-text">
             <strong>시장가</strong>
-            <span className="muted small">즉시 체결 — 시초가 갭에 무방비, 변동성 큰 종목 주의</span>
+            <span className="info-tip" title="즉시 체결 — 시초가 갭에 무방비, 변동성 큰 종목 주의">ⓘ</span>
           </div>
         </label>
       </div>
       {selected && useLimit && (
         <div className="amount-row" style={{ marginTop: 10 }}>
           <label>전일 종가 + 최대</label>
-          <input type="number" min={0.1} max={5} step={0.1}
-                 value={toleranceTouched ? buyTolerancePct : ""}
-                 placeholder="예: 1"
-                 onChange={(e) => onToleranceChange(Number(e.target.value))} />
-          <span className="muted">% 까지 매수 허용</span>
-          <span className="metric-hint lg"
-                data-tip={`발주가 = 전일 종가 × (1 + N%). 시초가가 이보다 높으면 미체결 폐기. 변동성 큰 종목은 N 키우면 잡힐 확률↑, 작으면 갭상승 자동 회피.`}>ⓘ</span>
-          {toleranceTouched && buyTolerancePct < 0.1 && (
+          <span className="input-suffix">
+            <input type="number" min={0.1} max={5} step={0.1}
+                   value={toleranceTouched ? buyTolerancePct : ""}
+                   placeholder="1"
+                   onChange={(e) => {
+                     const v = e.target.value;
+                     if (v === "") {
+                       onToleranceChange(NaN);    // 빈칸 = touched=false 신호
+                     } else {
+                       onToleranceChange(Number(v));
+                     }
+                   }} />
+            <span className="suffix">%</span>
+          </span>
+          <span className="muted small">까지 매수 허용</span>
+          <span className="info-tip"
+                title="발주가 = 전일 종가 × (1 + N%). 시초가가 이보다 높으면 미체결 폐기. 변동성 큰 종목은 N 키우면 잡힐 확률↑, 작으면 갭상승 자동 회피.">ⓘ</span>
+          {toleranceTouched && buyTolerancePct < 0.1 && buyTolerancePct >= 0 && (
             <span className="metric-hint lg" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}
                   data-tip="0%(또는 0.1% 미만)은 시초가가 정확히 전일 종가와 같아야 체결. 실제로는 거의 미체결됩니다. 0.5% 이상 권장.">⚠</span>
           )}
@@ -1582,16 +1610,19 @@ function BuyPricePanel({ useLimit, setUseLimit, buyTolerancePct,
   );
 }
 
-// ── 사이징 모드 카드 (Phase 47 — 4지 통합 셀렉터) ───────────────────────────
-function SizingCard({ on, title, desc, onPick }: {
-  on: boolean; title: string; desc: string; onPick: () => void;
+// ── 사이징 모드 카드 — title + ⓘ 호버 (Phase 47 → 텍스트 비중 축소). ────────
+function SizingCard({ on, title, tip, onPick }: {
+  on: boolean; title: string; tip: string; onPick: () => void;
 }) {
   return (
     <button type="button"
             className={"sizing-card" + (on ? " on" : "")}
             onClick={onPick}>
-      <div className="sizing-card-title">{title}</div>
-      <div className="sizing-card-desc">{desc}</div>
+      <div className="sizing-card-title">
+        {title}
+        <span className="info-tip" title={tip}
+              onClick={(e) => e.stopPropagation()}>ⓘ</span>
+      </div>
     </button>
   );
 }

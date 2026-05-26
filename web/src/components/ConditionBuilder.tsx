@@ -190,9 +190,14 @@ function GroupEditor({ symbols, group, onChange, depth, onAddCondition, context 
     onChange({ ...group, conditions: [...group.conditions, starterCondition(symbols)] });
   }
 
-  function addGroup() {
-    const sub: ConditionGroup = { logic: "OR", conditions: [starterCondition(symbols)] };
-    onChange({ ...group, conditions: [...group.conditions, sub] });
+  /** row i를 단일-원소 subgroup으로 wrap (괄호 열기 — row 옆 "(" 버튼).
+   *  unwrap("닫기")은 묶음 삭제 또는 subgroup 안에 row 1개 남으면 footer "묶음 삭제". */
+  function wrapInGroup(i: number) {
+    const node = group.conditions[i];
+    const sub: ConditionGroup = { logic: "AND",
+                                  conditions: [node as ConditionNode] };
+    onChange({ ...group,
+               conditions: group.conditions.map((n, idx) => idx === i ? sub : n) });
   }
 
   function remove(i: number) {
@@ -230,45 +235,33 @@ function GroupEditor({ symbols, group, onChange, depth, onAddCondition, context 
               onSetOp={(op) => setOp(i, op)}
               onRemove={() => remove(i)}
               onAdd={onAddCondition}
+              onWrap={() => wrapInGroup(i)}
+              isDraft={!!onAddCondition}
               context={context}
             />
           )}
 
-          {/* 항목 사이의 AND/OR 라벨 (마지막 항목엔 표시 안 함) */}
+          {/* 항목 사이의 AND/OR 토글 버튼 (마지막 항목엔 표시 안 함).
+              클릭하면 이 group의 logic이 AND↔OR 토글. 양옆 구분선 제거. */}
           {i < group.conditions.length - 1 && (
             <div className="logic-sep">
-              <span className="logic-sep-line" />
-              <span className="logic-sep-label">
+              <button type="button" className="logic-sep-toggle"
+                      title="클릭해서 AND/OR 전환"
+                      onClick={() => onChange({
+                        ...group,
+                        logic: group.logic === "AND" ? "OR" : "AND",
+                      })}>
                 {group.logic === "AND" ? "그리고 (AND)" : "또는 (OR)"}
-              </span>
-              <span className="logic-sep-line" />
+              </button>
             </div>
           )}
         </div>
       ))}
 
       <div className="builder-foot">
-        {group.conditions.length > 1 && (
-          <div className="logic-toggle">
-            {(["AND", "OR"] as const).map((lg) => (
-              <button
-                key={lg} type="button"
-                className={group.logic === lg ? "" : "ghost"}
-                onClick={() => onChange({ ...group, logic: lg })}
-              >
-                {lg === "AND" ? "모두 만족 (AND)" : "하나라도 만족 (OR)"}
-              </button>
-            ))}
-          </div>
-        )}
         <button type="button" className="ghost sm" onClick={addCondition}>
           + 조건 추가
         </button>
-        {depth === 0 && (
-          <button type="button" className="ghost sm" onClick={addGroup}>
-            + 묶음 추가 (괄호)
-          </button>
-        )}
       </div>
     </div>
   );
@@ -302,7 +295,7 @@ function boundaryAlwaysFalse(op: Op, right: Operand | undefined, leftGroup: stri
 }
 
 /** 단일 조건 문장 한 줄 — 좌변(종목·지표) · 수식어 · 우변(종목·지표 또는 숫자) · 연산자 · 삭제 · 추가(선택). */
-function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove, onAdd, context }: {
+function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove, onAdd, onWrap, isDraft, context }: {
   symbols: SymbolInfo[];
   c: Condition;
   onPatch: (patch: Partial<Condition>) => void;
@@ -310,6 +303,10 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove, onAdd, context }
   onRemove: () => void;
   /** Phase 56 — 정의되면 [추가] 버튼이 [삭제] 옆에 표시됨. 매수조건 progressive disclosure용. */
   onAdd?: () => void;
+  /** Phase 57-C — 괄호 열기. 이 row를 단일-원소 subgroup으로 wrap. 다시 닫으려면 묶음 삭제. */
+  onWrap?: () => void;
+  /** Phase 57-C — true면 row 전체 dim 처리 (적용 대기). false면 환하게 (적용 완료). */
+  isDraft?: boolean;
   /** Phase 56 — context="sell"면 SELF_SYMBOL indicators에 보유기간 가상 indicator 노출. */
   context?: "buy" | "sell";
 }) {
@@ -319,7 +316,7 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove, onAdd, context }
   // NEW-11 — > or < boundary 값 검출.
   const boundaryWarn = boundaryAlwaysFalse(c.op, c.right, leftGroup);
   return (
-    <div className="sentence">
+    <div className={"sentence" + (isDraft ? " draft" : "")}>
       <SymbolChip
         symbols={symbols} operand={c.left}
         onChange={(o) => onPatch({ left: o })}
@@ -388,6 +385,15 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove, onAdd, context }
             onClick={() => onPatch({ modifier: { kind: "streak", days: 3 } })}
           >
             + 수식어
+          </button>
+        )}
+        {onWrap && (
+          <button
+            type="button" className="chip ghost-chip"
+            title="이 조건을 괄호로 묶어 새 묶음을 시작합니다. 묶음 안에 + 조건 추가로 묶을 조건을 더할 수 있습니다. 다시 풀려면 묶음 삭제."
+            onClick={onWrap}
+          >
+            ( 괄호
           </button>
         )}
         <button type="button" className="ghost sm" onClick={onRemove}>

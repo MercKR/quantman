@@ -96,6 +96,38 @@ a:hover { text-decoration: underline; }
 }
 .info-tip:hover { background: var(--accent-soft); color: var(--accent); }
 
+/* 입력칸 + suffix (% / 만원) — input 내부 우측에 단위 표시 */
+.input-suffix {
+  position: relative; display: inline-flex; align-items: center;
+}
+.input-suffix input {
+  padding-right: 36px;
+}
+.input-suffix .suffix {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: 12px; pointer-events: none;
+  user-select: none;
+}
+
+/* AND/OR 인라인 토글 — 양옆 구분선 없이 라벨 자체가 버튼 */
+.logic-sep-toggle {
+  background: transparent; border: 1px dashed var(--border);
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  padding: 2px 10px; border-radius: 999px; cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.logic-sep-toggle:hover {
+  background: var(--accent-soft); color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 적용 대기 row — 어둡게(dim) 처리. 적용 후 환해짐. */
+.sentence.draft {
+  opacity: 0.55;
+  transition: opacity 0.18s ease;
+}
+.sentence.draft:focus-within { opacity: 0.85; }
+
 /* 페이지 내부 모드 필터 — Dashboard 활성 전략 paper/live 토글 */
 .mode-filter {
   display: inline-flex; background: var(--bg);
