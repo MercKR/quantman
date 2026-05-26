@@ -226,6 +226,10 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
   const [capital, setCapital] = useState(10_000_000);
   const [forwardDays, setForwardDays] = useState(1);
 
+  // 백테스트 기간 (옵션) — 빈 문자열이면 데이터셋 전체 기간 사용
+  const [backtestStart, setBacktestStart] = useState<string>("");
+  const [backtestEnd, setBacktestEnd] = useState<string>("");
+
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [busy, setBusy] = useState<"" | "analysis" | "backtest" | "save">("");
@@ -368,6 +372,8 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
         btSlippageBps={btSlippageBps} setBtSlippageBps={setBtSlippageBps}
         capital={capital} setCapital={setCapital}
         forwardDays={forwardDays} setForwardDays={setForwardDays}
+        backtestStart={backtestStart} setBacktestStart={setBacktestStart}
+        backtestEnd={backtestEnd} setBacktestEnd={setBacktestEnd}
         busy={busy} runAnalysis={runAnalysis} runBacktest={runBacktest}
         analysis={analysis}
         resetStrategy={discardChanges}
