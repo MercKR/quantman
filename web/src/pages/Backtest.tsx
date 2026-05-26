@@ -475,6 +475,19 @@ export function BuildTab(props: {
     }
   }, [allEmpty]);
 
+  // preset 라벨 매핑용 (자동선택 collapsed summary에 한국어 title 표시).
+  // ⚠ rules of hooks: early return 이전에 호출. 첫 render(symbols=[])에선
+  // early return 발동, 두 번째 render(symbols 채워짐)에선 발동 안 함 →
+  // hook 호출 횟수가 render마다 달라져 React error #310 발생. 위치 사수.
+  const [presetMap, setPresetMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    api.listScreenerPresets().then((r) => {
+      const m: Record<string, string> = {};
+      r.presets.forEach((p) => { m[p.key] = p.title; });
+      setPresetMap(m);
+    }).catch(() => {});
+  }, []);
+
   if (symbols.length === 0) return <p className="muted">데이터 불러오는 중…</p>;
 
   const activeStep: WizardStep = (editStep ?? furthestStep) as WizardStep;
@@ -511,16 +524,6 @@ export function BuildTab(props: {
     (sizingMode === "atr_risk" && atrRiskPctTouched && atrMultTouched);
   // ④ 요약 노출: 모드 카드 + 모드별 값 입력까지 완료
   const showBuySummary = showBuySize && sizingTouched && sizingValueOk;
-
-  // preset 라벨 매핑용 (자동선택 collapsed summary에 한국어 title 표시)
-  const [presetMap, setPresetMap] = useState<Record<string, string>>({});
-  useEffect(() => {
-    api.listScreenerPresets().then((r) => {
-      const m: Record<string, string> = {};
-      r.presets.forEach((p) => { m[p.key] = p.title; });
-      setPresetMap(m);
-    }).catch(() => {});
-  }, []);
 
   // ── 섹션 collapsed 요약 텍스트 ───────────────────────────────────────────────
   const buyTargetSummary = (() => {
