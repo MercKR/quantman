@@ -13,6 +13,33 @@
 | 22:25 KST (DST) / 23:25 (Std) | **미장 자동매매 시작** |
 | 05:05 KST 다음날 (DST) / 06:05 (Std) | **미장 자동매매 종료** |
 
+### 🆕 누락 원인 자동 진단 + 다음 작업 영향 분석
+
+이전엔 "누락"이 일률적으로 "로컬앱 실행 중 아니었거나 grace 초과"로 표시 —
+사용자가 진짜 원인을 알 수 없었음. 이제 **4가지 case 자동 구분 + 다음 작업
+영향까지 hover로 노출**:
+
+- **A. 앱 OFF**: heartbeat 부재 → "PC 종료·앱 종료·네트워크 단절"
+- **B. cycle 미발동**: heartbeat alive였으나 push 없음 → "cron 미등록·grace 초과·KIS 점검 시간대"
+- **C. cycle 실행 실패**: snapshot 존재하지만 error 마커 → KIS API 응답 등 구체 오류
+- **D. push 실패**: 서버 측 구분 불가, 일단 A/B로 흡수
+
+각 누락 옆 hover 시 예시:
+```
+✗ 22:25 미장 자동매매 시작  →  누락
+  ↳ 로컬앱은 alive였으나 cycle이 발동되지 않았습니다 (cron 미등록·grace 초과·
+    KIS 점검 시간대 가능성).
+    → 오늘 미장 신규 매수 0건, 보유 US 종목 청산 평가 누락. 다음 미장 cycle은
+      캘린더상 다음 거래일 open-5min.
+```
+
+**구현:**
+- 서버: `HeartbeatEvent` table 추가, 매 ping마다 row 1개 기록 (latest 1건만
+  유지하던 이전 방식으론 과거 임의 시점 alive 판정 불가).
+- 서버: `_classify_missed`가 heartbeat history + snapshot error 마커로 A/B/C 분류.
+- 로컬앱: `run_cycle`이 예외 발생 시 error snapshot을 서버에 push (이전엔 예외
+  propagate해 서버가 그냥 push 없음만 봐서 case C 추적 불가).
+
 ### 🆕 시장별 매매 후보 결정 분리
 
 이전엔 "매매 후보 결정 18:15" 하나로 표시했는데, 실제 서버 cron은 **하루에

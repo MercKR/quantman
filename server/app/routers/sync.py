@@ -16,7 +16,7 @@ from sqlmodel import Session, select
 
 from ..db import engine, get_session
 from ..deps import get_current_device, get_current_user
-from ..models import Device, Strategy, SyncSnapshot, User, UserSettings
+from ..models import Device, HeartbeatEvent, Strategy, SyncSnapshot, User, UserSettings
 from ..schemas import (StrategyOut, SyncPushIn, SyncSnapshotOut,
                        TradableSymbolsSyncIn)
 
@@ -324,18 +324,22 @@ def push_heartbeat(
 ):
     """Phase 58+ — 로컬앱 alive 신호. 5분 주기, KIS API 호출 없음.
 
-    UserSettings.last_heartbeat_at 컬럼 갱신 (영구 저장). 이전엔 메모리
-    dict였으나 server 재부팅 시 stale로 false alarm 발생 → DB로 영구화.
+    UserSettings.last_heartbeat_at(latest 1건) + HeartbeatEvent(history row 1건).
+    Latest는 "현재 살아있는지" 빠른 조회용, history는 "과거 임의 시점에 살아있었는지"
+    판정용(missed cycle 원인 A vs B 분류에 필수).
     """
+    now = datetime.now(timezone.utc)
+    # latest 갱신
     settings = session.exec(
         select(UserSettings).where(UserSettings.user_id == device.user_id)
     ).first()
-    now = datetime.now(timezone.utc)
     if settings is None:
         settings = UserSettings(user_id=device.user_id, last_heartbeat_at=now)
         session.add(settings)
     else:
         settings.last_heartbeat_at = now
+    # history row
+    session.add(HeartbeatEvent(user_id=device.user_id, device_id=device.id, at=now))
     session.commit()
     return {"ok": True}
 

@@ -30,7 +30,7 @@ from quant_core import market_calendar as mc
 
 from ..db import get_session
 from ..deps import get_current_user
-from ..models import SyncSnapshot, User, UserSettings
+from ..models import HeartbeatEvent, SyncSnapshot, User, UserSettings
 
 _log = logging.getLogger("app.trading")
 
@@ -92,6 +92,88 @@ def _snapshots_in_window(session: Session, user_id: int,
     ).all())
 
 
+def _heartbeats_in_window(session: Session, user_id: int,
+                           start: datetime, end: datetime) -> list[datetime]:
+    """기간 안의 heartbeat ping 시각 list (KST). missed 원인 A vs B 판정에 사용."""
+    rows = session.exec(
+        select(HeartbeatEvent.at)
+        .where(HeartbeatEvent.user_id == user_id)
+        .where(HeartbeatEvent.at >= start)
+        .where(HeartbeatEvent.at <= end)
+        .order_by(HeartbeatEvent.at)
+    ).all()
+    out: list[datetime] = []
+    for ts in rows:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        out.append(ts.astimezone(KST))
+    return out
+
+
+# 누락된 cycle/settlement이 다음 자동매매 작업에 미치는 영향. detail 호버에 노출.
+DOWNSTREAM_IMPACT: dict[str, str] = {
+    "krx_preview":
+        "→ 오늘 08:55 국장 자동매매가 어제 18:15 stale preview로 동작 — "
+        "US 종가가 반영되지 않은 후보 사용 (S&P 등 미국 지표 조건이 어제 기준이라 부정확).",
+    "krx_cycle":
+        "→ 오늘 국장 신규 매수 0건, 보유 KRX 종목 청산 평가 누락. "
+        "다음 cycle은 내일 08:55 KST.",
+    "krx_settlement":
+        "→ 오늘 국장 미체결 정리·KIS↔ledger reconcile 누락. "
+        "다음 KRX cycle 시작 시 _resolve_pending이 자동으로 처리 — 큰 지장 없음.",
+    "us_preview":
+        "→ 오늘 22:25 미장 자동매매가 stale preview로 동작 — "
+        "오늘 KRX 종가·NAVER·technical 반영 안 된 후보 사용.",
+    "us_cycle":
+        "→ 오늘 미장 신규 매수 0건, 보유 US 종목 청산 평가 누락. "
+        "다음 미장 cycle은 캘린더상 다음 거래일 open-5min.",
+    "us_settlement":
+        "→ 미장 미체결 정리 누락. 다음 미장 cycle 시작 시 자동 reconcile — 큰 지장 없음.",
+}
+
+
+def _classify_missed(sched: datetime, kind: str,
+                      heartbeats: list[datetime],
+                      snaps: list[SyncSnapshot],
+                      market: Optional[str]) -> tuple[str, str]:
+    """missed 이벤트의 원인을 A/B/C/D로 분류해 (원인 카테고리, detail 문자열) 반환.
+
+    A — 앱 OFF: 예정 시각 ±15min 안에 heartbeat 없음
+    B — cycle 미발동: heartbeat 있음, snapshot 없음 (cron 미등록·grace 초과 가능성)
+    C — cycle 실패: snapshot 존재하지만 cycle_summary.error 마커 있음
+    D — push 실패: 서버 측에선 사실상 A·B와 구분 불가, 일단 A·B로 흡수
+    """
+    lo = sched - timedelta(minutes=15)
+    hi = sched + timedelta(minutes=30)
+    had_heartbeat = any(lo <= hb <= hi for hb in heartbeats)
+
+    # C 검사 — 같은 시장의 에러 마커 있는 snapshot
+    for s in snaps:
+        ra = s.received_at
+        if ra.tzinfo is None:
+            ra = ra.replace(tzinfo=timezone.utc)
+        ra_kst = ra.astimezone(KST)
+        if not (lo <= ra_kst <= hi):
+            continue
+        cs = (s.payload or {}).get("cycle_summary") or {}
+        if market and cs.get("market") and cs["market"] != market:
+            continue
+        if cs.get("error"):
+            err_msg = str(cs.get("error"))[:120]
+            return ("C", f"cycle은 실행됐으나 실패함 — {err_msg}")
+
+    impact = DOWNSTREAM_IMPACT.get(kind, "")
+    if had_heartbeat:
+        cause = ("B",
+                 "로컬앱은 alive였으나 cycle이 발동되지 않았습니다 "
+                 "(cron 미등록·grace 초과·KIS 점검 시간대 가능성).")
+    else:
+        cause = ("A",
+                 "예정 시각에 로컬앱이 실행 중이 아니었습니다 "
+                 "(PC 종료·앱 종료·네트워크 단절).")
+    return (cause[0], cause[1] + ("  " + impact if impact else ""))
+
+
 def _match_snapshot(snaps: list[SyncSnapshot], scheduled: datetime,
                      market: str) -> Optional[SyncSnapshot]:
     """scheduled 직후 push된 첫 스냅샷이 그 cycle의 결과로 본다.
@@ -135,15 +217,14 @@ def _summarize_cycle(snap: SyncSnapshot) -> str:
 
 def _emit_scheduled(events: list[dict], sched: datetime, kind: str,
                      now: datetime, window_start: datetime, window_end: datetime,
-                     done_summary: str = "", scheduled_or_done: bool = False,
-                     missed_detail: str = "", holiday: tuple[str, str] | None = None
-                     ) -> None:
+                     done_summary: str = "",
+                     missed_detail: str = "",
+                     holiday: tuple[str, str] | None = None) -> None:
     """공통 emitter — sched가 윈도우 안이면 status에 맞춰 event 1개 push.
 
-    holiday=(summary, detail) 지정 시 즉시 holiday event (cycle·settlement에서 쓴다).
-    scheduled_or_done=True이면 sched > now → scheduled, 아니면 외부에서 done/missed
-    판정해 done_summary를 사전 채워 호출(예: cycle은 _match_snapshot, preview는
-    generated_at 비교).
+    holiday=(summary, detail) 지정 시 즉시 holiday event.
+    호출자가 done 판정 시(snapshot 매칭 등) done_summary를 채워 부르면 done,
+    빈 done_summary면 missed로 분류 — missed_detail은 _classify_missed가 채운 결과.
     """
     if not (window_start <= sched <= window_end):
         return
@@ -153,15 +234,13 @@ def _emit_scheduled(events: list[dict], sched: datetime, kind: str,
     if sched > now:
         events.append(_build_event(sched, kind, "scheduled"))
         return
-    # 호출자가 외부 신호(snapshot match 등)로 done 판정해 done_summary를 줬으면 done,
-    # 아니면 missed.
     if done_summary:
         events.append(_build_event(sched, kind, "done", done_summary))
     else:
         events.append(_build_event(sched, kind, "missed", "", missed_detail))
 
 
-def _krx_events(snaps: list[SyncSnapshot], now: datetime,
+def _krx_events(snaps: list[SyncSnapshot], heartbeats: list[datetime], now: datetime,
                  window_start: datetime, window_end: datetime) -> list[dict]:
     """KRX 사이클(08:55) + 정산(15:35) 평일 occurrences."""
     events: list[dict] = []
@@ -170,11 +249,9 @@ def _krx_events(snaps: list[SyncSnapshot], now: datetime,
     while d <= end_d:
         is_weekend = d.weekday() >= 5
         is_holiday = not is_weekend and not _is_session_day_safe("KR", d)
-        for sched_time, kind, missed_msg, snapshot_market in [
-            (KRX_CYCLE_TIME, "krx_cycle",
-             "로컬앱이 시각에 실행 중이 아니었거나 grace(5분) 초과", "KRX"),
-            (KRX_SETTLEMENT_TIME, "krx_settlement",
-             "로컬앱이 15:35에 실행 중이 아니었습니다 — 미체결 정리·잔고 reconcile 누락", "KRX"),
+        for sched_time, kind in [
+            (KRX_CYCLE_TIME, "krx_cycle"),
+            (KRX_SETTLEMENT_TIME, "krx_settlement"),
         ]:
             sched = datetime.combine(d, sched_time, tzinfo=KST)
             if is_weekend:
@@ -184,21 +261,25 @@ def _krx_events(snaps: list[SyncSnapshot], now: datetime,
                 _emit_scheduled(events, sched, kind, now, window_start, window_end,
                                  holiday=("휴장", "KRX 휴장일"))
             else:
-                snap = _match_snapshot(snaps, sched, snapshot_market) if sched <= now else None
-                summary = _summarize_cycle(snap) if (snap and kind == "krx_cycle") else (
-                    "정산 완료" if snap else "")
+                snap = _match_snapshot(snaps, sched, "KRX") if sched <= now else None
+                summary = ""
+                if snap:
+                    summary = _summarize_cycle(snap) if kind == "krx_cycle" else "정산 완료"
+                missed_detail = ""
+                if not summary and sched <= now:
+                    _, missed_detail = _classify_missed(sched, kind, heartbeats, snaps, "KRX")
                 _emit_scheduled(events, sched, kind, now, window_start, window_end,
-                                 done_summary=summary, missed_detail=missed_msg)
+                                 done_summary=summary, missed_detail=missed_detail)
         d += timedelta(days=1)
     return events
 
 
-def _us_events(snaps: list[SyncSnapshot], now: datetime,
+def _us_events(snaps: list[SyncSnapshot], heartbeats: list[datetime], now: datetime,
                 window_start: datetime, window_end: datetime) -> list[dict]:
     """US 사이클(open-5min) + 정산(close+5min) 캘린더 기반 동적 occurrences."""
     events: list[dict] = []
     cursor = window_start - timedelta(hours=2)  # 직전 세션이 윈도우 걸칠 수 있어 마진
-    for _ in range(5):       # 24h 안에 US 세션 최대 1, 안전 5회
+    for _ in range(5):
         try:
             sess = mc.next_session_kst("US", cursor)
         except mc.CalendarError:
@@ -214,25 +295,33 @@ def _us_events(snaps: list[SyncSnapshot], now: datetime,
         cycle_snap = _match_snapshot(snaps, cycle_sched, "US") if cycle_sched <= now else None
         settle_snap = _match_snapshot(snaps, settle_sched, "US") if settle_sched <= now else None
 
+        cycle_missed_detail = ""
+        if not cycle_snap and cycle_sched <= now:
+            _, cycle_missed_detail = _classify_missed(cycle_sched, "us_cycle",
+                                                       heartbeats, snaps, "US")
+        settle_missed_detail = ""
+        if not settle_snap and settle_sched <= now:
+            _, settle_missed_detail = _classify_missed(settle_sched, "us_settlement",
+                                                        heartbeats, snaps, "US")
+
         _emit_scheduled(events, cycle_sched, "us_cycle", now, window_start, window_end,
                          done_summary=_summarize_cycle(cycle_snap) if cycle_snap else "",
-                         missed_detail="로컬앱이 시각에 실행 중이 아니었거나 grace(10분) 초과")
+                         missed_detail=cycle_missed_detail)
         _emit_scheduled(events, settle_sched, "us_settlement", now, window_start, window_end,
                          done_summary="정산 완료" if settle_snap else "",
-                         missed_detail="로컬앱이 close+5min에 실행 중이 아니었습니다")
+                         missed_detail=settle_missed_detail)
         cursor = open_kst
     return events
 
 
 def _preview_events(snaps: list[SyncSnapshot], now: datetime,
                      window_start: datetime, window_end: datetime) -> list[dict]:
-    """매매 후보 결정 — 시장별 다른 데이터에 의존하므로 2 event로 분리.
+    """매매 후보 결정 — 시장별 분리. 서버 cron이므로 heartbeat·로컬앱과 무관.
 
     · krx_preview (07:30 KST): yfinance/FRED publish 직후 → 국장 cycle 8:55용
     · us_preview  (18:15 KST): KRX 종가·NAVER·technical 완성 직후 → 미장 cycle용
     """
     events: list[dict] = []
-    # 가장 최신 next_day_preview generated_at + 시장별 후보 수.
     latest_gen: Optional[datetime] = None
     krx_n = us_n = 0
     for s in reversed(snaps):
@@ -270,9 +359,11 @@ def _preview_events(snaps: list[SyncSnapshot], now: datetime,
                     sched, kind, "done",
                     f"{market_n}건" if market_n else "후보 0건"))
             else:
+                # 서버 cron 실패 — 운영 사이드 문제. 로컬앱 무관.
+                impact = DOWNSTREAM_IMPACT.get(kind, "")
                 events.append(_build_event(
                     sched, kind, "missed", "",
-                    "서버 preview 갱신 cron 결과를 받지 못했습니다"))
+                    "서버 preview 갱신 cron 결과를 받지 못했습니다.  " + impact))
         d += timedelta(days=1)
     return events
 
@@ -303,10 +394,11 @@ def get_timeline(
         last_hb = last_hb.replace(tzinfo=timezone.utc)
 
     snaps = _snapshots_in_window(session, user.id, window_start, window_end)
+    heartbeats = _heartbeats_in_window(session, user.id, window_start, window_end)
 
     events = (
-        _krx_events(snaps, now, window_start, window_end)
-        + _us_events(snaps, now, window_start, window_end)
+        _krx_events(snaps, heartbeats, now, window_start, window_end)
+        + _us_events(snaps, heartbeats, now, window_start, window_end)
         + _preview_events(snaps, now, window_start, window_end)
     )
     events.sort(key=lambda e: e["at"])

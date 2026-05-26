@@ -145,38 +145,54 @@ def run_cycle(market: str = "KRX") -> dict:
         log.warning("전략 풀 실패 — 신규 진입 없이 보유분 청산만 평가: %s", e)
         strategies = []
 
-    from .datafetch import refresh_market_data
-    refresh_market_data()
-    dataset = qc.load_dataset(with_indicators=True)
-    broker = make_broker()
-    trader = Trader(broker)
-
-    # Phase 38.4 — preview 신뢰 + 누락 시 청산만. legacy 평가 경로 제거.
-    preview = None
+    # 본 사이클 실행 — 데이터 fetch·broker·trader. 어디서 예외가 나도 서버에
+    # error snapshot push해 서버가 missed를 case C(cycle 실행 실패)로 정확히
+    # 분류할 수 있게 함. 이전엔 예외가 그대로 propagate해 서버는 그냥 push
+    # 없음만 봤고, 사용자는 "왜 안 됐는지" 추적 불가했다.
     try:
-        preview = pull_preview()
-    except Exception as e:
-        log.warning("preview pull 예외 — 신규 진입 차단: %s", e)
-    preview_missing = preview is None
-    buy_candidates = (preview or {}).get("by_strategy") if preview else []
-    if preview_missing:
-        log.warning("preview 없음 — 신규 진입 보류, 청산만 진행")
-    elif buy_candidates:
-        n_total = sum(len(e.get("candidates") or []) for e in buy_candidates)
-        log.info("preview 경로 — by_strategy=%d, 총 후보 종목=%d (신호 재평가 skip)",
-                  len(buy_candidates), n_total)
-    else:
-        log.info("preview 후보 없음 — 매수 0, 청산만 진행")
+        from .datafetch import refresh_market_data
+        refresh_market_data()
+        dataset = qc.load_dataset(with_indicators=True)
+        broker = make_broker()
+        trader = Trader(broker)
 
-    # Phase 38.7/38.10 — 사용자 위험 한도. 실패 시 빈 dict → default fallback.
-    risk_limits = pull_risk_limits()
-    # Phase 48 — KRX 종목 상태 (거래정지·관리). 매수 직전 trader가 차단 판단.
-    krx_status = pull_krx_status()
-    payload = trader.cycle(strategies, dataset, buy_candidates=buy_candidates,
-                             risk_limits=risk_limits, market=market,
-                             krx_status=krx_status)
-    if preview_missing:
-        payload.setdefault("cycle_summary", {})["preview_missing"] = True
+        # Phase 38.4 — preview 신뢰 + 누락 시 청산만. legacy 평가 경로 제거.
+        preview = None
+        try:
+            preview = pull_preview()
+        except Exception as e:
+            log.warning("preview pull 예외 — 신규 진입 차단: %s", e)
+        preview_missing = preview is None
+        buy_candidates = (preview or {}).get("by_strategy") if preview else []
+        if preview_missing:
+            log.warning("preview 없음 — 신규 진입 보류, 청산만 진행")
+        elif buy_candidates:
+            n_total = sum(len(e.get("candidates") or []) for e in buy_candidates)
+            log.info("preview 경로 — by_strategy=%d, 총 후보 종목=%d (신호 재평가 skip)",
+                      len(buy_candidates), n_total)
+        else:
+            log.info("preview 후보 없음 — 매수 0, 청산만 진행")
+
+        # Phase 38.7/38.10 — 사용자 위험 한도. 실패 시 빈 dict → default fallback.
+        risk_limits = pull_risk_limits()
+        # Phase 48 — KRX 종목 상태 (거래정지·관리). 매수 직전 trader가 차단 판단.
+        krx_status = pull_krx_status()
+        payload = trader.cycle(strategies, dataset, buy_candidates=buy_candidates,
+                                 risk_limits=risk_limits, market=market,
+                                 krx_status=krx_status)
+        if preview_missing:
+            payload.setdefault("cycle_summary", {})["preview_missing"] = True
+    except Exception as cycle_err:
+        log.exception("cycle 실행 중 예외 — 서버에 error snapshot push: %s", cycle_err)
+        payload = {
+            "balance": {"cash": 0, "total_eval": 0},
+            "positions": [], "equity": [], "trades": [], "decisions": [],
+            "cycle_summary": {
+                "market": market,
+                "error": f"{type(cycle_err).__name__}: {cycle_err}",
+                "n_bought": 0, "n_sold": 0,
+            },
+        }
 
     try:
         push_snapshot(payload)

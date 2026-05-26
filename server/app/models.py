@@ -89,6 +89,19 @@ class SyncSnapshot(SQLModel, table=True):
     received_at: datetime = Field(default_factory=_now)
 
 
+class HeartbeatEvent(SQLModel, table=True):
+    """로컬앱 alive 이벤트 — 5분 주기 ping마다 row 1개.
+
+    "missed" cycle의 진짜 원인 판정에 쓴다(A=앱 OFF vs B=앱 ON·cycle 미발동).
+    UserSettings.last_heartbeat_at는 latest만 — 과거 임의 시점 alive 판정엔
+    부족하므로 별도 이력 테이블로 보관. 30일 이상 row는 cleanup cron이 정리.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, foreign_key="user.id")
+    device_id: Optional[int] = Field(default=None, foreign_key="device.id")
+    at: datetime = Field(default_factory=_now, index=True)
+
+
 class UserSettings(SQLModel, table=True):
     """사용자별 모니터링·알림·위험 한도 설정 (1:1)."""
     user_id: int = Field(primary_key=True, foreign_key="user.id")
