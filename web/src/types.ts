@@ -90,9 +90,8 @@ export interface ExecutionPolicy {
   amount_krw?: number;                    // fixed_amount 모드: 한 종목당 원 단위 금액
   atr_risk_pct?: number;                  // atr_risk 모드: 트레이드당 자본의 N% 위험
   atr_mult?: number;                      // ATR × 이 배수 = 1주당 손절폭
-  max_position_pct?: number;              // 단일 종목 비중 상한 (자본 %)
-  daily_loss_limit_pct?: number;          // 일일 손실 한도 (킬스위치 트리거)
-  max_drawdown_pct?: number;              // 누적 손실 한도 (자본 고점 대비)
+  max_position_pct?: number | null;       // 단일 종목 비중 상한 (자본 %). null=한도 없음
+  max_drawdown_pct?: number | null;       // 누적 손실 한도 (자본 고점 대비). null=한도 없음
   /** 주문 유형 (Phase 49) — true=지정가(전일 종가 ± tolerance%), false=시장가.
    *  시장가는 시초가 갭에 무방비라 default는 지정가. 변동성 큰 종목·일중 진입에서만 시장가 권장. */
   use_limit?: boolean;
@@ -113,7 +112,6 @@ export const EXECUTION_DEFAULTS: Required<ExecutionPolicy> = {
   atr_risk_pct: 1.0,
   atr_mult: 2.0,
   max_position_pct: 10.0,
-  daily_loss_limit_pct: 3.0,
   max_drawdown_pct: 20.0,
   use_limit: true,
   buy_tolerance_pct: 1.0,

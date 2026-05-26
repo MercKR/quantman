@@ -197,8 +197,7 @@ class ExecutionPolicy(BaseModel):
     atr_risk_pct: Optional[float] = None
     atr_mult: Optional[float] = None
     max_position_pct: Optional[float] = None
-    # 시스템 리스크
-    daily_loss_limit_pct: Optional[float] = None
+    # 시스템 리스크 (누적 손실 한도. 일일 손실 한도는 제거됨 — 실시간 현재가 매도로 대체)
     max_drawdown_pct: Optional[float] = None
     # 백테스트 비용 가정 (C-01 — sell_tax 분리)
     bt_commission_bps: Optional[float] = None

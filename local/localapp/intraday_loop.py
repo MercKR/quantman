@@ -441,11 +441,10 @@ def start(market: str = "KRX") -> dict:
         except Exception as e:
             log.warning("risk_limits pull 실패 — 글로벌 default 사용: %s", e)
             rl = {}
-        from quant_core.exec_defaults import DEFAULT_EXECUTION
-        daily_loss_limit_pct = (rl.get("kill_switch_daily_loss_pct")
-                                  if rl.get("kill_switch_daily_loss_pct") is not None
-                                  else DEFAULT_EXECUTION["daily_loss_limit_pct"])
-        trader._daily_loss_limit_pct = float(daily_loss_limit_pct)
+        # 일일 손실 한도: user 모니터링 설정에서만 가져옴. None이면 OFF.
+        daily_loss_limit_pct = rl.get("kill_switch_daily_loss_pct")
+        trader._daily_loss_limit_pct = (float(daily_loss_limit_pct)
+                                          if daily_loss_limit_pct is not None else None)
 
         def _on_ks_trigger(reason_source: str = "monitor") -> None:
             """Q5: kill switch 발동 시 호출. 미체결 cancel + 빈 cycle 재호출(청산
@@ -482,9 +481,10 @@ def start(market: str = "KRX") -> dict:
 
         # _apply_fill 끝에서도 동일 트리거 사용 (Tier 1).
         trader._ks_trigger_hook = _on_ks_trigger
-        # 60초 monitor 시작 (Tier 2).
-        manager.start_monitor(daily_loss_limit_pct, _on_ks_trigger,
-                               period_sec=60.0)
+        # 60초 monitor 시작 (Tier 2). user 한도 설정 없으면 monitor 띄우지 않음.
+        if daily_loss_limit_pct is not None:
+            manager.start_monitor(daily_loss_limit_pct, _on_ks_trigger,
+                                   period_sec=60.0)
 
         # 보유 종목 변화 추적 — 60초마다 sync_subscriptions
         stop_flag = threading.Event()

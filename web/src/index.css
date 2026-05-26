@@ -1177,7 +1177,7 @@ thead th { color: var(--muted); font-weight: 600; }
   font-size: 12px; color: var(--text); flex-wrap: wrap;
 }
 .screener-card-rule .rule-field { color: var(--text); margin-right: 4px; }
-.screener-card-rule .rule-op { margin-left: auto; color: var(--muted); }
+.screener-card-rule .rule-op { color: var(--muted); }
 .screener-card-rule .rule-unit,
 .screener-card-rule .rule-sep { color: var(--muted); }
 .screener-card-rules input[type="number"] {
@@ -1940,6 +1940,25 @@ thead th { color: var(--muted); font-weight: 600; }
   padding-top: 12px;
   border-top: 1px dashed var(--border);
 }
+.section-recap {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.section-recap strong { color: var(--accent); }
+.risk-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.risk-toggle input[type="checkbox"] { width: 18px; height: 18px; }
 .step-next-btn {
   padding: 10px 22px;
   font-size: 14px;

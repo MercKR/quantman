@@ -213,9 +213,10 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
   const [amountKrw, setAmountKrw] = useState(e.amount_krw ?? EXECUTION_DEFAULTS.amount_krw);
   const [atrRiskPct, setAtrRiskPct] = useState(e.atr_risk_pct ?? EXECUTION_DEFAULTS.atr_risk_pct);
   const [atrMult, setAtrMult] = useState(e.atr_mult ?? EXECUTION_DEFAULTS.atr_mult);
-  const [maxPositionPct, setMaxPositionPct] = useState(e.max_position_pct ?? EXECUTION_DEFAULTS.max_position_pct);
-  const [dailyLossLimitPct, setDailyLossLimitPct] = useState(e.daily_loss_limit_pct ?? EXECUTION_DEFAULTS.daily_loss_limit_pct);
-  const [maxDrawdownPct, setMaxDrawdownPct] = useState(e.max_drawdown_pct ?? EXECUTION_DEFAULTS.max_drawdown_pct);
+  const [maxPositionPct, setMaxPositionPct] = useState(e.max_position_pct ?? 10);
+  const [maxPositionEnabled, setMaxPositionEnabled] = useState<boolean>(e.max_position_pct != null);
+  const [maxDrawdownPct, setMaxDrawdownPct] = useState(e.max_drawdown_pct ?? 20);
+  const [maxDrawdownEnabled, setMaxDrawdownEnabled] = useState<boolean>(e.max_drawdown_pct != null);
   const [useLimit, setUseLimit] = useState<boolean>(e.use_limit ?? EXECUTION_DEFAULTS.use_limit);
   const [buyTolerancePct, setBuyTolerancePct] = useState(e.buy_tolerance_pct ?? EXECUTION_DEFAULTS.buy_tolerance_pct);
   const [sellTolerancePct, setSellTolerancePct] = useState(e.sell_tolerance_pct ?? EXECUTION_DEFAULTS.sell_tolerance_pct);
@@ -246,9 +247,8 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
     const execution: ExecutionPolicy = {
       sizing_mode: sizingMode, amount_krw: amountKrw,
       atr_risk_pct: atrRiskPct, atr_mult: atrMult,
-      max_position_pct: maxPositionPct,
-      daily_loss_limit_pct: dailyLossLimitPct,
-      max_drawdown_pct: maxDrawdownPct,
+      max_position_pct: maxPositionEnabled ? maxPositionPct : null,
+      max_drawdown_pct: maxDrawdownEnabled ? maxDrawdownPct : null,
       use_limit: useLimit,
       buy_tolerance_pct: buyTolerancePct,
       sell_tolerance_pct: sellTolerancePct,
@@ -357,8 +357,9 @@ function ConfigEditInner({ strategy, onSaved, onRemove }: {
         atrRiskPct={atrRiskPct} setAtrRiskPct={setAtrRiskPct}
         atrMult={atrMult} setAtrMult={setAtrMult}
         maxPositionPct={maxPositionPct} setMaxPositionPct={setMaxPositionPct}
-        dailyLossLimitPct={dailyLossLimitPct} setDailyLossLimitPct={setDailyLossLimitPct}
+        maxPositionEnabled={maxPositionEnabled} setMaxPositionEnabled={setMaxPositionEnabled}
         maxDrawdownPct={maxDrawdownPct} setMaxDrawdownPct={setMaxDrawdownPct}
+        maxDrawdownEnabled={maxDrawdownEnabled} setMaxDrawdownEnabled={setMaxDrawdownEnabled}
         useLimit={useLimit} setUseLimit={setUseLimit}
         buyTolerancePct={buyTolerancePct} setBuyTolerancePct={setBuyTolerancePct}
         sellTolerancePct={sellTolerancePct} setSellTolerancePct={setSellTolerancePct}

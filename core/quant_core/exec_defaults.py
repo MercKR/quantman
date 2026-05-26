@@ -49,9 +49,8 @@ DEFAULT_EXECUTION: dict[str, Any] = {
     # 단일 종목 비중 상한 (자본 대비 %). 모든 사이징 결과가 이 한도 초과 시 클램프.
     "max_position_pct": 10.0,
 
-    # 일일 손실 한도 (자본 대비 %). 도달 시 kill switch 발동.
-    "daily_loss_limit_pct": 3.0,
     # 누적 손실 한도 (자본 고점 대비 %). 도달 시 신규 진입 차단 + 알림.
+    # (일일 손실 한도는 제거됨 — 종목 단위 실시간 현재가 매도로 위험 처리.)
     "max_drawdown_pct": 20.0,
 
     # 백테스트 비용 가정 (C-01 — 한국 매도세를 commission과 분리; CM-02 — 주석 정정)

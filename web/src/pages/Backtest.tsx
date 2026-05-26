@@ -74,9 +74,10 @@ export default function Backtest() {
   const [amountKrw, setAmountKrw] = useState(() => loadDraft("amountKrw", EXECUTION_DEFAULTS.amount_krw));
   const [atrRiskPct, setAtrRiskPct] = useState(() => loadDraft("atrRiskPct", EXECUTION_DEFAULTS.atr_risk_pct));
   const [atrMult, setAtrMult] = useState(() => loadDraft("atrMult", EXECUTION_DEFAULTS.atr_mult));
-  const [maxPositionPct, setMaxPositionPct] = useState(() => loadDraft("maxPositionPct", EXECUTION_DEFAULTS.max_position_pct));
-  const [dailyLossLimitPct, setDailyLossLimitPct] = useState(() => loadDraft("dailyLossLimitPct", EXECUTION_DEFAULTS.daily_loss_limit_pct));
-  const [maxDrawdownPct, setMaxDrawdownPct] = useState(() => loadDraft("maxDrawdownPct", EXECUTION_DEFAULTS.max_drawdown_pct));
+  const [maxPositionPct, setMaxPositionPct] = useState(() => loadDraft("maxPositionPct", 10));
+  const [maxPositionEnabled, setMaxPositionEnabled] = useState(() => loadDraft("maxPositionEnabled", false));
+  const [maxDrawdownPct, setMaxDrawdownPct] = useState(() => loadDraft("maxDrawdownPct", 20));
+  const [maxDrawdownEnabled, setMaxDrawdownEnabled] = useState(() => loadDraft("maxDrawdownEnabled", false));
   const [useLimit, setUseLimit] = useState<boolean>(() => loadDraft("useLimit", EXECUTION_DEFAULTS.use_limit));
   const [buyTolerancePct, setBuyTolerancePct] = useState(() => loadDraft("buyTolerancePct", EXECUTION_DEFAULTS.buy_tolerance_pct));
   const [sellTolerancePct, setSellTolerancePct] = useState(() => loadDraft("sellTolerancePct", EXECUTION_DEFAULTS.sell_tolerance_pct));
@@ -117,7 +118,7 @@ export default function Backtest() {
       sellRealtimeEnabled, sellEodEnabled,
       buyAmountPct, sellAmountPct, screenerLimit, screenerSpec, rebalance,
       sizingMode, amountKrw, atrRiskPct, atrMult,
-      maxPositionPct, dailyLossLimitPct, maxDrawdownPct,
+      maxPositionPct, maxPositionEnabled, maxDrawdownPct, maxDrawdownEnabled,
       useLimit, buyTolerancePct, sellTolerancePct,
       btCommissionBps, btSellTaxBps, btSlippageBps,
       capital, forwardDays,
@@ -128,7 +129,7 @@ export default function Backtest() {
       sellRealtimeEnabled, sellEodEnabled,
       buyAmountPct, sellAmountPct, screenerLimit, screenerSpec, rebalance,
       sizingMode, amountKrw, atrRiskPct, atrMult,
-      maxPositionPct, dailyLossLimitPct, maxDrawdownPct,
+      maxPositionPct, maxPositionEnabled, maxDrawdownPct, maxDrawdownEnabled,
       useLimit, buyTolerancePct, sellTolerancePct,
       btCommissionBps, btSellTaxBps, btSlippageBps,
       capital, forwardDays]);
@@ -139,9 +140,8 @@ export default function Backtest() {
       amount_krw: amountKrw,
       atr_risk_pct: atrRiskPct,
       atr_mult: atrMult,
-      max_position_pct: maxPositionPct,
-      daily_loss_limit_pct: dailyLossLimitPct,
-      max_drawdown_pct: maxDrawdownPct,
+      max_position_pct: maxPositionEnabled ? maxPositionPct : null,
+      max_drawdown_pct: maxDrawdownEnabled ? maxDrawdownPct : null,
       use_limit: useLimit,
       buy_tolerance_pct: buyTolerancePct,
       sell_tolerance_pct: sellTolerancePct,
@@ -328,8 +328,9 @@ export default function Backtest() {
         atrRiskPct={atrRiskPct} setAtrRiskPct={setAtrRiskPct}
         atrMult={atrMult} setAtrMult={setAtrMult}
         maxPositionPct={maxPositionPct} setMaxPositionPct={setMaxPositionPct}
-        dailyLossLimitPct={dailyLossLimitPct} setDailyLossLimitPct={setDailyLossLimitPct}
+        maxPositionEnabled={maxPositionEnabled} setMaxPositionEnabled={setMaxPositionEnabled}
         maxDrawdownPct={maxDrawdownPct} setMaxDrawdownPct={setMaxDrawdownPct}
+        maxDrawdownEnabled={maxDrawdownEnabled} setMaxDrawdownEnabled={setMaxDrawdownEnabled}
         useLimit={useLimit} setUseLimit={setUseLimit}
         buyTolerancePct={buyTolerancePct} setBuyTolerancePct={setBuyTolerancePct}
         sellTolerancePct={sellTolerancePct} setSellTolerancePct={setSellTolerancePct}
@@ -382,8 +383,9 @@ export function BuildTab(props: {
   atrRiskPct: number; setAtrRiskPct: (v: number) => void;
   atrMult: number; setAtrMult: (v: number) => void;
   maxPositionPct: number; setMaxPositionPct: (v: number) => void;
-  dailyLossLimitPct: number; setDailyLossLimitPct: (v: number) => void;
+  maxPositionEnabled: boolean; setMaxPositionEnabled: (v: boolean) => void;
   maxDrawdownPct: number; setMaxDrawdownPct: (v: number) => void;
+  maxDrawdownEnabled: boolean; setMaxDrawdownEnabled: (v: boolean) => void;
   useLimit: boolean; setUseLimit: (v: boolean) => void;
   buyTolerancePct: number; setBuyTolerancePct: (v: number) => void;
   sellTolerancePct: number; setSellTolerancePct: (v: number) => void;
@@ -410,8 +412,9 @@ export function BuildTab(props: {
     amountKrw, setAmountKrw,
     atrRiskPct, setAtrRiskPct, atrMult, setAtrMult,
     maxPositionPct, setMaxPositionPct,
-    dailyLossLimitPct, setDailyLossLimitPct,
+    maxPositionEnabled, setMaxPositionEnabled,
     maxDrawdownPct, setMaxDrawdownPct,
+    maxDrawdownEnabled, setMaxDrawdownEnabled,
     useLimit, setUseLimit,
     buyTolerancePct, setBuyTolerancePct,
     sellTolerancePct, setSellTolerancePct,
@@ -532,8 +535,29 @@ export function BuildTab(props: {
     if (cond > 0) parts.push(`일일 매도 ${cond}조건`);
     return parts.join(" · ");
   })();
-  const riskSummary =
-    `한 종목 ≤${fmt2(maxPositionPct)}% · 일일 -${fmt2(dailyLossLimitPct)}% · 누적 -${fmt2(maxDrawdownPct)}%`;
+  // 매도 요약 1문장 (다음 영역 표시용)
+  const sellRecap = (() => {
+    const items: string[] = [];
+    if (sellRealtimeEnabled) {
+      RULE_DEFS.forEach((r) => {
+        const st = exits[r.key];
+        if (!st.on) return;
+        const valFmt = r.key === "atr" ? `${fmt2(st.v)}× ATR` : `${fmt2(st.v)}%`;
+        const pctSuffix = st.sell_pct < 100 ? ` (${st.sell_pct}% 매도)` : "";
+        items.push(`${r.name} ${valFmt}${pctSuffix}`);
+      });
+    }
+    if (sellEodEnabled && sell.conditions.length > 0) {
+      items.push(`일일 시초가 조건 ${sell.conditions.length}개 (${fmt2(sellAmountPct)}% 매도)`);
+    }
+    return items.length > 0 ? `보유 종목에 ${items.join(" · ")}로 매도합니다.` : "";
+  })();
+  const riskSummary = (() => {
+    const parts: string[] = [];
+    if (maxPositionEnabled) parts.push(`한 종목 ≤${fmt2(maxPositionPct)}%`);
+    if (maxDrawdownEnabled) parts.push(`누적 -${fmt2(maxDrawdownPct)}%`);
+    return parts.length > 0 ? parts.join(" · ") : "한도 없음";
+  })();
   const btAssumeSummary = `수수료 ${btCommissionBps}·세 ${btSellTaxBps}·슬리 ${btSlippageBps}bps`;
   const capitalSummary = wonReadable(capital);
 
@@ -680,16 +704,29 @@ export function BuildTab(props: {
                     : "% ← 직접 입력 (보통 5 ~ 20%)"}
                 </span>
               </div>
-              {buyAmountPctTouched && screenerLimit > 1 && (
-                <div
-                  className={"muted small" + (screenerLimit * buyAmountPct > 100 ? " warn" : "")}
-                  style={{ marginTop: 4 }}
-                >
-                  ⚠ 자동 선택 {screenerLimit}종목 × {fmt2(buyAmountPct)}% ={" "}
-                  <b>{fmt2(screenerLimit * buyAmountPct)}%</b> 전체 노출
-                  {screenerLimit * buyAmountPct > 100 && " (100% 초과 — 현금 부족 시 일부 종목 매수 실패)"}
-                </div>
-              )}
+              {buyAmountPctTouched && (() => {
+                const isScreener = tradeSymbol.startsWith("screener:");
+                const n = isScreener
+                  ? screenerLimit
+                  : tradeSymbol.split(",").map((s) => s.trim()).filter(Boolean).length;
+                if (n <= 0) return null;
+                const total = n * buyAmountPct;
+                if (n === 1) {
+                  return (
+                    <div className="muted small" style={{ marginTop: 4 }}>
+                      한 종목 → 자본의 <b>{fmt2(buyAmountPct)}%</b> 노출
+                    </div>
+                  );
+                }
+                const overflow = total > 100;
+                return (
+                  <div className={"muted small" + (overflow ? " warn" : "")} style={{ marginTop: 4 }}>
+                    {isScreener ? "자동 선택" : "수동 선택"} {n}종목 × {fmt2(buyAmountPct)}% ={" "}
+                    <b>{fmt2(total)}%</b> 전체 노출
+                    {overflow && " (100% 초과 — 현금 부족 시 일부 종목 매수 실패)"}
+                  </div>
+                );
+              })()}
             </>
           )}
 
@@ -770,17 +807,15 @@ export function BuildTab(props: {
         </section>
         )}
 
-        {/* ④ 1문장 요약 — ③ 사용자 confirm 후 노출 */}
         {showBuySummary && (
-        <section className="sentence-clause sentence-clause-target sentence-clause-summary">
-          <p style={{ margin: 0, lineHeight: 1.6 }}>
-            <strong>매수후보</strong>가 위 매수조건을 만족하는 날,&nbsp;
+          <div className="section-recap">
+            <strong>매수후보</strong>가 위 매수조건을 만족하는 날,{" "}
             <strong>
               {useLimit
                 ? `지정가(전일종가 +${fmt2(buyTolerancePct)}% 이내)`
                 : "시장가"}
             </strong>
-            로&nbsp;
+            로{" "}
             <strong>
               {sizingMode === "pct_cash"
                 && `자본의 ${fmt2(buyAmountPct)}% (${wonReadable(capital * buyAmountPct / 100)})`}
@@ -792,8 +827,7 @@ export function BuildTab(props: {
                 && `ATR×${fmt2(atrMult)} 손절폭, 자본 위험 ${fmt2(atrRiskPct)}%`}
             </strong>
             씩 매수합니다.
-          </p>
-        </section>
+          </div>
         )}
         <SectionNextRow
           valid={showBuySummary}
@@ -831,7 +865,7 @@ export function BuildTab(props: {
             <input type="checkbox" checked={sellRealtimeEnabled}
                    onChange={(e) => setSellRealtimeEnabled(e.target.checked)} />
             <div className="sell-category-text">
-              <strong>실시간 매도</strong>
+              <strong>실시간 현재가 매도</strong>
               <span className="muted small">tick마다 평가, 즉시 발주 (가격 기반 — 익절·손절·트레일링·ATR)</span>
             </div>
           </label>
@@ -839,7 +873,7 @@ export function BuildTab(props: {
             <input type="checkbox" checked={sellEodEnabled}
                    onChange={(e) => setSellEodEnabled(e.target.checked)} />
             <div className="sell-category-text">
-              <strong>일일 시가 매도</strong>
+              <strong>일일 시초가 매도</strong>
               <span className="muted small">매일 08:55 사이클, 09:00 시초가 매도 (보유기간·지표 기반 조건)</span>
             </div>
           </label>
@@ -848,7 +882,7 @@ export function BuildTab(props: {
         {sellRealtimeEnabled && (
           <div className="sell-category-detail">
             <div className="sub-h" style={{ marginTop: 4 }}>
-              실시간 매도 상세
+              실시간 현재가 매도 상세
               <span className="metric-hint lg" data-tip="09:00~15:30 정규장 중 KIS 시세 WebSocket으로 매 tick 평가. 가격이 닿는 즉시 매도 발주.">ⓘ</span>
             </div>
             <div className="rule-list">
@@ -886,7 +920,7 @@ export function BuildTab(props: {
         {sellEodEnabled && (
           <div className="sell-category-detail">
             <div className="sub-h" style={{ marginTop: 18 }}>
-              일일 시가 매도 상세
+              일일 시초가 매도 상세
               <span className="metric-hint lg" data-tip="정규장 종가 데이터로 일봉 단위 평가. 보유기간·dataset 지표 기반 조건. 보유기간은 [+ 조건 추가] → 지표에서 '보유기간' 선택.">ⓘ</span>
             </div>
             <ConditionBuilder symbols={symbols} group={sell} onChange={setSell} context="sell" />
@@ -914,6 +948,7 @@ export function BuildTab(props: {
             )}
           </div>
         )}
+        {sellRecap && <div className="section-recap">{sellRecap}</div>}
         <SectionNextRow
           valid={hasSellSetup}
           editing={editStep === 3}
@@ -930,35 +965,35 @@ export function BuildTab(props: {
           summary={riskSummary} onEdit={() => editSection(4)} />
       ) : isStepActive(4) ? (
       <details className="panel section-collapsible" open>
-        <summary><h3>4. 리스크 한도 <span className="muted">(선택 — 미설정 시 기본값 적용)</span></h3></summary>
+        <summary><h3>4. 리스크 한도</h3></summary>
 
-        <div className="sub-h">4-1. 단일 종목 상한</div>
-        <div className="amount-row">
-          <label>한 종목 최대 비중</label>
-          <input type="number" min={1} max={100} step={1} value={maxPositionPct}
-                 onChange={(e) => setMaxPositionPct(Number(e.target.value))} />
-          <span className="muted">% (전체 자본 대비) — 사이징 결과가 이 한도 초과 시 강제 클램프</span>
-        </div>
+        <label className="risk-toggle">
+          <input type="checkbox" checked={maxPositionEnabled}
+                 onChange={(e) => setMaxPositionEnabled(e.target.checked)} />
+          <strong>한 종목 최대 비중</strong>
+        </label>
+        {maxPositionEnabled && (
+          <div className="amount-row" style={{ marginLeft: 24 }}>
+            <input type="number" min={1} max={100} step={1} value={maxPositionPct}
+                   onChange={(e) => setMaxPositionPct(Number(e.target.value))} />
+            <span className="muted">% (전체 자본 대비) — 사이징 결과가 이 한도 초과 시 강제 클램프</span>
+          </div>
+        )}
 
-        <div className="sub-h" style={{ marginTop: 18 }}>4-2. 시스템 킬스위치</div>
-        <div className="amount-row">
-          <label>일일 손실 한도</label>
-          <input type="number" min={0.5} max={20} step={0.1} value={dailyLossLimitPct}
-                 onChange={(e) => setDailyLossLimitPct(Number(e.target.value))} />
-          <span className="muted">
-            % — 도달 시 <b>당일 신규 진입 차단 + 보유 종목 강제 전량 청산 + 미체결 취소</b>
-          </span>
-          <span className="metric-hint lg" data-tip="자본 대비 −N% 손실 시 즉시 발동. 모든 보유 종목을 'kill-switch' 사유로 매도 발주 + 진행 중인 미체결 주문 전량 cancel. 사용자가 명시적으로 reset해야 다음 거래일 진입 재개. 장중 60초마다 모니터링되어 EOD 사이클 외에도 즉시 발동.">ⓘ</span>
-        </div>
-        <div className="amount-row">
-          <label>누적 손실 한도</label>
-          <input type="number" min={1} max={50} step={1} value={maxDrawdownPct}
-                 onChange={(e) => setMaxDrawdownPct(Number(e.target.value))} />
-          <span className="muted">% (자본 고점 대비) — 도달 시 <b>신규 진입 차단</b> (보유분은 매도 룰대로)</span>
-          <span className="metric-hint lg" data-tip="자본 고점 대비 -N% 하락 시 발동. 신규 진입만 차단 — 보유 종목은 사용자 매도 룰(익절·손절·트레일링·보유기간)대로 정상 동작. peak 회복 시 자동 해제. 일일 킬스위치와 달리 강제 청산 없음 (장기 침체 시 저점 매도 사고 방지).">ⓘ</span>
-        </div>
+        <label className="risk-toggle" style={{ marginTop: 14 }}>
+          <input type="checkbox" checked={maxDrawdownEnabled}
+                 onChange={(e) => setMaxDrawdownEnabled(e.target.checked)} />
+          <strong>누적 손실 한도</strong>
+        </label>
+        {maxDrawdownEnabled && (
+          <div className="amount-row" style={{ marginLeft: 24 }}>
+            <input type="number" min={1} max={50} step={1} value={maxDrawdownPct}
+                   onChange={(e) => setMaxDrawdownPct(Number(e.target.value))} />
+            <span className="muted">% (자본 고점 대비) — 도달 시 <b>신규 진입 차단</b> (보유분은 매도 룰대로)</span>
+            <span className="metric-hint lg" data-tip="자본 고점 대비 -N% 하락 시 발동. 신규 진입만 차단 — 보유 종목은 사용자 매도 룰(익절·손절·트레일링·보유기간)대로 정상 동작. peak 회복 시 자동 해제.">ⓘ</span>
+          </div>
+        )}
 
-        {/* Phase 49 — 4-3 "매수 발주 가격 범위"는 2번 매수 조건의 ② 가격 절로 이동. */}
         <SectionNextRow
           valid={true}
           editing={editStep === 4}

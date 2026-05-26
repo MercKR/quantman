@@ -1056,20 +1056,20 @@ class Trader:
         rl = risk_limits or {}
         # 미국 매수여력 모드 (사용자 설정) — _try_buy_one_symbol 사이징에 반영
         self._us_bp_mode = rl.get("us_buying_power_mode") or "integrated"
-        daily_loss_limit_pct = (rl.get("kill_switch_daily_loss_pct")
-                                  if rl.get("kill_switch_daily_loss_pct") is not None
-                                  else global_policy["daily_loss_limit_pct"])
+        # 일일 손실 한도: user 모니터링 설정에서만 가져옴. None이면 OFF.
+        # (ExecutionPolicy.daily_loss_limit_pct 제거됨 — 종목 단위 실시간 매도로 위험 처리.)
+        daily_loss_limit_pct = rl.get("kill_switch_daily_loss_pct")
         max_drawdown_limit_pct = (rl.get("max_drawdown_pct")
                                     if rl.get("max_drawdown_pct") is not None
                                     else global_policy["max_drawdown_pct"])
-        # Q5: 체결 후 즉시 평가용으로 인스턴스에 저장. 같은 사이클 안의 모든
-        # _apply_fill 호출이 동일 한도를 본다.
-        self._daily_loss_limit_pct = float(daily_loss_limit_pct)
+        # Q5: 체결 후 즉시 평가용으로 인스턴스에 저장. None이면 평가 skip.
+        self._daily_loss_limit_pct = (float(daily_loss_limit_pct)
+                                        if daily_loss_limit_pct is not None else None)
         # Phase 48 P1-D — 일일 거래 한도 (0 = 비활성).
         self._daily_turnover_limit_krw = int(rl.get("daily_turnover_limit_krw") or 0)
         self._daily_trade_count_limit = int(rl.get("daily_trade_count_limit") or 0)
 
-        if not ks_active:
+        if not ks_active and daily_loss_limit_pct is not None:
             reason = killswitch.check_daily_loss(
                 equity_now, daily_loss_limit_pct)
             if reason:

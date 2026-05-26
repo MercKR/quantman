@@ -291,7 +291,7 @@ export default function ScreenerPanel({
                          onChange={(e) => editPresetRuleValue(p, i, store(Number(e.target.value)))} />
                 )}
                 {displayUnit && <span className="rule-unit">{displayUnit}</span>}
-                <span className="rule-op">{opLabel}</span>
+                {r.op !== "between" && <span className="rule-op">{opLabel}</span>}
               </div>
             );
           })}

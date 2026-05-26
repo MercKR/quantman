@@ -231,11 +231,10 @@ function GroupEditor({ symbols, group, onChange, depth, onAddCondition, context 
           ) : (
             <ConditionRow
               symbols={symbols} c={node}
-              onPatch={(patch) => updateLeaf(i, patch)}
-              onSetOp={(op) => setOp(i, op)}
-              onRemove={() => remove(i)}
-              onAdd={onAddCondition}
-              onWrap={() => wrapInGroup(i)}
+              onPatch={(patch) => { updateLeaf(i, patch); onAddCondition?.(); }}
+              onSetOp={(op) => { setOp(i, op); onAddCondition?.(); }}
+              onRemove={() => { remove(i); onAddCondition?.(); }}
+              onWrap={() => { wrapInGroup(i); onAddCondition?.(); }}
               isDraft={!!onAddCondition}
               context={context}
             />
@@ -294,18 +293,16 @@ function boundaryAlwaysFalse(op: Op, right: Operand | undefined, leftGroup: stri
   return null;
 }
 
-/** 단일 조건 문장 한 줄 — 좌변(종목·지표) · 수식어 · 우변(종목·지표 또는 숫자) · 연산자 · 삭제 · 추가(선택). */
-function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove, onAdd, onWrap, isDraft, context }: {
+/** 단일 조건 문장 한 줄 — 좌변(종목·지표) · 수식어 · 우변(종목·지표 또는 숫자) · 연산자 · 삭제. */
+function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove, onWrap, isDraft, context }: {
   symbols: SymbolInfo[];
   c: Condition;
   onPatch: (patch: Partial<Condition>) => void;
   onSetOp: (op: Op) => void;
   onRemove: () => void;
-  /** Phase 56 — 정의되면 [추가] 버튼이 [삭제] 옆에 표시됨. 매수조건 progressive disclosure용. */
-  onAdd?: () => void;
   /** Phase 57-C — 괄호 열기. 이 row를 단일-원소 subgroup으로 wrap. 다시 닫으려면 묶음 삭제. */
   onWrap?: () => void;
-  /** Phase 57-C — true면 row 전체 dim 처리 (적용 대기). false면 환하게 (적용 완료). */
+  /** row dim 처리. 사용자 인터랙션 전엔 흐리게, 어떤 인터랙션 후엔 자동 해제. */
   isDraft?: boolean;
   /** Phase 56 — context="sell"면 SELF_SYMBOL indicators에 보유기간 가상 indicator 노출. */
   context?: "buy" | "sell";
@@ -399,12 +396,6 @@ function ConditionRow({ symbols, c, onPatch, onSetOp, onRemove, onAdd, onWrap, i
         <button type="button" className="ghost sm" onClick={onRemove}>
           삭제
         </button>
-        {onAdd && (
-          <button type="button" className="sm apply-btn" onClick={onAdd}
-                  title="이 조건을 확정해 다음 단계로 진행">
-            ✓ 적용
-          </button>
-        )}
       </span>
     </div>
   );
