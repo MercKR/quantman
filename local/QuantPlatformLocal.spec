@@ -18,7 +18,8 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files
 # localapp 버전을 __init__.py에서 직접 파싱 — onedir 출력 폴더명에 사용해
 # 사용자가 압축 풀었을 때 어느 버전인지 폴더명만 봐도 알도록 한다.
 # (zip 파일명은 패키징 단계에서 동일 명규로 부여.)
-_INIT_PY = Path(__file__).parent / "localapp" / "__init__.py"
+# PyInstaller spec은 `__file__` 미정의. SPECPATH(PyInstaller가 주입)가 spec 디렉터리.
+_INIT_PY = Path(SPECPATH) / "localapp" / "__init__.py"
 _m = re.search(r'__version__\s*=\s*"([^"]+)"', _INIT_PY.read_text(encoding="utf-8"))
 if not _m:
     raise RuntimeError(f"__version__ 파싱 실패: {_INIT_PY}")
