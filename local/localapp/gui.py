@@ -17,7 +17,7 @@ import webbrowser
 from tkinter import messagebox, ttk
 
 from . import (__version__, killswitch, order_log, pairing, secrets_store,
-                sync_client)
+                sync_client, updater)
 from .commands_client import CommandClient
 from .config import (EQUITY_PATH, LEDGER_PATH, PENDING_ORDERS_PATH,
                        PLATFORM_URL)
@@ -98,6 +98,13 @@ class SettingsApp:
         self.cmd_client = CommandClient(self._handle_command)
         self.cmd_client.start()
 
+        # Phase 60 — GitHub releases 최신 버전 체크 (background, frozen 환경만).
+        # 새 버전 있으면 상단 배너로 알림.
+        self._update_info: dict | None = None
+        if updater.is_frozen():
+            threading.Thread(target=self._check_updates_async,
+                              daemon=True, name="update-check").start()
+
     # ── 테마 ──────────────────────────────────────────────────────────────────
 
     def _apply_theme(self):
@@ -160,6 +167,20 @@ class SettingsApp:
 
     def _build(self):
         pad = {"padx": 12, "pady": (4, 6)}
+
+        # Phase 60 — 새 버전 알림 배너 (최상단). 평소엔 pack_forget 상태.
+        # _check_updates_async가 최신 release 발견 시 _show_update_banner로 노출.
+        self.update_banner = tk.Frame(self.root, bg=AMBER)
+        self.update_banner_label = tk.Label(
+            self.update_banner, text="", bg=AMBER, fg="#ffffff",
+            font=("Segoe UI", 10, "bold"))
+        self.update_banner_label.pack(side="left", padx=12, pady=8)
+        self.update_banner_btn = ttk.Button(
+            self.update_banner, text="지금 업데이트",
+            style="Accent.TButton",
+            command=self._start_update)
+        self.update_banner_btn.pack(side="right", padx=12, pady=6)
+        # 평소엔 숨김.
 
         # 상태 히어로 — 한눈에 현재 상태를 보여준다
         self.hero = tk.Frame(self.root, bg=SLATE)
@@ -819,6 +840,95 @@ class SettingsApp:
             if hasattr(self, "cmd_client") and self.cmd_client:
                 self.cmd_client.stop()
             self.root.destroy()
+
+    # ── Phase 60: 자동 업데이트 ────────────────────────────────────────────────
+
+    def _check_updates_async(self):
+        """background에서 GitHub releases 최신 버전 조회. 새 버전이면 배너 표시."""
+        try:
+            info = updater.check_latest_version()
+            if info and updater.is_newer(__version__, info["tag"]):
+                self._update_info = info
+                self.root.after(0, self._show_update_banner)
+        except Exception:
+            # 네트워크 실패 등 — 조용히 무시 (alive 신호 같은 부수 기능)
+            pass
+
+    def _show_update_banner(self):
+        """업데이트 배너를 최상단에 표시."""
+        info = self._update_info
+        if not info:
+            return
+        self.update_banner_label.config(
+            text=f"새 버전 {info['tag']} 사용 가능 — 한 번 클릭으로 업데이트")
+        # 최상단 (hero보다 위)
+        self.update_banner.pack(side="top", fill="x", before=self.hero)
+
+    def _start_update(self):
+        """진행률 다이얼로그 + background 다운로드/설치."""
+        info = self._update_info
+        if not info or not info.get("url"):
+            messagebox.showerror("업데이트 실패", "다운로드 URL을 찾을 수 없습니다.")
+            return
+        if not updater.is_frozen():
+            messagebox.showinfo(
+                "개발 환경",
+                "자동 업데이트는 빌드된 .exe에서만 동작합니다.\n"
+                "개발 환경에선 git pull을 사용하세요.")
+            return
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("업데이트 진행 중")
+        dlg.geometry("420x140")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        dlg.configure(bg=BG)
+
+        tk.Label(dlg, bg=BG, fg=TEXT, font=("Segoe UI", 10),
+                 text=f"퀀트 플랫폼 {info['tag']} 설치 중...").pack(pady=(16, 8))
+        status = tk.Label(dlg, bg=BG, fg=MUTED, font=("Segoe UI", 9),
+                          text="다운로드 준비 중…")
+        status.pack()
+        progress = ttk.Progressbar(dlg, length=380, maximum=100, mode="determinate")
+        progress.pack(pady=10)
+
+        STAGE_LABEL = {"download": "다운로드 중", "extract": "압축 해제 중",
+                       "install": "설치 준비 중"}
+
+        def progress_cb(stage: str, current: int, total: int):
+            pct = int(current / max(total, 1) * 100)
+            label = STAGE_LABEL.get(stage, stage)
+            def update_ui():
+                progress.config(value=pct)
+                status.config(text=f"{label}… {pct}%")
+            self.root.after(0, update_ui)
+
+        def worker():
+            try:
+                updater.perform_update(info["url"], progress_cb=progress_cb)
+                # 성공 — updater.bat이 백그라운드에서 돌고 있음.
+                # 앱 종료. tray가 있으면 _quit, 없으면 root.destroy.
+                def finish():
+                    dlg.destroy()
+                    messagebox.showinfo(
+                        "업데이트", "새 버전 설치를 시작합니다. 잠시 후 자동 재실행됩니다.")
+                    if self.scheduler and self.scheduler.running:
+                        self.scheduler.shutdown(wait=False)
+                    if hasattr(self, "cmd_client") and self.cmd_client:
+                        self.cmd_client.stop()
+                    self.root.quit()    # mainloop 종료 → 프로세스 종료 → bat이 교체 시작
+                self.root.after(0, finish)
+            except Exception as e:
+                err = str(e)
+                def show_err():
+                    dlg.destroy()
+                    messagebox.showerror("업데이트 실패",
+                                          f"업데이트 중 오류가 발생했습니다:\n{err}")
+                self.root.after(0, show_err)
+
+        threading.Thread(target=worker, daemon=True,
+                          name="update-worker").start()
 
     def run(self):
         self.root.mainloop()
