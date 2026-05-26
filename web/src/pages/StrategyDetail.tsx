@@ -14,10 +14,17 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
+import { BuildTab } from "./Backtest";
+import { HELD_DAYS_KEY } from "../components/ConditionBuilder";
 import type {
-  BacktestRunSummary, StrategyRow, StrategyStats, StrategyVersionRow,
+  AnalysisResult, BacktestResult, BacktestRunSummary, ConditionGroup,
+  ConditionNode, ExecutionPolicy, RebalanceIO, ScreenerSpecIO,
+  StrategyDef, StrategyRow, StrategyStats, StrategyVersionRow, SymbolInfo,
 } from "../types";
-import { EXECUTION_DEFAULTS, parseTradeSymbols } from "../types";
+import { EXECUTION_DEFAULTS } from "../types";
+
+type SizingMode = "fixed_amount" | "pct_cash" | "equal_weight" | "atr_risk";
+type RuleKey = "tp" | "sl" | "trail" | "atr";
 
 type TabKey = "config" | "versions" | "stats" | "backtests";
 
@@ -122,7 +129,13 @@ export default function StrategyDetail() {
         ))}
       </nav>
 
-      {tab === "config" && <ConfigTab strategy={strategy} onRemove={remove} />}
+      {tab === "config" && (
+        <ConfigEditTab
+          strategy={strategy}
+          onSaved={loadAll}
+          onRemove={remove}
+        />
+      )}
       {tab === "versions" && (
         <VersionsTab versions={versions} onRestore={restoreVersion} />
       )}
@@ -132,111 +145,269 @@ export default function StrategyDetail() {
   );
 }
 
-// ── 탭 1: 설정값 (read-only 요약) ─────────────────────────────────────────────
+// ── 탭 1: 설정값 (인라인 수정 — BuildTab 직접 사용) ─────────────────────────
 
-function ConfigTab({ strategy, onRemove }: {
+function ConfigEditTab({ strategy, onSaved, onRemove }: {
   strategy: StrategyRow;
+  onSaved: () => void;
+  onRemove: () => void;
+}) {
+  // 빌더와 동일한 모든 useState를 strategy.definition에서 초기화.
+  // 매번 strategy가 변하면 (저장 후 refresh) 모든 state 재초기화 — key로 강제.
+  // 부모(StrategyDetail)에서 strategy 객체 새로 받으면 이 컴포넌트가 unmount/remount.
+  return (
+    <ConfigEditInner key={strategy.id + "-" + strategy.updated_at}
+                     strategy={strategy} onSaved={onSaved} onRemove={onRemove} />
+  );
+}
+
+function ConfigEditInner({ strategy, onSaved, onRemove }: {
+  strategy: StrategyRow;
+  onSaved: () => void;
   onRemove: () => void;
 }) {
   const d = strategy.definition;
   const sr = d.sell_rules ?? {};
-  const buyN = d.buy?.conditions?.length ?? 0;
-  const sellExtraN = sr.conditions?.length ?? 0;
-  const { mode, symbols } = parseTradeSymbols(d.trade_symbol);
   const e = d.execution ?? {};
+
+  // 모든 빌더 state — strategy.definition에서 초기화
+  const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
+  const [hasMaster, setHasMaster] = useState<boolean>(true);
+  const [name, setName] = useState(d.name ?? strategy.name);
+  const [tradeSymbol, setTradeSymbol] = useState(d.trade_symbol ?? "");
+  const [buy, setBuy] = useState<ConditionGroup>(
+    d.buy ?? { conditions: [], logic: "AND" });
+  // 매도 conditions에 hold_days를 다시 inject (UI에서 보이도록)
+  const sellConditions = (sr.conditions ?? []).slice();
+  if (sr.hold_days != null && sr.hold_days > 0) {
+    sellConditions.unshift({
+      left: { kind: "indicator", symbol: "_self", indicator: HELD_DAYS_KEY },
+      op: ">=", right: { kind: "constant", value: sr.hold_days },
+      modifier: null,
+    });
+  }
+  const [sell, setSell] = useState<ConditionGroup>({
+    conditions: sellConditions, logic: sr.logic ?? "AND",
+  });
+  const [exits, setExits] = useState<Record<RuleKey, { on: boolean; v: number; sell_pct: number }>>({
+    tp:    { on: sr.take_profit != null, v: sr.take_profit ?? 10,
+             sell_pct: sr.rule_sell_pcts?.tp ?? 100 },
+    sl:    { on: sr.stop_loss != null, v: sr.stop_loss ?? -5,
+             sell_pct: sr.rule_sell_pcts?.sl ?? 100 },
+    trail: { on: sr.trail_pct != null, v: sr.trail_pct ?? 8,
+             sell_pct: sr.rule_sell_pcts?.trail ?? 100 },
+    atr:   { on: sr.trail_atr_mult != null, v: sr.trail_atr_mult ?? 3,
+             sell_pct: sr.rule_sell_pcts?.atr ?? 100 },
+  });
+  const [sellRealtimeEnabled, setSellRealtimeEnabled] = useState(false);
+  const [sellEodEnabled, setSellEodEnabled] = useState(false);
+  const [buyAmountPct, setBuyAmountPct] = useState(d.amount_pct ?? 10);
+  const [sellAmountPct, setSellAmountPct] = useState(sr.sell_amount_pct ?? 100);
+  const [screenerLimit, setScreenerLimit] = useState(d.screener_limit ?? 5);
+  const [screenerSpec, setScreenerSpec] = useState<ScreenerSpecIO | null>(
+    d.screener_spec ?? null);
+  const [rebalance, setRebalance] = useState<RebalanceIO>(
+    d.rebalance ?? { mode: "hold", period: "weekly" });
+  const [sizingMode, setSizingMode] = useState<SizingMode>(
+    (e.sizing_mode ?? EXECUTION_DEFAULTS.sizing_mode) as SizingMode);
+  const [amountKrw, setAmountKrw] = useState(e.amount_krw ?? EXECUTION_DEFAULTS.amount_krw);
+  const [atrRiskPct, setAtrRiskPct] = useState(e.atr_risk_pct ?? EXECUTION_DEFAULTS.atr_risk_pct);
+  const [atrMult, setAtrMult] = useState(e.atr_mult ?? EXECUTION_DEFAULTS.atr_mult);
+  const [maxPositionPct, setMaxPositionPct] = useState(e.max_position_pct ?? EXECUTION_DEFAULTS.max_position_pct);
+  const [dailyLossLimitPct, setDailyLossLimitPct] = useState(e.daily_loss_limit_pct ?? EXECUTION_DEFAULTS.daily_loss_limit_pct);
+  const [maxDrawdownPct, setMaxDrawdownPct] = useState(e.max_drawdown_pct ?? EXECUTION_DEFAULTS.max_drawdown_pct);
+  const [useLimit, setUseLimit] = useState<boolean>(e.use_limit ?? EXECUTION_DEFAULTS.use_limit);
+  const [buyTolerancePct, setBuyTolerancePct] = useState(e.buy_tolerance_pct ?? EXECUTION_DEFAULTS.buy_tolerance_pct);
+  const [sellTolerancePct, setSellTolerancePct] = useState(e.sell_tolerance_pct ?? EXECUTION_DEFAULTS.sell_tolerance_pct);
+  const [btCommissionBps, setBtCommissionBps] = useState(e.bt_commission_bps ?? EXECUTION_DEFAULTS.bt_commission_bps);
+  const [btSellTaxBps, setBtSellTaxBps] = useState(e.bt_sell_tax_bps ?? EXECUTION_DEFAULTS.bt_sell_tax_bps);
+  const [btSlippageBps, setBtSlippageBps] = useState(e.bt_slippage_bps ?? EXECUTION_DEFAULTS.bt_slippage_bps);
+  const [btGapExtraCost, setBtGapExtraCost] = useState<boolean>(e.bt_gap_extra_cost ?? EXECUTION_DEFAULTS.bt_gap_extra_cost);
+  const [btGapThresholdPct, setBtGapThresholdPct] = useState(e.bt_gap_threshold_pct ?? EXECUTION_DEFAULTS.bt_gap_threshold_pct);
+  const [capital, setCapital] = useState(10_000_000);
+  const [forwardDays, setForwardDays] = useState(1);
+
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [backtest, setBacktest] = useState<BacktestResult | null>(null);
+  const [busy, setBusy] = useState<"" | "analysis" | "backtest" | "save">("");
+  const [err, setErr] = useState("");
+  const [saveMsg, setSaveMsg] = useState("");
+
+  function setRule(key: RuleKey, patch: Partial<{ on: boolean; v: number; sell_pct: number }>) {
+    setExits((e) => ({ ...e, [key]: { ...e[key], ...patch } }));
+  }
+
+  useEffect(() => {
+    api.symbols().then((r) => {
+      setSymbols(r.symbols);
+      setHasMaster(r.has_master);
+    }).catch((e) => setErr((e as Error).message));
+  }, []);
+
+  function buildDef(): StrategyDef {
+    const execution: ExecutionPolicy = {
+      sizing_mode: sizingMode, amount_krw: amountKrw,
+      atr_risk_pct: atrRiskPct, atr_mult: atrMult,
+      max_position_pct: maxPositionPct,
+      daily_loss_limit_pct: dailyLossLimitPct,
+      max_drawdown_pct: maxDrawdownPct,
+      use_limit: useLimit,
+      buy_tolerance_pct: buyTolerancePct,
+      sell_tolerance_pct: sellTolerancePct,
+      bt_commission_bps: btCommissionBps,
+      bt_sell_tax_bps: btSellTaxBps,
+      bt_slippage_bps: btSlippageBps,
+      bt_gap_extra_cost: btGapExtraCost,
+      bt_gap_threshold_pct: btGapThresholdPct,
+    };
+    const ruleSellPcts: Record<string, number> = {};
+    for (const [k, v] of Object.entries(exits)) {
+      if (v.on) ruleSellPcts[k] = v.sell_pct;
+    }
+    let holdDaysFromCond: number | null = null;
+    const cleanedConditions = (sell.conditions || []).filter((node: ConditionNode) => {
+      if ("left" in node && node.left?.indicator === HELD_DAYS_KEY) {
+        const v = node.right && "value" in node.right ? Number(node.right.value) : NaN;
+        if (Number.isFinite(v) && v > 0) holdDaysFromCond = Math.floor(v);
+        return false;
+      }
+      return true;
+    });
+    return {
+      name, trade_symbol: tradeSymbol, buy,
+      sell_rules: {
+        take_profit:    exits.tp.on    ? exits.tp.v    : null,
+        stop_loss:      exits.sl.on    ? exits.sl.v    : null,
+        trail_pct:      exits.trail.on ? exits.trail.v : null,
+        trail_atr_mult: exits.atr.on   ? exits.atr.v   : null,
+        hold_days:      holdDaysFromCond,
+        conditions:     cleanedConditions,
+        logic:          sell.logic,
+        sell_amount_pct: sellAmountPct,
+        rule_sell_pcts: ruleSellPcts,
+      },
+      amount_pct: buyAmountPct,
+      screener_limit: screenerLimit,
+      screener_spec: tradeSymbol === "screener:custom" ? screenerSpec : null,
+      rebalance: tradeSymbol.startsWith("screener:") ? rebalance : undefined,
+      execution,
+    };
+  }
+
+  async function saveChanges() {
+    setErr(""); setSaveMsg("");
+    setBusy("save");
+    try {
+      await api.updateStrategy(strategy.id, buildDef(), strategy.run_mode);
+      setSaveMsg("저장됨 — 변경 전 정의는 자동으로 새 버전으로 보존됐습니다.");
+      onSaved();
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(""); }
+  }
+
+  async function runBacktest() {
+    setErr("");
+    setBusy("backtest"); setBacktest(null);
+    try {
+      const r = await api.runBacktest(buildDef(), capital, undefined, undefined,
+                                       strategy.id);
+      setBacktest(r);
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(""); }
+  }
+
+  async function runAnalysis() {
+    setErr("");
+    setBusy("analysis"); setAnalysis(null);
+    try {
+      const r = await api.runAnalysis({
+        conditions: buy.conditions, logic: buy.logic,
+        target_symbol: tradeSymbol,
+        target_indicator: symbols.find((s) => s.symbol === tradeSymbol)
+          ?.indicators.find((i) => i.key.includes("pct_change"))?.key ?? "",
+        forward_days: forwardDays,
+      });
+      setAnalysis(r);
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(""); }
+  }
+
+  function discardChanges() {
+    if (!window.confirm("변경사항을 취소하고 마지막 저장 상태로 되돌릴까요?")) return;
+    onSaved();   // 부모가 strategy 다시 fetch → key 변경 → 이 컴포넌트 remount
+  }
 
   return (
     <div className="strategy-detail-body">
-      <div className="config-section-head">
-        <p className="muted small" style={{ margin: 0 }}>
-          현재 정의 — 빌더 페이지에서 수정 가능 (다음 단계에서 인라인 수정 지원 예정).
-        </p>
-        <Link to="/backtest" className="cta sm">빌더에서 수정 →</Link>
-      </div>
+      {err && <div className="error">{err}</div>}
+      {saveMsg && <div className="ok">{saveMsg}</div>}
 
-      <section className="panel">
-        <h4>매수후보</h4>
-        <div className="rule-row">
-          <span className="rule-label">선정 방식</span>
-          <span className="rule-val">
-            {mode === "screener" ? "자동 선택"
-              : symbols.length === 0 ? "(없음)"
-              : `${symbols.length}종목 수동 선택`}
-          </span>
-        </div>
-        {mode === "screener" && (
-          <div className="rule-row">
-            <span className="rule-label">세트</span>
-            <span className="rule-val">
-              <code>{d.trade_symbol.slice("screener:".length)}</code>
-            </span>
-          </div>
-        )}
-        {symbols.length > 0 && symbols.length <= 30 && (
-          <div className="rule-row">
-            <span className="rule-label">종목</span>
-            <span className="rule-val small">
-              {symbols.slice(0, 6).join(", ")}
-              {symbols.length > 6 && ` 외 ${symbols.length - 6}종목`}
-            </span>
-          </div>
-        )}
-        <div className="rule-row">
-          <span className="rule-label">상위 N개 보유</span>
-          <span className="rule-val">{d.screener_limit ?? "—"}</span>
-        </div>
-      </section>
+      <BuildTab
+        symbols={symbols} hasMaster={hasMaster}
+        name={name} setName={setName}
+        tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
+        buy={buy} setBuy={setBuy}
+        sell={sell} setSell={setSell}
+        exits={exits} setRule={setRule}
+        sellRealtimeEnabled={sellRealtimeEnabled} setSellRealtimeEnabled={setSellRealtimeEnabled}
+        sellEodEnabled={sellEodEnabled} setSellEodEnabled={setSellEodEnabled}
+        buyAmountPct={buyAmountPct} setBuyAmountPct={setBuyAmountPct}
+        sellAmountPct={sellAmountPct} setSellAmountPct={setSellAmountPct}
+        screenerLimit={screenerLimit} setScreenerLimit={setScreenerLimit}
+        screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
+        rebalance={rebalance} setRebalance={setRebalance}
+        sizingMode={sizingMode} setSizingMode={setSizingMode}
+        amountKrw={amountKrw} setAmountKrw={setAmountKrw}
+        atrRiskPct={atrRiskPct} setAtrRiskPct={setAtrRiskPct}
+        atrMult={atrMult} setAtrMult={setAtrMult}
+        maxPositionPct={maxPositionPct} setMaxPositionPct={setMaxPositionPct}
+        dailyLossLimitPct={dailyLossLimitPct} setDailyLossLimitPct={setDailyLossLimitPct}
+        maxDrawdownPct={maxDrawdownPct} setMaxDrawdownPct={setMaxDrawdownPct}
+        useLimit={useLimit} setUseLimit={setUseLimit}
+        buyTolerancePct={buyTolerancePct} setBuyTolerancePct={setBuyTolerancePct}
+        sellTolerancePct={sellTolerancePct} setSellTolerancePct={setSellTolerancePct}
+        btCommissionBps={btCommissionBps} setBtCommissionBps={setBtCommissionBps}
+        btSellTaxBps={btSellTaxBps} setBtSellTaxBps={setBtSellTaxBps}
+        btSlippageBps={btSlippageBps} setBtSlippageBps={setBtSlippageBps}
+        btGapExtraCost={btGapExtraCost} setBtGapExtraCost={setBtGapExtraCost}
+        btGapThresholdPct={btGapThresholdPct} setBtGapThresholdPct={setBtGapThresholdPct}
+        capital={capital} setCapital={setCapital}
+        forwardDays={forwardDays} setForwardDays={setForwardDays}
+        busy={busy} runAnalysis={runAnalysis} runBacktest={runBacktest}
+        analysis={analysis}
+        resetStrategy={discardChanges}
+      />
 
-      <section className="panel">
-        <h4>매수 조건 ({buyN}개)</h4>
-        {buyN === 0 && <p className="muted small">조건 없음 — 매수 항상 가능.</p>}
-        {buyN > 0 && (
+      {backtest && backtest.success && (
+        <div className="panel" style={{ marginTop: 12 }}>
+          <h4>방금 실행한 백테스트 결과</h4>
           <p className="muted small">
-            "{d.buy?.logic === "AND" ? "모두" : "하나라도"} 만족" — 조건 {buyN}개.
-            상세는 빌더에서 확인.
+            이 결과는 전략의 "백테스트 내역" 탭에 자동 저장됩니다.
           </p>
-        )}
-      </section>
+          {backtest.metrics && (
+            <div className="rule-row">
+              <span className="rule-label">총수익률</span>
+              <span className="rule-val">
+                {(backtest.metrics.total_return as number | null)?.toFixed(2) ?? "—"}%
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+      {backtest && !backtest.success && (
+        <div className="error">{backtest.error}</div>
+      )}
 
-      <section className="panel">
-        <h4>매도 조건</h4>
-        <Rule label="익절" v={sr.take_profit != null ? `+${sr.take_profit}%` : "—"} />
-        <Rule label="손절" v={sr.stop_loss != null ? `${sr.stop_loss}%` : "—"} />
-        <Rule label="보유기간" v={sr.hold_days != null ? `${sr.hold_days}일` : "—"} />
-        <Rule label="트레일링 %" v={sr.trail_pct != null ? `-${sr.trail_pct}%` : "—"} />
-        <Rule label="트레일링 ATR" v={sr.trail_atr_mult != null ? `×${sr.trail_atr_mult}` : "—"} />
-        <Rule label="추가 조건" v={sellExtraN > 0 ? `${sellExtraN}개` : "—"} />
-        <Rule label="매도 비율" v={`${sr.sell_amount_pct ?? 100}%`} />
-      </section>
-
-      <section className="panel">
-        <h4>매수 가격</h4>
-        <Rule label="방식" v={e.use_limit ? "지정가" : "시장가"} />
-        {e.use_limit && (
-          <Rule label="tolerance" v={`${e.buy_tolerance_pct ?? 0}%`} />
-        )}
-      </section>
-
-      <section className="panel">
-        <h4>매수 규모</h4>
-        <Rule label="모드" v={
-          e.sizing_mode === "atr_risk"
-            ? `ATR 기반 (자본 ${e.atr_risk_pct ?? EXECUTION_DEFAULTS.atr_risk_pct}% 위험)`
-            : e.sizing_mode === "fixed_amount"
-              ? `정액 ${((e.amount_krw ?? 0) / 10000).toLocaleString()}만원`
-              : e.sizing_mode === "equal_weight"
-                ? `균등분배 (${d.screener_limit ?? 5}종목)`
-                : `정률 (자본의 ${d.amount_pct}%)`
-        } />
-        <Rule label="단일 종목 상한" v={`${e.max_position_pct ?? EXECUTION_DEFAULTS.max_position_pct}%`} />
-        <Rule label="일일 손실 한도" v={`${e.daily_loss_limit_pct ?? EXECUTION_DEFAULTS.daily_loss_limit_pct}%`} />
-        <Rule label="누적 손실 한도" v={`${e.max_drawdown_pct ?? EXECUTION_DEFAULTS.max_drawdown_pct}%`} />
-      </section>
-
-      <section className="panel">
-        <h4>위험 작업</h4>
+      <div className="strategy-save-bar">
+        <button className="apply-btn" disabled={!!busy} onClick={saveChanges}>
+          {busy === "save" ? "저장 중…" : "✓ 변경사항 저장 (새 버전)"}
+        </button>
+        <button className="ghost" disabled={!!busy} onClick={discardChanges}>
+          변경 취소
+        </button>
+        <span style={{ flex: 1 }} />
         <button className="danger-btn" onClick={onRemove}>전략 삭제</button>
-      </section>
+      </div>
     </div>
   );
 }

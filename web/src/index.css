@@ -141,6 +141,74 @@ a:hover { text-decoration: underline; }
   background: var(--accent-hover); border-color: var(--accent-hover);
 }
 
+/* 전략 detail 페이지 저장 bar — 페이지 하단 fixed-ish row */
+.strategy-save-bar {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 18px; padding: 14px; border-top: 1px solid var(--border);
+  position: sticky; bottom: 0; background: var(--bg);
+  z-index: 5;
+}
+.config-section-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 10px;
+}
+.strategy-detail-head { margin-bottom: 4px; }
+.strategy-detail-sub {
+  display: flex; align-items: center; gap: 10px;
+}
+.strategy-detail-body { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
+
+/* 전략 detail 탭 카운트 배지 */
+.tab-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; margin-left: 6px; padding: 0 5px;
+  background: var(--border); color: var(--muted);
+  border-radius: 999px; font-size: 10px; font-weight: 700;
+}
+.tab.active .tab-count { background: var(--accent-soft); color: var(--accent-strong); }
+
+/* 버전 list */
+.version-list { display: flex; flex-direction: column; gap: 6px; }
+.version-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.version-no {
+  font-weight: 700; font-family: monospace; color: var(--accent-strong);
+  background: var(--accent-soft); padding: 4px 10px; border-radius: 6px;
+}
+.version-meta { flex: 1; }
+.version-name { font-weight: 600; }
+.version-actions { display: flex; gap: 6px; }
+
+/* 현황 grid */
+.stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.stat-box {
+  padding: 14px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.stat-label { color: var(--muted); font-size: 12px; }
+.stat-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+.stat-value.pos { color: var(--up); }
+.stat-value.neg { color: var(--down); }
+.stat-sub { margin-top: 2px; }
+
+/* 백테스트 내역 table */
+.bt-history-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.bt-history-table th, .bt-history-table td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left;
+}
+.bt-history-table th { background: var(--bg); font-weight: 600; color: var(--muted); }
+.bt-history-table td.pos { color: var(--up); font-weight: 600; }
+.bt-history-table td.neg { color: var(--down); font-weight: 600; }
+
 /* 페이지 내부 모드 필터 — Dashboard 활성 전략 paper/live 토글 */
 .mode-filter {
   display: inline-flex; background: var(--bg);
