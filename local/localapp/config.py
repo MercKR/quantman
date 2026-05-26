@@ -35,3 +35,6 @@ REBALANCE_PATH = APP_DIR / "rebalance.json"      # 전략별 마지막 리밸런
 # 직후 "submitted"/"failed"로 마감. 재기동 시 submitting으로 끝난 intent를 KIS
 # 당일 주문 조회와 매칭해 중복 발주 방지. 자세한 설계는 intents.py.
 INTENTS_PATH = APP_DIR / "intents.jsonl"
+
+# 사용자 환경설정(평문 JSON) — 민감정보 아님. KIS API 키·계좌번호는 keyring 전용.
+USER_SETTINGS_PATH = APP_DIR / "user_settings.json"
