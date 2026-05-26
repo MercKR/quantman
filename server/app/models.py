@@ -119,6 +119,9 @@ class UserSettings(SQLModel, table=True):
     # 미국 매수여력 모드: "integrated"=KIS 통합증거금(KRW 담보, FX 노출) /
     # "usd_cash"=USD 예수금 한정(보수적, FX 노출 없음). 미국 종목 사이징에만 영향.
     us_buying_power_mode: str = "integrated"
+    # Phase 58+ — 로컬앱 heartbeat 영구 저장 (이전 메모리 dict — server 재부팅 시 stale).
+    # 로컬앱이 5분 주기로 POST /sync/heartbeat → 이 컬럼 갱신.
+    last_heartbeat_at: Optional[datetime] = None
     updated_at: datetime = Field(default_factory=_now)
 
 

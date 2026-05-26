@@ -24,10 +24,6 @@ _log = logging.getLogger("app.sync")
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
-# Phase 58 — 로컬앱 heartbeat (5분 주기). 메모리 dict라 worker 1개 가정 + restart
-# 시 다음 heartbeat까지 stale. Railway single-worker라 OK.
-_last_heartbeat: dict[int, datetime] = {}
-
 
 # ── 로컬앱 → 서버 (기기 토큰 인증) ─────────────────────────────────────────────
 
@@ -322,13 +318,25 @@ def push_tradable_symbols(
 # ── 서버 → 웹 (JWT 인증) ───────────────────────────────────────────────────────
 
 @router.post("/heartbeat")
-def push_heartbeat(device: Device = Depends(get_current_device)):
-    """Phase 58 — 로컬앱 alive 신호. 5분 주기, KIS API 호출 없음.
+def push_heartbeat(
+    device: Device = Depends(get_current_device),
+    session: Session = Depends(get_session),
+):
+    """Phase 58+ — 로컬앱 alive 신호. 5분 주기, KIS API 호출 없음.
 
-    cycle 외 시간(새벽 등)에도 웹앱이 로컬앱 살아있음을 알 수 있도록
-    user_id별 last_heartbeat_at 메모리 dict 갱신.
+    UserSettings.last_heartbeat_at 컬럼 갱신 (영구 저장). 이전엔 메모리
+    dict였으나 server 재부팅 시 stale로 false alarm 발생 → DB로 영구화.
     """
-    _last_heartbeat[device.user_id] = datetime.now(timezone.utc)
+    settings = session.exec(
+        select(UserSettings).where(UserSettings.user_id == device.user_id)
+    ).first()
+    now = datetime.now(timezone.utc)
+    if settings is None:
+        settings = UserSettings(user_id=device.user_id, last_heartbeat_at=now)
+        session.add(settings)
+    else:
+        settings.last_heartbeat_at = now
+    session.commit()
     return {"ok": True}
 
 
@@ -343,7 +351,10 @@ def latest_snapshot(
         .where(SyncSnapshot.user_id == user.id)
         .order_by(SyncSnapshot.received_at.desc())
     ).first()
-    last_hb = _last_heartbeat.get(user.id)
+    settings = session.exec(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    ).first()
+    last_hb = settings.last_heartbeat_at if settings else None
     if snap is None and last_hb is None:
         return None
     if snap is None:

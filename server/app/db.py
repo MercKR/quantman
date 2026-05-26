@@ -59,6 +59,8 @@ _NEW_COLS: list[tuple[str, str, str]] = [
     # Phase 48 P1-D — 일일 거래 금액·횟수 한도 (0=비활성)
     ("usersettings", "daily_turnover_limit_krw",         "BIGINT DEFAULT 0"),
     ("usersettings", "daily_trade_count_limit",          "INTEGER DEFAULT 0"),
+    # Phase 58+ — heartbeat 영구 저장 (server 재부팅 false alarm 방지)
+    ("usersettings", "last_heartbeat_at",                "TIMESTAMP"),
     # Phase 59 — 전략 버전 이력·현황 컬럼
     ("strategy",     "paper_started_at",                 "TIMESTAMP"),
     ("strategy",     "live_started_at",                  "TIMESTAMP"),

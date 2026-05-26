@@ -104,7 +104,12 @@ def _data_freshness_ok(dataset: dict, symbol: str,
         today = datetime.now(_KST).date()
 
     market = "KR" if _is_kr_symbol(symbol) else "US"
-    ref = _last_session_on_or_before(market, today)
+    # US 시장은 KST 익일 05:00에 정규장 마감. KST today 한낮 시점엔 *오늘 KST 날짜*의
+    # US 정규장이 아직 미오픈/진행 중 → "마지막 마감된 US 거래일"은 KST 어제 기준.
+    # (예: KST 5/26 화 한낮 → US 5/25 월 Memorial Day 휴장 → 5/22 금이 정답.
+    # 이전엔 today=5/26으로 _last_session 호출해 5/26 자체를 ref로 잡음 = false alarm.)
+    ref_anchor = today - timedelta(days=1) if market == "US" else today
+    ref = _last_session_on_or_before(market, ref_anchor)
     if ref is None:
         # 캘린더 미작동 — stale 판정 자체가 불가하므로 통과 (다른 신호가 잡음)
         return True, ""
