@@ -422,10 +422,15 @@ class KisBroker:
 
         ord_dvsn: 00=지정가, 01=시장가. 가격은 정수 KRW로 포맷.
         """
+        # KIS 공식 spec ([국내주식] 주문_계좌.xlsx 주식주문(현금)):
+        #   매수: TTTC0012U (실전) / VTTC0012U (모의)
+        #   매도: TTTC0011U (실전) / VTTC0011U (모의)
+        # v0.8.4 이전엔 TTTC0802U/0801U 사용 — KIS grace로 동작했으나
+        # 공식 spec엔 미명시. v0.8.5에서 새 spec으로 migrate.
         if side == "buy":
-            tr = "VTTC0802U" if self.virtual else "TTTC0802U"
+            tr = "VTTC0012U" if self.virtual else "TTTC0012U"
         else:
-            tr = "VTTC0801U" if self.virtual else "TTTC0801U"
+            tr = "VTTC0011U" if self.virtual else "TTTC0011U"
         body = {
             "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_cd,
             "PDNO": symbol, "ORD_DVSN": ord_dvsn,
@@ -532,7 +537,8 @@ class KisBroker:
         from . import market_index
         if symbol and market_index.is_us(symbol):
             return self._cancel_overseas(order_no, symbol, qty)
-        tr = "VTTC0803U" if self.virtual else "TTTC0803U"
+        # 정정/취소 — KIS 공식 spec: TTTC0013U / VTTC0013U
+        tr = "VTTC0013U" if self.virtual else "TTTC0013U"
         d = self._post_retry(
             "/uapi/domestic-stock/v1/trading/order-rvsecncl", tr, {
                 "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_cd,
@@ -566,8 +572,12 @@ class KisBroker:
                 "msg_cd": d.get("msg_cd", "")}
 
     def _daily_ccld(self) -> dict:
-        """당일 주문체결 조회 — 미체결·체결·취소 모두 포함."""
-        tr = "VTTC8001R" if self.virtual else "TTTC8001R"
+        """당일 주문체결 조회 — 미체결·체결·취소 모두 포함.
+
+        KIS 공식 spec: TTTC0081R / VTTC0081R (3개월 이내). v0.8.4 이전엔
+        TTTC8001R 사용 — KIS grace로 동작했으나 공식 미명시.
+        """
+        tr = "VTTC0081R" if self.virtual else "TTTC0081R"
         today = datetime.now().strftime("%Y%m%d")
         return self._get_retry(
             "/uapi/domestic-stock/v1/trading/inquire-daily-ccld", tr, {
