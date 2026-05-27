@@ -412,24 +412,36 @@ class KisBroker:
             return 0.0
 
     def _open_overseas(self, symbol: str, market: str) -> float:
-        """해외 당일 시가 — overseas/price 응답의 open. 응답 키는 KIS spec에서
-        'open' 또는 'opening_price' (시장별로 다름) — 안전하게 둘 다 시도."""
+        """해외 당일 시가 — HHDFS76200200 (해외주식 현재가상세).
+
+        v0.9.7-beta — HHDFS00000300(현재체결가)에서 변경.
+        이유 (사용자 환경 실측):
+          - HHDFS00000300 응답에 open 필드 자체 없음 (last·base·tvol만 11개 필드)
+            → 모의·실전 모두 시초가 미제공 → catch-up 매수 6/6 skip
+          - HHDFS76200200(현재가상세)는 41 필드 응답에 open·high·low 명시 포함
+          - doc상 "모의 미지원"이지만 시세는 모든 KIS 사용자가 실전 도메인 사용
+            (self.quote_base=_REAL) → 모의 appkey + 실전 도메인 조합 동작 확인
+          - 한 번 REST 호출로 OHLC + 52주·PER·EPS·시가총액까지 받음
+          - 분봉 endpoint는 NREC 한도(~120봉)로 미장 4시간+ 진행 시 시초가 도달 불가
+
+        호출 실패·output 비어있으면 0.0 반환 → trader.catchup branch가
+        prev_close fallback으로 처리 (PR-1 정당: KIS API 진짜 한계 대비).
+        """
         from . import market_index
         excd_map = {"NAS": "NAS", "NYS": "NYS", "AMS": "AMS",
                      "TSE": "TSE", "HKS": "HKS"}
         excd = excd_map.get(market, "NAS")
         body = self._get_retry(
-            "/uapi/overseas-price/v1/quotations/price", "HHDFS00000300",
+            "/uapi/overseas-price/v1/quotations/price-detail",
+            "HHDFS76200200",
             {"AUTH": "", "EXCD": excd, "SYMB": market_index.kis_ticker_of(symbol)},
             base=self.quote_base)
-        output = body.get("output", {})
-        for key in ("open", "opening_price", "oprc"):
-            v = output.get(key)
-            if v not in (None, "", "0"):
-                try:
-                    return float(v)
-                except (TypeError, ValueError):
-                    continue
+        v = body.get("output", {}).get("open")
+        if v not in (None, "", "0"):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
         return 0.0
 
     def _price_overseas(self, symbol: str, market: str) -> float:

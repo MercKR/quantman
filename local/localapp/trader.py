@@ -498,12 +498,15 @@ class Trader:
         if catchup and not use_limit:
             open_price = self.broker.today_open(symbol)
             if open_price <= 0:
-                log.warning("[catch-up] %s 시가 조회 실패 — 매수 skip", symbol)
-                intents.mark_failed(today_iso, intent_id, "no_open_price")
-                decisions.append(order_log.decision(
-                    "skip_no_open_price", sid, strat_name, symbol,
-                    "catch-up: 당일 시가 조회 실패"))
-                return
+                # v0.9.7-beta — PR-1 정당 fallback (KIS API 진짜 한계 대비).
+                # _open_overseas는 HHDFS76200200으로 변경돼 정상 케이스는 open 받음.
+                # 그래도 실패 시(휴장일·통신 오류 등) prev_close * (1+slippage)로
+                # 보수적 매수 시도. catch-up을 silent skip하지 않고 사용자 매수
+                # 의지 존중 — 최악의 경우에도 어제 종가에서 slippage 비용만큼
+                # 비싸게 사는 보수적 가격.
+                open_price = ref_price  # = prev_close * (1 + buy_tolerance_pct%)
+                log.info("[catch-up] %s 시가 미제공 — prev_close 기반 발주 "
+                          "(open=%.4f)", symbol, open_price)
             slip = qc.DEFAULT_EXECUTION["bt_slippage_bps"] / 10_000.0
             limit = qc.round_to_tick(open_price * (1 + slip),
                                        direction="up",
