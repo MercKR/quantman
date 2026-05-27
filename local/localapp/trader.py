@@ -987,27 +987,6 @@ class Trader:
             log.warning("[P1-D] today_buy_summary 읽기 실패: %s", e)
         return count, turnover
 
-    def _in_kis_maintenance_window(self, now_kst: datetime) -> bool:
-        """KIS 정기 점검 시간대 추정 (Phase 48 P1-B).
-
-        KIS 공식 시간이 문서화되지 않아 eFriend Plus 공지·관찰 기반 보수적 추정:
-          - 평일(월~금) 03:00 ~ 06:00 — 시스템 점검
-          - 토요일 17:00 이후 ~ 일요일 종일 ~ 월요일 07:00 — 주말 점검
-        시장 사이클(08:55, 15:45 등)은 이 윈도우 밖이라 정상 운영 영향 없음.
-        Edge: 사용자가 cycle을 수동 트리거할 때 보호. False면 정상 진행.
-        """
-        wd = now_kst.weekday()  # 0=월, 5=토, 6=일
-        h = now_kst.hour
-        if wd == 5 and h >= 17:                      # 토 저녁
-            return True
-        if wd == 6:                                    # 일 종일
-            return True
-        if wd == 0 and h < 7:                         # 월 새벽
-            return True
-        if wd in (1, 2, 3, 4) and 3 <= h < 6:         # 평일 새벽 점검
-            return True
-        return False
-
     def cycle(self, strategies: list[dict], dataset: dict,
               today: date | None = None,
               buy_candidates: list[dict] | None = None,
@@ -1061,19 +1040,13 @@ class Trader:
         today = today or kst_today()
         decisions: list[dict] = []
 
-        # Phase 48 P1-B — KIS 정기 점검 시간대 자동 차단.
-        # 점검 시간에는 사이클 진입 X (KIS 응답이 비정상이라 안전 우선).
-        now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
-        if self._in_kis_maintenance_window(now_kst):
-            decisions.append(order_log.decision(
-                "skip_maintenance", "", "", "",
-                "KIS 정기 점검 시간대 — 자동매매 보류 (점검 후 다음 cron에서 자동 재개)"))
-            log.info("[P1-B] KIS 점검 시간대 — cycle skip (%s)",
-                      now_kst.strftime("%a %H:%M"))
-            return {"balance": {"cash": 0, "total_eval": 0},
-                    "positions": [], "equity": self.equity[-365:],
-                    "trades": [], "decisions": decisions,
-                    "cycle_summary": {"skipped_reason": "kis_maintenance"}}
+        # 옛 Phase 48 P1-B의 시간 기반 KIS 점검 가드(평일 03:00~06:00 등)는 제거.
+        # 이유: KIS 공식 점검 시간 doc 부재로 보수적 추정 차단했으나, 실측 probe
+        # (~/.quant-platform/probes/kis_maintenance.jsonl) 결과 03:28+ 정상 응답
+        # 다수 → 가드 over-conservative. 미장 마감(KST 05:00) 직전 catch-up 매수
+        # 차단되는 실 사고 (2026-05-28). KIS 진짜 점검 중이면 아래 잔고 health
+        # check가 즉시 cycle 중단 (skip_kis_health). 4원칙 PR-1 — 추정 fallback
+        # 보다 실측 fallback이 본질적 해결.
 
         # ── 0. 이전 사이클 미체결 정리 ─────────────────────────────────────
         self._resolve_pending(decisions)
