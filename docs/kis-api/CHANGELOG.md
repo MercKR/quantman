@@ -4,6 +4,21 @@
 
 ## 2026-05-28
 
+### v0.9.8-beta — Auto-updater hotfix (catch-up 사건 2차 원인)
+
+미장 매수 catch-up 0건의 *2차* 원인 — KIS API 무관하나 동일 사건 일부. v0.9.7
+HHDFS76200200 fix는 배포됐으나 **사용자 PC의 자동 업데이트가 16번 실패** →
+catch-up 재시도가 늦어 KIS 점검 윈도우(03:00~06:00) 진입 → cycle skip → 매수 0.
+
+근본 (updater 3 결함):
+1. `taskkill /F /PID <one_pid>` 단일 PID — `mb.showinfo` 좀비 dialog가 다른
+   PID로 살아 .dll 잠금 유지 → robocopy 무한 retry
+2. `mb.showinfo` blocking modal — 사용자가 닫지 않으면 process 영구 잔존
+3. `:FAIL` 분기에서 rmdir이 MessageBox 전 + retry 60s/파일 → :FAIL 도달 못 함
+
+fix → v0.9.8-beta (`taskkill /IM /T`, 5초 timeout dialog, `:FAIL` 순서 swap,
+임시 폴더 24h cleanup).
+
 ### KB 확장 — 7 카테고리 132 endpoint 완전 변환 ✓
 - 국내주식 기본시세 (22), 실시간시세 (29), 주문/계좌 (23), 순위분석 (22)
 - 해외주식 기본시세 (14), 실시간시세 (4), 주문/계좌 (18)

@@ -32,13 +32,60 @@ def _enable_dpi_awareness() -> None:
         pass
 
 
+def _cleanup_stale_update_dirs() -> None:
+    """%TEMP%/quantman-update-* 중 24h 이상 된 것 정리.
+
+    v0.9.8-beta — updater :FAIL 또는 강제 종료 시 임시 폴더가 정리 안 된 채
+    누적되는 케이스 대비 (이전에 16개 누적 사례). 디스크 누수 방지.
+    """
+    import glob
+    import os
+    import shutil
+    import tempfile
+    import time
+    cutoff = time.time() - 86400  # 24h
+    pattern = os.path.join(tempfile.gettempdir(), "quantman-update-*")
+    for p in glob.glob(pattern):
+        try:
+            if os.path.getmtime(p) < cutoff:
+                shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            # mtime 조회 실패 또는 권한 — 다음 cleanup 기회로 미룸.
+            pass
+
+
+def _show_already_running_dialog() -> None:
+    """5초 후 자동 종료되는 'already running' 알림.
+
+    v0.9.8-beta — 옛 `mb.showinfo`는 blocking modal이라 사용자가 [확인] 안 누르면
+    process가 영구 잔존. 이 좀비가 .exe·.dll을 메모리 매핑한 채로 살아있어
+    updater의 robocopy가 잠금 풀지 못해 실패하는 결함을 v0.9.7-beta까지 노출.
+    5초 timeout 자가 종료로 좀비 누적 차단.
+    """
+    import tkinter as tk
+    root = tk.Tk()
+    root.title("퀀트 플랫폼")
+    root.resizable(False, False)
+    root.eval("tk::PlaceWindow . center")
+    tk.Label(
+        root,
+        text="로컬앱이 이미 실행 중입니다.\n(5초 후 자동 종료)",
+        padx=24,
+        pady=20,
+        font=("Segoe UI", 10),
+    ).pack()
+    root.after(5000, root.destroy)
+    root.mainloop()
+
+
 def main():
     _enable_dpi_awareness()             # tkinter import 전에 호출 필수
     setup_logging(console=False)
+    _cleanup_stale_update_dirs()        # 누적된 옛 update temp 디렉터리 정리
 
     if not single_instance.acquire():
-        import tkinter.messagebox as mb
-        mb.showinfo("퀀트 플랫폼", "로컬앱이 이미 실행 중입니다.")
+        # 좀비 process 누적 차단 (v0.9.8-beta) — 자세한 사유는 함수 docstring.
+        _show_already_running_dialog()
         return
 
     try:
