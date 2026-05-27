@@ -1,0 +1,122 @@
+# CTSC0008U — 주식예약주문
+
+> KIS Open API 공식 docs 자동 변환. 시행착오는 [GOTCHAS.md](../../GOTCHAS.md) 참조.
+
+## Metadata
+
+| 항목 | 값 |
+|---|---|
+| API 명 | 주식예약주문 |
+| API ID | v1_국내주식-017 |
+| 실전 TR_ID | `CTSC0008U` |
+| 모의 TR_ID | 모의투자 미지원 |
+| HTTP Method | `POST` |
+| URL | `/uapi/domestic-stock/v1/trading/order-resv` |
+| 실전 Domain | `https://openapi.koreainvestment.com:9443` |
+| 모의 Domain | 모의투자 미지원 |
+
+## 개요
+
+국내주식 예약주문 매수/매도 API 입니다.
+
+※ POST API의 경우 BODY값의 key값들을 대문자로 작성하셔야 합니다.
+   (EX. "CANO" : "12345678", "ACNT_PRDT_CD": "01",...)
+
+※ 유의사항
+ 1. 예약주문 가능시간 : 15시 40분 ~ 다음 영업일 7시 30분 
+    (단, 서버 초기화 작업 시 예약주문 불가 : 23시 40분 ~ 00시 10분)
+    ※ 예약주문 처리내역은 통보되지 않으므로 주문처리일 장 시작전에 반드시 주문처리 결과를 확인하시기 바랍니다.
+
+ 2. 예약주문 안내
+   - 예약종료일 미입력 시 일반예약주문으로 최초 도래하는 영업일에 주문 전송됩니다.
+   - 예약종료일 입력 시 기간예약주문으로 최초 예약주문수량 중 미체결 된 수량에 대해 예약종료일까지 매 영업일 주문이
+      실행됩니다. (예약종료일은 익영업일부터 달력일 기준으로 공휴일 포함하여 최대 30일이 되는 일자까지 입력가능)
+   - 예약주문 접수 처리순서는 일반/기간예약주문 중 신청일자가 빠른 주문이 우선합니다.
+      단, 기간예약주문 자동배치시간(약 15시35분 ~ 15시55분)사이 접수되는 주문의 경우 당일에 한해 순서와 상관없이
+      처리될 수 있습니다.
+   - 기간예약주문 자동배치시간(약 15시35분 ~ 15시55분)에는 예약주문 조회가 제한 될 수 있습니다.
+   - 기간예약주문은 계좌 당 주문건수 최대 1,000건으로 제한됩니다.
+
+3. 예약주문 접수내역 중 아래의 사유 등으로 인해 주문이 거부될 수 있사오니, 주문처리일 장 시작전에 반드시
+    주문처리 결과를 확인하시기 바랍니다.
+    * 주문처리일 기준 : 매수가능금액 부족, 매도가능수량 부족, 주문수량/호가단위 오류, 대주 호가제한, 
+                              신용/대주가능종목 변경, 상/하한폭 변경, 시가형성 종목(신규상장 등)의 시장가, 거래서비스 미신청 등
+
+ 4. 익일 예상 상/하한가는 조회시점의 현재가로 계산되며 익일의 유/무상증자, 배당, 감자, 합병, 액면변경 등에 의해
+    변동될 수 있으며 이로 인해 상/하한가를 벗어나 주문이 거부되는 경우가 발생할 수 있사오니, 주문처리일 장 시작전에
+    반드시 주문처리결과를 확인하시기 바랍니다.
+
+ 5. 정리매매종목, ELW, 신주인수권증권, 신주인수권증서 등은 가격제한폭(상/하한가) 적용 제외됩니다.
+
+ 6. 영업일 장 시작 후 [기간예약주문] 내역 취소는 해당시점 이후의 예약주문이 취소되는 것으로, 
+    일반주문으로 이미 전환된 주문에는 영향을 미치지 않습니다. 반드시 장 시작전 주문처리결과를 확인하시기 바랍니다.
+
+## Request / Response
+
+| 구분 | Element | 한글명 | Type | Required | Length | Description |
+|---|---|---|---|---|---|---|
+| Request Header | `content-type` | 컨텐츠타입 | string | N | 40 | application/json; charset=utf-8 |
+|  | `authorization` | 접근토큰 | string | Y | 350 | OAuth 토큰이 필요한 API 경우 발급한 Access token  일반고객(Access token 유효기간 1일, OAuth 2.0의 Client Credentials Grant 절차를 준용)  법인(Access token 유효기간 3개월, Refresh token 유효기간 1년, OAuth 2.0의 Authorization Code Grant 절차 |
+|  | `appkey` | 앱키 | string | Y | 36 | 한국투자증권 홈페이지에서 발급받은 appkey (절대 노출되지 않도록 주의해주세요.) |
+|  | `appsecret` | 앱시크릿키 | string | Y | 180 | 한국투자증권 홈페이지에서 발급받은 appkey (절대 노출되지 않도록 주의해주세요.) |
+|  | `personalseckey` | 고객식별키 | string | N | 180 | [법인 필수] 제휴사 회원 관리를 위한 고객식별키 |
+|  | `tr_id` | 거래ID | string | Y | 13 | [실전투자] CTSC0008U : 국내예약매수입력/주문예약매도입력 |
+|  | `tr_cont` | 연속 거래 여부 | string | N | 1 | tr_cont를 이용한 다음조회 불가 API |
+|  | `custtype` | 고객타입 | string | N | 1 | B : 법인  P : 개인 |
+|  | `seq_no` | 일련번호 | string | N | 2 | [법인 필수] 001 |
+|  | `mac_address` | 맥주소 | string | N | 12 | 법인고객 혹은 개인고객의 Mac address 값 |
+|  | `phone_number` | 핸드폰번호 | string | N | 12 | [법인 필수] 제휴사APP을 사용하는 경우 사용자(회원) 핸드폰번호  ex) 01011112222 (하이픈 등 구분값 제거) |
+|  | `ip_addr` | 접속 단말 공인 IP | string | N | 12 | [법인 필수] 사용자(회원)의 IP Address |
+|  | `gt_uid` | Global UID | string | N | 32 | [법인 전용] 거래고유번호로 사용하므로 거래별로 UNIQUE해야 함 |
+| Request Body | `CANO` | 종합계좌번호 | string | Y | 8 | 계좌번호 체계(8-2)의 앞 8자리 |
+|  | `ACNT_PRDT_CD` | 계좌상품코드 | string | Y | 2 | 계좌번호 체계(8-2)의 뒤 2자리 |
+|  | `PDNO` | 종목코드(6자리) | string | Y | 12 |  |
+|  | `ORD_QTY` | 주문수량 | string | Y | 10 | 주문주식수 |
+|  | `ORD_UNPR` | 주문단가 | string | Y | 19 | 1주당 가격  * 장전 시간외, 시장가의 경우 1주당 가격을 공란으로 비우지 않음 "0"으로 입력 권고 |
+|  | `SLL_BUY_DVSN_CD` | 매도매수구분코드 | string | Y | 2 | 01 : 매도 02 : 매수 |
+|  | `ORD_DVSN_CD` | 주문구분코드 | string | Y | 2 | 00 : 지정가 01 : 시장가 02 : 조건부지정가 05 : 장전 시간외 |
+|  | `ORD_OBJT_CBLC_DVSN_CD` | 주문대상잔고구분코드 | string | Y | 2 | [매도매수구분코드 01:매도/02:매수시 사용] 10 : 현금   [매도매수구분코드 01:매도시 사용] 12 : 주식담보대출  14 : 대여상환 21 : 자기융자신규 22 : 유통대주신규 23 : 유통융자신규 24 : 자기대주신규 25 : 자기융자상환 26 : 유통대주상환 27 : 유통융자상환 28 : 자기대주상환 |
+|  | `LOAN_DT` | 대출일자 | string | N | 8 |  |
+|  | `RSVN_ORD_END_DT` | 예약주문종료일자 | string | N | 8 | (YYYYMMDD) 현재 일자보다 이후로 설정해야 함 * RSVN_ORD_END_DT(예약주문종료일자)를 안 넣으면 다음날 주문처리되고 예약주문은 종료됨 * RSVN_ORD_END_DT(예약주문종료일자)는 익영업일부터 달력일 기준으로 공휴일 포함하여 최대 30일이 되는 일자까지 입력 가능 |
+|  | `LDNG_DT` | 대여일자 | string | N | 8 |  |
+| Response Header | `content-type` | 컨텐츠타입 | string | Y | 40 | application/json; charset=utf-8 |
+| Response Body | `rt_cd` | 성공 실패 여부 | string | Y | 1 | 0 : 성공  0 이외의 값 : 실패 |
+|  | `msg_cd` | 응답코드 | string | Y | 8 |  |
+|  | `msg` | 응답메세지 | string | Y | 80 |  |
+|  | `output` | 응답상세 | object array | Y |  | Array |
+|  | `rsvn_ord_seq` | 예약주문 순번 | string | N | 10 |  |
+
+## Example
+
+### Request Example (Python)
+```
+{ 
+	"CANO": "810XXXXX", 
+	"ACNT_PRDT_CD": "01", 
+	"PDNO": "009150", 
+	"ORD_QTY": "10", 
+	"ORD_UNPR": "160000", 
+	"SLL_BUY_DVSN_CD":"02", 
+	"ORD_DVSN_CD":"00", 
+	"ORD_OBJT_CBLC_DVSN_CD":"10", 
+	"LOAN_DT":"", 
+	"RSVN_ORD_END_DT":""
+}
+```
+
+### Response Example
+```
+{ 
+	"rt_cd": "0", 
+	"msg_cd": "APBK2938", 
+	"msg1": "예약주문이 접수되었습니다.", 
+	"output": { 
+		"RSVN_ORD_SEQ": "39607" 
+	} 
+}
+```
+
+
+---
+## 우리 코드 위치
+_(사용 위치 기록)_
