@@ -6,8 +6,9 @@
  */
 
 import { useEffect, useState } from "react";
-import { api, fetchLocalAppDownloadUrl } from "../api";
+import { api, fetchLocalAppDownloads, detectOS, type LocalAppDownloads } from "../api";
 import { AlertSettings } from "../components/MonitorTools";
+import { LocalAppDownload } from "../components/LocalAppDownload";
 import type { DeviceRow } from "../types";
 
 export default function Settings() {
@@ -43,11 +44,11 @@ export default function Settings() {
     loadDevices();
   }
 
-  // GitHub releases API로 최신 zip asset URL 동적 획득 (api.ts:fetchLocalAppDownloadUrl).
-  // release마다 asset 이름이 버전 포함으로 바뀌므로 정적 URL 불가.
-  const [downloadUrl, setDownloadUrl] = useState(
-    "https://github.com/MercKR/quantman-releases/releases/latest");
-  useEffect(() => { fetchLocalAppDownloadUrl().then(setDownloadUrl); }, []);
+  // GitHub releases API로 최신 release의 platform별 zip URL 동적 획득.
+  // release마다 asset 이름이 버전·플랫폼 포함으로 바뀌므로 정적 URL 불가.
+  const [downloads, setDownloads] = useState<LocalAppDownloads | null>(null);
+  useEffect(() => { fetchLocalAppDownloads().then(setDownloads); }, []);
+  const os = detectOS();
 
   return (
     <div>
@@ -64,15 +65,7 @@ export default function Settings() {
           플랫폼으로 전송되지 않습니다. 설치 후 로컬앱에서 KIS 모의투자 키를
           입력하세요.
         </p>
-        {downloadUrl ? (
-          <a className="download-link" href={downloadUrl}>
-            Windows용 로컬앱 다운로드
-          </a>
-        ) : (
-          <button disabled title="베타 배포 준비 중">
-            로컬앱 다운로드 (준비 중)
-          </button>
-        )}
+        <LocalAppDownload downloads={downloads} os={os} />
       </section>
 
       {/* 2. 기기 페어링 */}

@@ -164,28 +164,82 @@ export const api = {
   getTradingTimeline: () => req<TradingTimeline>("/trading/timeline"),
 };
 
-// 로컬앱 다운로드 URL 조회.
+// 로컬앱 다운로드 — 플랫폼별 zip URL 조회.
 //
-// 매 release마다 asset 이름이 버전 포함(QuantPlatformLocal-v{ver}.zip)으로 바뀌므로
-// `/releases/latest/download/<고정파일명>` 식 URL은 사용 불가. GitHub releases API로
-// 최신 release의 zip asset URL을 동적 획득한다. 실패 시 release 페이지 URL fallback.
+// 매 release마다 asset 이름이 버전·플랫폼 포함으로 바뀌므로
+// (QuantPlatformLocal-v{ver}-{platform}.zip) 정적 URL 불가. GitHub releases API로
+// 최신 release의 asset 목록을 받아 plat suffix 매칭으로 선택. 실패 시 release
+// 페이지 URL fallback.
+//
+// 컨벤션 (v0.9.0-beta+):
+//   - Windows: '...-windows.zip'
+//   - macOS arm64: '...-macos-arm64.zip'
+// 하위 호환 (v0.8.x): suffix 없는 단일 zip은 windows 가정.
 const RELEASES_API =
   "https://api.github.com/repos/MercKR/quantman-releases/releases/latest";
 const RELEASES_PAGE =
   "https://github.com/MercKR/quantman-releases/releases/latest";
 
-export async function fetchLocalAppDownloadUrl(): Promise<string> {
+export type LocalAppDownloads = {
+  /** Windows zip URL. null이면 release에 windows asset 없음 (publish 전 등). */
+  windows: string | null;
+  /** macOS Apple Silicon zip URL. null이면 release에 mac asset 없음. */
+  macos: string | null;
+  /** 둘 다 못 받으면 사용자가 직접 release 페이지 가서 선택. */
+  fallback: string;
+  /** release tag (예: 'v0.9.0-beta'). 표시·debug용 + release notes 링크 생성. */
+  tag: string | null;
+};
+
+// 옛 단일-URL 헬퍼 (fetchLocalAppDownloadUrl)는 fetchLocalAppDownloads로 대체됨.
+// 호출자 0개라 제거. mac 지원 이전 v0.8.x 사용 흐름.
+
+export async function fetchLocalAppDownloads(): Promise<LocalAppDownloads> {
+  // 개발 환경 override — Windows 단일 URL만 (mac dev override는 안 씀).
   if (import.meta.env.VITE_LOCAL_APP_URL) {
-    return import.meta.env.VITE_LOCAL_APP_URL as string;
+    return {
+      windows: import.meta.env.VITE_LOCAL_APP_URL as string,
+      macos: null,
+      fallback: RELEASES_PAGE,
+      tag: null,
+    };
   }
   try {
     const r = await fetch(RELEASES_API);
-    if (!r.ok) return RELEASES_PAGE;
+    if (!r.ok) {
+      return { windows: null, macos: null, fallback: RELEASES_PAGE, tag: null };
+    }
     const data = await r.json();
+    const tag = (data?.tag_name ?? null) as string | null;
     const assets = (data?.assets ?? []) as { name?: string; browser_download_url?: string }[];
-    const zip = assets.find(a => (a.name ?? "").toLowerCase().endsWith(".zip"));
-    return zip?.browser_download_url ?? RELEASES_PAGE;
+    const zips = assets.filter(a => (a.name ?? "").toLowerCase().endsWith(".zip"));
+
+    const macAsset = zips.find(a =>
+      (a.name ?? "").toLowerCase().includes("-macos"));
+    const winAsset = zips.find(a =>
+      (a.name ?? "").toLowerCase().includes("-windows"));
+
+    // 하위 호환 — v0.8.x release는 suffix 없는 단일 zip. mac도 아니면 windows 가정.
+    const winFallback = !winAsset
+      ? zips.find(a => !((a.name ?? "").toLowerCase().includes("-macos")))
+      : undefined;
+
+    return {
+      windows: winAsset?.browser_download_url ?? winFallback?.browser_download_url ?? null,
+      macos: macAsset?.browser_download_url ?? null,
+      fallback: RELEASES_PAGE,
+      tag,
+    };
   } catch {
-    return RELEASES_PAGE;
+    return { windows: null, macos: null, fallback: RELEASES_PAGE, tag: null };
   }
+}
+
+/** 사용자 OS 감지 — 다운로드 페이지에서 자기 OS용 버튼을 primary로 표시. */
+export function detectOS(): "mac" | "windows" | "other" {
+  if (typeof navigator === "undefined") return "other";
+  const ua = navigator.userAgent;
+  if (/Macintosh|Mac OS X/.test(ua)) return "mac";
+  if (/Windows/.test(ua)) return "windows";
+  return "other";
 }
