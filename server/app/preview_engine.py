@@ -447,7 +447,14 @@ def build_user_preview(session: Session, user_id: int,
         result["run_mode"] = s.run_mode
         by_strategy.append(result)
         for c in result.get("candidates", []):
-            total_buy_amount += c["est_total"]
+            # US 종목은 USD/KRW 통화 mismatch로 est_total=None (preview_engine.py:164)
+            # — 의도된 동작. 합산에서만 skip하고 후보 카운트엔 포함 (사용자 입장에선 매수 예정).
+            # commit 92c2d6e가 line 164 None 설정만 추가하고 여기 합산 None-safe 누락 →
+            # US 후보 1개라도 있으면 TypeError → preview 전체 fail → cron이 user snapshot에
+            # 머지 못함 → 다음 cycle "preview 없음"으로 매수 0 (KRX 후보까지 함께 누락).
+            est = c.get("est_total")
+            if est is not None:
+                total_buy_amount += est
             n_buy_candidates += 1
 
     # 청산 미리보기
