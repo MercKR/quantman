@@ -136,7 +136,35 @@ ls -la ~/.quant-platform/*.json               # 모든 state 파일 mtime
 # 사용자 ping 시 즉시 cat·grep으로 진단
 ```
 
-## 8. 자주 쓰는 명령
+## 8. 외부 API knowledge base — 작업 전 필수 참조
+
+KIS·yfinance·Polygon·ECOS 등 외부 API 호출·결함 진단·새 endpoint 사용 시
+**작업 전 반드시** 다음 순서로 확인:
+
+1. **`platform/docs/kis-api/INDEX.md`** grep으로 endpoint 후보 찾기
+   ```bash
+   grep -i "시초가\|open\|시가" platform/docs/kis-api/INDEX.md
+   ```
+2. **`platform/docs/kis-api/endpoints/{TR_ID}_*.md`** 읽기 — request/response/모의실전/한계
+3. **`platform/docs/kis-api/GOTCHAS.md`** 한 번 훑기 (1~2분) — 실측 발견사항
+4. raw docs (`docs/kis-api/raw/*.xlsx`) 더 깊은 정보 필요 시 직접 열어 확인
+
+작업 중 발견·새 endpoint 사용·결함 진단 시 **즉시 기록** (자가발전):
+
+| 발견 종류 | 기록 위치 |
+|---|---|
+| 새 endpoint 사용 | `endpoints/{TR_ID}_*.md` 작성 (없으면 신규) |
+| 공식 doc과 실측 다름 | `GOTCHAS.md` 상단에 entry 추가 (날짜·증상·원인·해결·우리 코드) |
+| 릴리즈 fix | `CHANGELOG.md`에 entry |
+| 우리 코드에서 사용 위치 | endpoint .md의 `우리 코드 위치` 섹션에 file:line 추가 |
+
+**doc 부족 시 사용자에게 명시 요청**: "KIS docs '해외주식 주문' sheet xlsx
+필요합니다. 받아서 `platform/docs/kis-api/raw/`에 추가해주세요" 형식.
+
+다른 API도 동일 패턴: `platform/docs/{api-name}/`. 신규 API knowledge base
+구축은 사용자가 docs 제공 시점에 같은 구조로 추가.
+
+## 9. 자주 쓰는 명령
 
 ```powershell
 # 웹 dev 서버
@@ -150,4 +178,9 @@ cd platform/local; python -m localapp
 
 # 백테스트 골든 테스트
 cd platform; pytest tests/golden_backtest.py -v
+
+# API knowledge base 검색
+grep -i <키워드> platform/docs/kis-api/INDEX.md
+cat platform/docs/kis-api/endpoints/HHDFS76200200_*.md
+cat platform/docs/kis-api/GOTCHAS.md
 ```
