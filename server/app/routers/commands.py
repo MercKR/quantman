@@ -29,6 +29,30 @@ from ..schemas import CommandAckIn, CommandIn, CommandOut
 
 router = APIRouter(prefix="/sync/commands", tags=["commands"])
 
+
+# ── In-process pub/sub (Audit P0-2) ───────────────────────────────────────────
+#
+# 옛(v0.9.7-): SSE generator가 매 2초 DB SELECT — idle device 1개당 1800 SELECT/h.
+# 새: device당 asyncio.Queue. create_command이 put_nowait로 즉시 broadcast,
+#     generator는 queue.get()으로 idle 시 DB 부담 0.
+#
+# 단일 worker 전제 — Railway uvicorn default 1 worker (SSE 자체가 sticky session
+# 필요하므로 multi-worker는 추가 인프라). 향후 multi-worker 도입 시 PostgreSQL
+# LISTEN/NOTIFY 마이그레이션 필요.
+_device_queues: dict[int, asyncio.Queue] = {}
+
+
+def _publish_to_device(device_id: int, payload: dict) -> None:
+    """create_command 직후 호출 — 해당 device의 SSE generator 즉시 wake."""
+    q = _device_queues.get(device_id)
+    if q is not None:
+        try:
+            q.put_nowait(payload)
+        except asyncio.QueueFull:
+            # Queue maxsize 무제한이므로 정상 흐름에선 도달 안 함 (방어적 가드).
+            pass
+
+
 VALID_TYPES = {
     "RUN_CYCLE_NOW", "PAUSE_AUTO", "RESUME_AUTO", "LIQUIDATE_ALL",
     "CANCEL_ORDER", "RESET_KILL_SWITCH",
@@ -64,6 +88,11 @@ def create_command(
     session.add(cmd)
     session.commit()
     session.refresh(cmd)
+    # Audit P0-2 — SSE generator 즉시 wake (in-process pub/sub).
+    _publish_to_device(body.device_id, {
+        "id": cmd.id, "type": cmd.type, "params": cmd.params,
+        "created_at": cmd.created_at.isoformat(),
+    })
     return _to_out(cmd)
 
 
@@ -137,52 +166,68 @@ async def stream_commands(
 ):
     """SSE — 로컬앱이 long-lived connection을 열어 명령을 실시간 수신.
 
-    매 2초 DB를 폴링해 새 pending 명령을 yield. 30초마다 heartbeat 주석.
-    명령 송신 시 자동으로 delivered 상태로 마킹.
+    Audit P0-2 — in-process asyncio.Queue로 idle DB SELECT 0 화. create_command이
+    put_nowait()로 broadcast → generator는 queue.get()으로 wait. idle 사용자
+    1명당 1800 SELECT/h → 0.
+
+    흐름:
+      1. SSE 연결 시 device용 queue 생성·등록.
+      2. 첫 연결 시 기존 pending 명령 1회 DB fetch (앱 재시작·SSE 끊긴 동안 누적분).
+      3. queue.get(timeout=25)로 wait — 명령 들어오면 즉시 yield, timeout 시 heartbeat.
+      4. 연결 끊김(CancelledError) 시 queue 정리.
+
+    동시 동일 device 다중 연결: 마지막 연결만 queue 갖고, 이전 SSE는 끊김 시 자동 정리.
     """
     device_id = device.id
+    queue: asyncio.Queue = asyncio.Queue()
+    _device_queues[device_id] = queue
 
     async def event_gen():
-        last_hb = asyncio.get_event_loop().time()
-        # 초기 카운트
         yield ": connected\n\n"
-        while True:
-            try:
-                # DB 폴링 — 동기 세션이지만 1쿼리라 짧음
-                with Session(engine) as sess:
-                    rows = sess.exec(
-                        select(Command).where(
-                            Command.device_id == device_id,
-                            Command.status == "pending",
-                        ).order_by(Command.created_at.asc())
-                    ).all()
-                    now = datetime.now(timezone.utc)
-                    payload = []
-                    for c in rows:
-                        c.status = "delivered"
-                        c.delivered_at = now
-                        sess.add(c)
-                        payload.append({
-                            "id": c.id, "type": c.type,
-                            "params": c.params,
-                            "created_at": c.created_at.isoformat(),
-                        })
-                    if payload:
-                        sess.commit()
-                for row in payload:
-                    yield f"data: {json.dumps(row, ensure_ascii=False)}\n\n"
-                # Heartbeat
-                now_t = asyncio.get_event_loop().time()
-                if now_t - last_hb > 25:
+        # 첫 연결 시 누적된 pending 명령 fetch (SSE 끊긴 동안 발사된 명령).
+        with Session(engine) as sess:
+            rows = sess.exec(
+                select(Command).where(
+                    Command.device_id == device_id,
+                    Command.status == "pending",
+                ).order_by(Command.created_at.asc())
+            ).all()
+            now = datetime.now(timezone.utc)
+            payload = []
+            for c in rows:
+                c.status = "delivered"
+                c.delivered_at = now
+                sess.add(c)
+                payload.append({
+                    "id": c.id, "type": c.type, "params": c.params,
+                    "created_at": c.created_at.isoformat(),
+                })
+            if payload:
+                sess.commit()
+        for row in payload:
+            yield f"data: {json.dumps(row, ensure_ascii=False)}\n\n"
+
+        try:
+            while True:
+                try:
+                    row = await asyncio.wait_for(queue.get(), timeout=25)
+                except asyncio.TimeoutError:
                     yield ": heartbeat\n\n"
-                    last_hb = now_t
-                await asyncio.sleep(2)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:  # noqa: BLE001
-                # 연결 끊김·DB 오류 등은 종료
-                yield f"event: error\ndata: {json.dumps({'msg': str(e)})}\n\n"
-                break
+                    continue
+                # Queue로 받은 명령 — DB에서 delivered 상태로 마킹 (idempotent).
+                with Session(engine) as sess:
+                    cmd = sess.get(Command, row["id"])
+                    if cmd is not None and cmd.status == "pending":
+                        cmd.status = "delivered"
+                        cmd.delivered_at = datetime.now(timezone.utc)
+                        sess.add(cmd)
+                        sess.commit()
+                yield f"data: {json.dumps(row, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            # 연결 끊김 — queue 정리 (메모리 누수 방지).
+            if _device_queues.get(device_id) is queue:
+                _device_queues.pop(device_id, None)
+            raise
 
     headers = {
         "Cache-Control": "no-cache",
