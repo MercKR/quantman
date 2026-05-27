@@ -167,11 +167,14 @@ jobs:
         run: |
           tag="${{ steps.tag.outputs.tag }}"
           notes="local/RELEASE_NOTES_${tag}.md"
+          # --prerelease와 --latest는 GitHub API에서 동시 사용 불가 (422).
+          # v0.8.x 흐름과 일관성 위해 --latest 단독 (베타 표시는 tag '-beta' suffix로).
+          # 우리 updater는 /releases 전체에서 SemVer 정렬 후 첫 항목 선택이라
+          # latest 라벨이 자동 업데이트 cycle에 결정적.
           gh release create "$tag" \
             --repo MercKR/quantman-releases \
             --title "$tag" \
             --notes-file "$notes" \
-            --prerelease \
             --latest \
             dist-artifacts/windows-zip/*.zip \
             dist-artifacts/macos-zip/*.zip
