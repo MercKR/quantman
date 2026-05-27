@@ -30,8 +30,12 @@ _BUNDLE_NAME = f"QuantPlatformLocal-v{_VERSION}"
 
 datas, binaries, hiddenimports = [], [], []
 
-# 동적 import·백엔드가 있는 (작은) 패키지만 통째로 수집
-for pkg in ("keyring", "pystray", "apscheduler", "FinanceDataReader", "zstandard"):
+# 동적 import·백엔드가 있는 (작은) 패키지만 통째로 수집.
+# v0.9.2-beta — websocket(KIS 체결통보)·zstandard(dataset 압축해제)는 collect_all로
+# 번들에 강제 포함. PyInstaller 정적 분석으로 추적 못 해 누락되면 GUI '자동매매
+# 시작' 버튼이 silent ModuleNotFoundError로 무동작(v0.9.0~v0.9.1 회귀).
+for pkg in ("keyring", "pystray", "apscheduler", "FinanceDataReader",
+            "zstandard", "websocket"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

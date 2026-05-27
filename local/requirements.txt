@@ -3,5 +3,13 @@
 keyring>=25.0
 APScheduler>=3.10
 requests>=2.31
-# For packaging (Stage 2-3 release):
-# pystray>=0.19   Pillow>=10.0   pyinstaller>=6.0
+# KIS 체결 통보 WebSocket (kis_order_websocket.py) — v0.9.2-beta에서 명시 추가.
+# 누락 시 GUI '자동매매 시작' 버튼이 silent ModuleNotFoundError로 무동작.
+websocket-client>=1.6
+# AES 복호화 — KIS WebSocket payload (kis_order_websocket.py). 위와 동일 이유로 명시.
+cryptography>=42.0
+# dataset 번들 압축 해제 (datafetch.py). 누락 시 dataset sync 실패 → 로컬 캐시로만 동작.
+zstandard>=0.22
+# 패키징(release) 전용 — 빌드 시 명시 설치돼 있어야 PyInstaller가 번들에 포함.
+# CI(.github/workflows/build-local.yml)가 pyinstaller/pystray/Pillow/pywin32 명시 설치.
+# pystray>=0.19   Pillow>=10.0   pyinstaller>=6.0   pywin32 (Windows only)
