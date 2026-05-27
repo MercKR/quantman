@@ -15,6 +15,11 @@ export const tokenStore = {
   clear: () => localStorage.removeItem(TOKEN_KEY),
 };
 
+// Audit P0-1 — ETag/304 자동 처리. 서버가 ETag 헤더 보내는 endpoint(/sync/snapshot 등)에서
+// 동일 응답 시 304 받아 캐시된 데이터 반환. egress·서버 부담 큰 폭 절감.
+// GET 요청만 적용 (POST/PUT/DELETE는 캐시 의미 없음).
+const etagCache = new Map<string, { etag: string; data: unknown }>();
+
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -23,13 +28,27 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const t = tokenStore.get();
   if (t) headers["Authorization"] = `Bearer ${t}`;
 
+  const method = (opts.method ?? "GET").toUpperCase();
+  const cached = method === "GET" ? etagCache.get(path) : undefined;
+  if (cached) headers["If-None-Match"] = cached.etag;
+
   const res = await fetch(BASE + path, { ...opts, headers });
+
+  if (res.status === 304 && cached) {
+    return cached.data as T;
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || `${res.status} ${res.statusText}`);
   }
   if (res.status === 204) return null as T;
-  return res.json();
+
+  const data = await res.json();
+  const etag = res.headers.get("ETag");
+  if (method === "GET" && etag) {
+    etagCache.set(path, { etag, data });
+  }
+  return data;
 }
 
 export const api = {

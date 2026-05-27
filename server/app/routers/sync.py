@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, BackgroundTasks, Request, Response
 from sqlmodel import Session, select
 
 from ..db import engine, get_session
@@ -407,10 +407,18 @@ def push_heartbeat(
 
 @router.get("/snapshot", response_model=SyncSnapshotOut | None)
 def latest_snapshot(
+    request: Request,
+    response: Response,
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """웹 대시보드가 로컬앱이 보낸 최신 스냅샷을 조회."""
+    """웹 대시보드가 로컬앱이 보낸 최신 스냅샷을 조회.
+
+    ETag (audit P0-1) — Monitor 페이지가 폴링하는 가장 큰 endpoint.
+    snapshot.received_at + last_heartbeat_at 중 max를 ms epoch으로 ETag화 →
+    클라이언트 If-None-Match 매칭 시 304 (body 0). egress·DB JSON serialization
+    부담 큰 폭 절감. snapshot push 또는 heartbeat 갱신마다 자동으로 새 ETag.
+    """
     snap = session.exec(
         select(SyncSnapshot)
         .where(SyncSnapshot.user_id == user.id)
@@ -422,6 +430,17 @@ def latest_snapshot(
     last_hb = settings.last_heartbeat_at if settings else None
     if snap is None and last_hb is None:
         return None
+
+    ts_components = []
+    if snap and snap.received_at:
+        ts_components.append(snap.received_at.timestamp())
+    if last_hb:
+        ts_components.append(last_hb.timestamp())
+    etag = f'W/"{int(max(ts_components) * 1000)}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+    response.headers["ETag"] = etag
+
     if snap is None:
         # snapshot 없지만 heartbeat 있음 — 새 가동 + 첫 cycle 전 케이스
         return SyncSnapshotOut(payload={}, received_at=last_hb,

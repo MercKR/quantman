@@ -11,7 +11,10 @@ import type {
   SyncSnapshot,
 } from "../types";
 
-const REFRESH_MS = 5000;
+// Audit P0-1 — 5s → 15s. Cycle은 분~시간 단위라 5s 폴링은 over-frequent.
+// 명령 발사 직후엔 await load()로 즉시 갱신되므로 사용자 체감 차이 없음.
+// ETag/304 결합으로 egress·DB 부담 60~80% 감소 예상.
+const REFRESH_MS = 15000;
 
 export default function Monitor() {
   const [snap, setSnap] = useState<SyncSnapshot | null>(null);
