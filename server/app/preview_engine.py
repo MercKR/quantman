@@ -80,7 +80,8 @@ def _last_session_on_or_before(market: str, today: date) -> date | None:
 
 
 def _data_freshness_ok(dataset: dict, symbol: str,
-                        today: date | None = None) -> tuple[bool, str]:
+                        today: date | None = None,
+                        now_kst: datetime | None = None) -> tuple[bool, str]:
     """S-05 — 종목 dataset의 마지막 데이터가 시장 직전 거래일과 일치하는가.
 
     실패 케이스 — 사용자에게 노출하지 말아야 할 매수 후보:
@@ -91,6 +92,9 @@ def _data_freshness_ok(dataset: dict, symbol: str,
     True면 정상, False면 (False, 사유 메시지). 캘린더 자체가 비정상이면
     fail-open으로 True 반환 — over-engineering 자제(캘린더 만료는 별도
     log/health 경로에서 잡힘).
+
+    now_kst — 미국 KST 05:00 cutoff 판정용 명시 시각. None이면 datetime.now(KST).
+    today만 명시되고 now_kst가 None이면 today 한낮으로 가정(보수적 = "이미 마감").
     """
     last_str = _last_date(dataset, symbol)
     if last_str is None:
@@ -101,14 +105,27 @@ def _data_freshness_ok(dataset: dict, symbol: str,
         return False, f"날짜 파싱 실패: {last_str}"
 
     if today is None:
-        today = datetime.now(_KST).date()
+        if now_kst is None:
+            now_kst = datetime.now(_KST)
+        today = now_kst.date()
+    elif now_kst is None:
+        # today만 명시 호출(테스트 등) — 시간 정보 없음. 보수적으로 한낮 가정 → US 어제 마감 끝났다고 셈.
+        now_kst = datetime(today.year, today.month, today.day, 12, 0, tzinfo=_KST)
 
     market = "KR" if _is_kr_symbol(symbol) else "US"
-    # US 시장은 KST 익일 05:00에 정규장 마감. KST today 한낮 시점엔 *오늘 KST 날짜*의
-    # US 정규장이 아직 미오픈/진행 중 → "마지막 마감된 US 거래일"은 KST 어제 기준.
-    # (예: KST 5/26 화 한낮 → US 5/25 월 Memorial Day 휴장 → 5/22 금이 정답.
-    # 이전엔 today=5/26으로 _last_session 호출해 5/26 자체를 ref로 잡음 = false alarm.)
-    ref_anchor = today - timedelta(days=1) if market == "US" else today
+    # US 정규장은 EDT 16:00 = KST 익일 05:00 마감.
+    # 따라서 "마지막 마감된 US 거래일"은 시각에 따라 달라진다:
+    #   - KST 한낮(5/27 12:00): 어제 KST(5/26)의 US 거래 = 5/26 종가 확정. ref = 5/26.
+    #   - KST 자정~05시(5/28 00:08): 어제 KST(5/27)의 US 거래가 아직 진행 중
+    #     (EDT 11시) → 5/27 종가 미확정. ref = 5/26 (그제 기준).
+    #   - KST 05시 이후(5/28 06:00): 어제 KST(5/27)의 US 거래 마감 끝 → ref = 5/27.
+    # 이전 코드(`today - 1`만)는 KST 0:00~5:00 구간에 5/27을 "마감"으로 오인 →
+    # dataset(5/26)을 1일 stale로 잘못 판단해 매수 후보에서 제외되는 회귀.
+    if market == "US":
+        days_back = 2 if now_kst.hour < 5 else 1
+        ref_anchor = today - timedelta(days=days_back)
+    else:
+        ref_anchor = today
     ref = _last_session_on_or_before(market, ref_anchor)
     if ref is None:
         # 캘린더 미작동 — stale 판정 자체가 불가하므로 통과 (다른 신호가 잡음)
@@ -332,7 +349,8 @@ def _evaluate_strategy(strat_def: dict, dataset: dict, cash: float,
 
     # ── 3. 통과 종목 사이징 (screener_limit 한도) ──────────────────────────────
     bought = 0
-    today_kst = datetime.now(_KST).date()
+    now_kst = datetime.now(_KST)
+    today_kst = now_kst.date()
     for symbol in eval_symbols:
         if bought >= slots_left:
             break
@@ -341,7 +359,9 @@ def _evaluate_strategy(strat_def: dict, dataset: dict, cash: float,
         # S-05 — dataset이 시장 직전 거래일과 어긋나면 매수 후보로 노출하지
         # 않는다. 거래정지·상폐·데이터 누락 종목이 자동매수 대상이 되는 사고
         # 차단. 캘린더 만료 등으로 판정 불가 시엔 통과(fail-open).
-        fresh, freshness_msg = _data_freshness_ok(dataset, symbol, today_kst)
+        # now_kst — 미국 KST 05:00 cutoff 정확 적용 (KST 자정~05시 false stale 방지).
+        fresh, freshness_msg = _data_freshness_ok(dataset, symbol, today_kst,
+                                                    now_kst=now_kst)
         if not fresh:
             out["skipped"].append({"symbol": symbol, "reason": freshness_msg})
             continue

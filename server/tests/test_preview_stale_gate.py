@@ -13,8 +13,9 @@
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -159,3 +160,68 @@ def test_last_session_on_or_before_returns_none_after_31_days(monkeypatch):
 
     ref = preview_engine._last_session_on_or_before("KR", date(2026, 5, 23))
     assert ref is None
+
+
+# ── KST 05:00 cutoff 회귀 (2026-05-28 사용자 발견 사건) ─────────────────
+#
+# v0.9.5 catch-up에서 미장 매수 0건 사고. 원인: preview_engine이 KST 자정 cutoff
+# 만 사용해 KST 0:00~5:00 사이에는 어제 KST(5/27)의 US 거래를 "이미 마감"으로
+# 오인. 실제로는 EDT 16:00 = KST 5/28 05:00에 마감 → KST 0:08 시점엔 5/27 US가
+# 장중. dataset의 5/26(=그제) 데이터를 1일 stale로 잘못 판단해 모든 US 종목이
+# 후보에서 제외. 매수 0건 영구 차단.
+
+def test_us_freshness_kst_before_5am_uses_day_before_yesterday(monkeypatch):
+    """KST 0:00~5:00 — 어제 KST의 US 거래는 EDT 16:00(KST 익일 5시)에 마감.
+    그 이전에는 그제(N-2)가 직전 마감 거래일이어야 함."""
+    from app import preview_engine
+
+    today = date(2026, 5, 28)
+    # 5/26(화), 5/27(수) US 거래일, 5/28(목) 진행 중
+    us_sessions = {date(2026, 5, 26), date(2026, 5, 27), date(2026, 5, 28)}
+    monkeypatch.setattr(
+        preview_engine._mc, "is_session_day",
+        lambda market, d: market == "US" and d in us_sessions)
+
+    # KST 00:08 = US 장중 5/27. 5/27 종가 미확정 → ref = 5/26.
+    now_kst = datetime(2026, 5, 28, 0, 8, tzinfo=ZoneInfo("Asia/Seoul"))
+    dataset = {"AAPL": _df_with_last_date("2026-05-26")}
+    ok, msg = preview_engine._data_freshness_ok(
+        dataset, "AAPL", today, now_kst=now_kst)
+    assert ok is True, f"KST 5am 이전 — 5/26 데이터는 stale 아님. msg={msg}"
+
+
+def test_us_freshness_kst_after_5am_uses_yesterday(monkeypatch):
+    """KST 05:00 이후 — 어제 KST의 US 거래는 마감 끝남 (EDT 16:00 = KST 5시).
+    어제(N-1)가 직전 마감 거래일이어야 함."""
+    from app import preview_engine
+
+    today = date(2026, 5, 28)
+    us_sessions = {date(2026, 5, 26), date(2026, 5, 27)}
+    monkeypatch.setattr(
+        preview_engine._mc, "is_session_day",
+        lambda market, d: market == "US" and d in us_sessions)
+
+    # KST 06:00 5/28 = 5/27 미장 마감 후 1시간. ref = 5/27.
+    now_kst = datetime(2026, 5, 28, 6, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    dataset = {"AAPL": _df_with_last_date("2026-05-26")}
+    ok, msg = preview_engine._data_freshness_ok(
+        dataset, "AAPL", today, now_kst=now_kst)
+    assert ok is False, "KST 5am 이후 — 5/26 데이터는 1일 stale"
+    assert "1일 지연" in msg
+
+
+def test_kr_freshness_unaffected_by_us_cutoff(monkeypatch):
+    """KR 시장은 US cutoff 로직과 무관 — 본 fix가 KR 동작 회귀시키지 않음 확인."""
+    from app import preview_engine
+
+    today = date(2026, 5, 28)
+    monkeypatch.setattr(
+        preview_engine._mc, "is_session_day",
+        lambda market, d: market == "KR" and d == date(2026, 5, 27))
+
+    # KST 0시 (US cutoff 이전) 호출이어도 KR은 today 기준 그대로.
+    now_kst = datetime(2026, 5, 28, 0, 8, tzinfo=ZoneInfo("Asia/Seoul"))
+    dataset = {"005930": _df_with_last_date("2026-05-27")}
+    ok, _ = preview_engine._data_freshness_ok(
+        dataset, "005930", today, now_kst=now_kst)
+    assert ok is True
