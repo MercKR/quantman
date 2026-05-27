@@ -90,7 +90,53 @@ platform/
 
 총 예산 ~2.5~3시간. 중간 STOP/PAUSE 시 진행 상태 저장 후 멈춤.
 
-## 7. 자주 쓰는 명령
+## 7. 진단 — 로그 채널을 직접 CLI로 조회
+
+추측 금지. 사용자 신고 또는 cycle·preview 이상 의심 시 다음 채널을
+**직접 CLI로 호출**해 실제 로그를 확보한 뒤 진단한다. 로컬 추측만으로
+근거 없는 가설을 내지 않는다 (4원칙 "검증된 해결책만"의 진단 단계 적용).
+
+**채널별 명령** (모두 user 머신에 인증·설치 완료):
+
+```bash
+# Railway — 서버 stdout/stderr (cron·예외·HTTP·DB 에러)
+railway logs --since 5h --lines 1000 --filter "@level:error"
+railway logs --since 2026-05-27T22:20:00Z --until 2026-05-27T23:00:00Z
+railway logs --http --status ">=500" --lines 50
+
+# Vercel — 웹앱 build·deploy·serverless runtime
+npx vercel ls quantman                                          # 최근 deploy 목록
+npx vercel inspect <deployment-url> --logs                       # 특정 deploy build log
+npx vercel logs <production-url>                                 # runtime log
+
+# GitHub — release·workflow·PR·issue 등 모든 API
+gh release list --repo MercKR/quantman-releases
+gh release view <tag> --repo MercKR/quantman-releases --json assets
+gh api repos/MercKR/quantman-releases/releases/latest
+gh run list --workflow=<name> --limit 10                          # actions 워크플로
+gh pr view <number>                                               # PR 상세
+
+# 로컬앱 진단 (사용자 PC)
+tail -100 ~/.quant-platform/logs/localapp.log
+cat ~/.quant-platform/preview_cache.json     # 마지막 server preview 응답 캐시
+tail -10 ~/.quant-platform/cycles.jsonl       # 최근 사이클 history
+tail -10 ~/.quant-platform/orders.jsonl       # 발주 이벤트
+ls -la ~/.quant-platform/*.json               # 모든 state 파일 mtime
+```
+
+**권한 없으면 사용자에게 요청.** Railway·Vercel·GitHub 모두 user
+자격증명으로 동작 — 별도 환경에서 인증 못 받았으면 즉시 알리고
+대안(스크린샷 요청·웹 UI 가이드) 안내.
+
+**모니터링 background 가동 패턴** (장시간 사용자 부재 시):
+
+```bash
+# /tmp/quantman-monitor.sh 같은 스크립트로 tail -F + 5min 주기 server health
+# bash 스크립트를 run_in_background:true로 spawn → /tmp/quantman-monitor.log에 누적
+# 사용자 ping 시 즉시 cat·grep으로 진단
+```
+
+## 8. 자주 쓰는 명령
 
 ```powershell
 # 웹 dev 서버
