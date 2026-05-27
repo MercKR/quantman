@@ -38,13 +38,21 @@ def push_snapshot(payload: dict) -> None:
 def fetch_dataset_bundle(local_data_dir: Path) -> dict:
     """Phase 58-C — server tar.zst bundle 단일 다운로드 + 압축 해제.
 
-    종목별 4445 req 직렬 다운로드(~114분) → 단일 파일(~140MB, 1분)으로 단축.
+    종목별 4445 req 직렬 다운로드(~114분) → 단일 파일(~150MB, 1분)으로 단축.
     ETag로 변경 시만 다운로드, 동일 ETag면 server 304 → skip.
 
     실패 시 ValueError raise → 호출자가 manifest fallback으로 폴백.
+
+    v0.9.5-beta — `r.raw` stream + Transfer-Encoding chunked 충돌 fix.
+    이전(v0.9.0~v0.9.4)은 `dctx.stream_reader(r.raw)`로 디코드 시도. Railway
+    서버가 chunked transfer encoding으로 보내면 `r.raw`에 chunk header (hex
+    digit + CRLF)가 zstd magic 앞에 끼어 "Unknown frame descriptor" 영구
+    실패 → 모든 사용자가 dataset 미적용 상태 (stale 로컬 캐시) → trader가
+    prev_close 못 찾아 매수 0건. 임시파일 경유로 안전 디코드.
     """
-    import io
+    import os
     import tarfile
+    import tempfile
 
     import zstandard
 
@@ -73,18 +81,36 @@ def fetch_dataset_bundle(local_data_dir: Path) -> dict:
     r.raise_for_status()
     new_etag = (r.headers.get("ETag") or "").strip('"')
 
-    # tar.zst stream을 메모리에서 해제 → DATA_DIR 추출
+    # Step 1 — chunk stream을 임시 파일로 받음. requests의 iter_content가
+    # Transfer-Encoding chunked를 transparent 해제 — payload만 .zst로 저장.
     local_data_dir.mkdir(parents=True, exist_ok=True)
-    dctx = zstandard.ZstdDecompressor()
+    tmp_path: str | None = None
     n_extracted = 0
-    with dctx.stream_reader(r.raw) as zr, \
-            tarfile.open(fileobj=zr, mode="r|") as tar:
-        for member in tar:
-            if not member.isfile() or not member.name.endswith(".parquet"):
-                continue
-            tar.extract(member, path=local_data_dir,
-                         set_attrs=False, filter="data")
-            n_extracted += 1
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zst") as tmp:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    tmp.write(chunk)
+            tmp_path = tmp.name
+
+        # Step 2 — 디스크 파일에서 안전하게 zstd 디코드 + tar 추출.
+        dctx = zstandard.ZstdDecompressor()
+        with open(tmp_path, "rb") as f, \
+                dctx.stream_reader(f) as zr, \
+                tarfile.open(fileobj=zr, mode="r|") as tar:
+            for member in tar:
+                if not member.isfile() or not member.name.endswith(".parquet"):
+                    continue
+                tar.extract(member, path=local_data_dir,
+                             set_attrs=False, filter="data")
+                n_extracted += 1
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
     if new_etag:
         etag_cache.write_text(new_etag, encoding="utf-8")
     elapsed = time.time() - t0
