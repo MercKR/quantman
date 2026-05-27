@@ -1,16 +1,24 @@
-"""로컬앱 자동 업데이트.
+"""로컬앱 자동 업데이트 — Windows·macOS Apple Silicon 양쪽.
 
-흐름 (Phase 60):
+흐름:
   1. 앱 시작 시 GitHub releases API로 최신 버전 조회 (background).
   2. 현재 버전과 비교 — 옛 버전이면 GUI 상단 배너 노출.
   3. 사용자 [지금 업데이트] 클릭 시:
-     a. zip 다운로드 (~50MB, 진행률 표시).
+     a. 플랫폼에 맞는 zip asset 다운로드 (~50~110MB, 진행률 표시).
      b. 임시 폴더 압축 해제.
-     c. updater.bat 작성 + detached 실행 → 앱 종료.
-     d. updater.bat이 3초 대기 → robocopy로 새 파일 → 새 app.exe 실행 → 자체 정리.
+     c. updater script (Windows: .bat, macOS: .sh) 작성 + detached 실행 → 앱 종료.
+     d. updater script가 3초 대기 → 파일 교체 → 새 앱 실행 → 자체 정리.
 
-PyInstaller --onedir 가정. exe 본인은 lock 걸리지만 같은 폴더 내 .py·dll 등은
-실행 중 교체 가능. exe 교체는 별도 cmd 프로세스(앱 종료 후)가 처리.
+Asset 선택 (v0.9.0-beta부터):
+  - Windows: '...-windows.zip'
+  - macOS arm64: '...-macos-arm64.zip'
+  하위 호환 — v0.8.x는 suffix 없는 단일 zip (Windows 전용)으로 가정.
+
+PyInstaller --onedir 가정.
+  - Windows: 실행 중 exe는 lock 걸리지만 같은 폴더 .py·.dll은 교체 가능. exe 교체는
+    별도 cmd 프로세스가 처리.
+  - macOS: .app bundle 전체를 rsync로 교체. 실행 중 .app은 OS가 메모리에 매핑한
+    binary만 보호 — bundle 폴더 교체는 가능 (앱 종료 후).
 """
 
 from __future__ import annotations
@@ -36,10 +44,42 @@ HTTP_TIMEOUT_S = 10
 DOWNLOAD_TIMEOUT_S = 300
 
 
-def check_latest_version() -> Optional[dict]:
-    """모든 GitHub release 중 SemVer 기준 최신(비-draft·zip 있는) release 조회.
+def _select_platform_asset(assets: list[dict]) -> Optional[dict]:
+    """현재 플랫폼에 맞는 zip asset 선택.
 
-    Returns: {"tag": "v0.8.7-beta", "url": "https://.../*.zip", "html_url": "..."}
+    Convention (v0.9.0-beta+):
+      - Windows: 이름에 '-windows' 포함
+      - macOS arm64: 이름에 '-macos-arm64' 포함
+
+    하위 호환 (v0.8.x):
+      - suffix 없는 단일 zip은 Windows 전용으로 가정. macOS에선 매칭 거부 — mac
+        사용자가 Windows binary를 받는 사고 방지.
+    """
+    zips = [a for a in assets
+            if (a.get("name") or "").lower().endswith(".zip")]
+    if not zips:
+        return None
+
+    plat_suffix = "-macos-arm64" if sys.platform == "darwin" else "-windows"
+    matched = [a for a in zips
+               if plat_suffix in (a.get("name") or "").lower()]
+    if matched:
+        return matched[0]
+
+    # Suffix 없는 zip은 v0.8.x 레거시 — Windows만 fallback. macOS는 거부.
+    if sys.platform != "darwin":
+        legacy = [a for a in zips
+                  if "-windows" not in (a.get("name") or "").lower()
+                  and "-macos" not in (a.get("name") or "").lower()]
+        if legacy:
+            return legacy[0]
+    return None
+
+
+def check_latest_version() -> Optional[dict]:
+    """모든 GitHub release 중 SemVer 기준 최신(비-draft·플랫폼 zip 있는) release 조회.
+
+    Returns: {"tag": "v0.9.0-beta", "url": "https://.../*-platform.zip", "html_url": "..."}
     실패 또는 후보 없음 시 None.
     """
     try:
@@ -56,13 +96,13 @@ def check_latest_version() -> Optional[dict]:
             if not tag:
                 continue
             assets = rel.get("assets") or []
-            zip_asset = next((a for a in assets
-                              if (a.get("name") or "").lower().endswith(".zip")), None)
+            zip_asset = _select_platform_asset(assets)
             if not zip_asset:
                 continue
             candidates.append((_parse_version(tag), rel, zip_asset))
         if not candidates:
-            _log.debug("zip asset 있는 release 후보 없음")
+            _log.debug("플랫폼 zip asset 있는 release 후보 없음 (platform=%s)",
+                       sys.platform)
             return None
         candidates.sort(key=lambda x: x[0], reverse=True)
         _, rel, zip_asset = candidates[0]
@@ -97,14 +137,21 @@ def is_newer(current: str, latest: str) -> bool:
 
 
 def _app_root_and_exe() -> tuple[Path, Path]:
-    """PyInstaller frozen 환경에서 앱 폴더·실행파일 경로 반환.
+    """PyInstaller frozen 환경에서 앱 root 폴더·실행파일 경로 반환.
 
-    onedir: sys.executable이 'C:/.../QuantPlatformLocal/QuantPlatformLocal.exe'.
-    개발 환경(python desktop.py)이면 None을 반환하지 않고 None signal로 호출자가
-    "개발 모드" 처리.
+    "Root"는 업데이트 시 통째로 교체되는 폴더 단위.
+      - Windows onedir: sys.executable='C:/.../QuantPlatformLocal/QuantPlatformLocal.exe'
+        → root는 exe.parent (onedir 폴더 자체).
+      - macOS .app bundle: sys.executable='.../QuantPlatformLocal-vX.Y.Z.app/Contents/MacOS/QuantPlatformLocal'
+        → root는 .app bundle 자체 (3단계 위).
+
+    개발 환경(python desktop.py)이면 호출자가 사전에 is_frozen()으로 차단.
     """
     if getattr(sys, "frozen", False):
         exe = Path(sys.executable).resolve()
+        if sys.platform == "darwin":
+            # .app/Contents/MacOS/exe → .app
+            return exe.parent.parent.parent, exe
         return exe.parent, exe
     # 개발 환경 — 실제 업데이트 불가, 호출자가 막아야.
     return Path(sys.argv[0]).resolve().parent, Path(sys.executable).resolve()
@@ -144,7 +191,7 @@ def _extract_zip(zip_path: Path, dest_dir: Path) -> Path:
 
 def _write_updater_bat(bat_path: Path, src_dir: Path, dst_dir: Path,
                         app_exe: Path) -> None:
-    """updater.bat 작성.
+    """Windows updater.bat 작성.
 
     동작:
       1. 3초 대기 (앱 종료 보장 — ping 1회 ~1초 × 3).
@@ -171,6 +218,37 @@ def _write_updater_bat(bat_path: Path, src_dir: Path, dst_dir: Path,
         "(goto) 2>nul & del \"%~f0\"\r\n"
     )
     bat_path.write_bytes(content.encode("cp949", errors="replace"))
+
+
+def _write_updater_sh(sh_path: Path, src_app: Path, dst_app: Path) -> None:
+    """macOS updater.sh 작성.
+
+    동작:
+      1. 3초 대기 (앱 종료 보장).
+      2. rsync -a --delete로 새 .app 내용을 기존 .app으로 동기화 (삭제된 파일 반영).
+      3. xattr -dr com.apple.quarantine으로 Gatekeeper quarantine 속성 자동 제거.
+         (미서명 .app이라 macOS가 다운로드 직후 quarantine 부여 → 재경고 방지.)
+      4. open으로 새 앱 실행.
+      5. 임시 폴더 + .sh 자체 삭제.
+
+    rsync는 실행 중 binary lock 회피 — 앱 종료 후이므로 안전.
+    """
+    # bash 스크립트 — POSIX, UTF-8 안전. 경로에 공백·한글 가능 → 항상 큰따옴표.
+    content = (
+        "#!/bin/bash\n"
+        "# Quantman macOS auto-updater (auto-generated by app).\n"
+        "set -e\n"
+        "sleep 3\n"
+        f'rsync -a --delete "{src_app}/" "{dst_app}/"\n'
+        "# Gatekeeper quarantine 자동 제거 — 미서명 앱이라 두 번째 실행에서도\n"
+        "# '확인되지 않은 개발자' 경고 안 뜨도록.\n"
+        f'xattr -dr com.apple.quarantine "{dst_app}" 2>/dev/null || true\n'
+        f'open "{dst_app}"\n'
+        f'rm -rf "{src_app.parent}"\n'
+        'rm -- "$0"\n'
+    )
+    sh_path.write_text(content, encoding="utf-8")
+    sh_path.chmod(0o755)
 
 
 def perform_update(zip_url: str,
@@ -208,30 +286,44 @@ def perform_update(zip_url: str,
         if progress_cb:
             progress_cb("extract", 100, 100)
 
-        # Step 3 — updater.bat 작성 + detached 실행
+        # Step 3 — updater script 작성 + detached 실행 (플랫폼 분기)
         if progress_cb:
             progress_cb("install", 0, 100)
-        bat_path = tmp_root / "updater.bat"
-        _write_updater_bat(bat_path, src_dir, app_root, app_exe)
 
-        # background subprocess — 부모(우리 앱)가 종료해도 .bat은 계속 동작 (Windows는
-        # Unix와 달리 부모 종료 시 자식을 자동 kill 안 함). CREATE_NO_WINDOW로
-        # console 창 안 뜸. DETACHED_PROCESS는 CREATE_NO_WINDOW와 상호배타라
-        # 같이 쓰면 후자가 무시되어 cmd 창이 visible해진다 — 빼야 함.
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        CREATE_NO_WINDOW = 0x08000000
-        subprocess.Popen(
-            ["cmd.exe", "/c", str(bat_path)],
-            creationflags=(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP),
-            close_fds=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if sys.platform == "darwin":
+            sh_path = tmp_root / "updater.sh"
+            _write_updater_sh(sh_path, src_dir, app_root)
+            # detached subprocess — 부모(우리 앱) 종료해도 sh 계속 동작. macOS는
+            # start_new_session=True로 새 session group 만들면 부모 종료 시
+            # SIGHUP 안 받음.
+            subprocess.Popen(
+                ["/bin/bash", str(sh_path)],
+                start_new_session=True,
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            bat_path = tmp_root / "updater.bat"
+            _write_updater_bat(bat_path, src_dir, app_root, app_exe)
+            # Windows는 부모 종료 시 자식 자동 kill 안 함. CREATE_NO_WINDOW로
+            # console 창 안 뜸. DETACHED_PROCESS는 CREATE_NO_WINDOW와 상호배타라
+            # 같이 쓰면 후자가 무시되어 cmd 창이 visible해진다 — 빼야 함.
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            CREATE_NO_WINDOW = 0x08000000
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(bat_path)],
+                creationflags=(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP),
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         if progress_cb:
             progress_cb("install", 100, 100)
 
-        _log.info("업데이트 시작 — app 종료 후 updater.bat이 파일 교체 + 재시작")
+        _log.info("업데이트 시작 — app 종료 후 updater script가 파일 교체 + 재시작")
         # 메인 스레드 종료 — TrayApp.run의 tkinter mainloop 종료 필요.
         # 호출자(GUI)가 root.destroy()로 마무리한 뒤 이 함수 return하도록 함.
         # (sys.exit를 여기서 호출하면 tkinter cleanup이 막힐 수 있음.)

@@ -1,0 +1,175 @@
+name: Build Local App
+
+# Windows·macOS 양쪽 PyInstaller 빌드 + (옵션) GitHub Release publish.
+#
+# Trigger:
+#   - workflow_dispatch: 수동 실행 (publish 여부 입력)
+#   - push tag (v*.*.*): tag 푸시 시 자동 빌드 + publish
+#
+# macOS는 cross-compile 불가 — macos-14 (Apple Silicon) runner에서 직접 빌드.
+# Release publish는 cross-repo (source: MercKR/quantman → asset: MercKR/quantman-releases).
+# RELEASES_PAT secret 필요 — quantman-releases repo에 release write 권한.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'GitHub Release publish 여부 (false면 artifact만 빌드)'
+        required: true
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*-beta'
+      - 'v*-rc*'
+
+defaults:
+  run:
+    working-directory: local
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: local/requirements.txt
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pystray Pillow pywin32
+          pip install -e ../core
+
+      - name: Determine version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = python -c "from localapp import __version__; print(__version__)"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Building version: $v"
+
+      - name: Build with PyInstaller
+        shell: pwsh
+        run: pyinstaller QuantPlatformLocal.spec --noconfirm --clean
+
+      - name: Package as zip
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $src = "dist/QuantPlatformLocal-v$v"
+          $dst = "dist/QuantPlatformLocal-v$v-windows.zip"
+          Compress-Archive -Path $src -DestinationPath $dst -CompressionLevel Optimal
+          Get-Item $dst | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: local/dist/QuantPlatformLocal-v${{ steps.ver.outputs.version }}-windows.zip
+          retention-days: 14
+
+  build-macos:
+    runs-on: macos-14   # Apple Silicon (M-series). Intel은 macos-13.
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: local/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pystray Pillow
+          pip install -e ../core
+
+      - name: Determine version
+        id: ver
+        run: |
+          v=$(python -c "from localapp import __version__; print(__version__)")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building version: $v"
+
+      - name: Build with PyInstaller
+        run: pyinstaller QuantPlatformLocal.spec --noconfirm --clean
+
+      - name: Package .app as zip (ditto preserves resource forks)
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          cd dist
+          # ditto는 macOS 표준 archive 도구 — resource fork·extended attribute 보존.
+          # zip 명령보다 안전 (Finder에서 풀었을 때 .app 손상 가능성 낮음).
+          ditto -c -k --sequesterRsrc --keepParent \
+            "QuantPlatformLocal-v$v.app" \
+            "QuantPlatformLocal-v$v-macos-arm64.zip"
+          ls -lh "QuantPlatformLocal-v$v-macos-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-zip
+          path: local/dist/QuantPlatformLocal-v${{ steps.ver.outputs.version }}-macos-arm64.zip
+          retention-days: 14
+
+  publish:
+    needs: [build-windows, build-macos]
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="v${{ needs.build-windows.outputs.version }}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
+
+      - name: Verify release notes file exists
+        run: |
+          notes="local/RELEASE_NOTES_${{ steps.tag.outputs.tag }}.md"
+          if [[ ! -f "$notes" ]]; then
+            echo "::error::Release notes file not found: $notes"
+            echo "Create local/RELEASE_NOTES_${{ steps.tag.outputs.tag }}.md before tagging."
+            exit 1
+          fi
+
+      - name: Publish to MercKR/quantman-releases
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT }}
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          notes="local/RELEASE_NOTES_${tag}.md"
+          gh release create "$tag" \
+            --repo MercKR/quantman-releases \
+            --title "$tag" \
+            --notes-file "$notes" \
+            --prerelease \
+            --latest \
+            dist-artifacts/windows-zip/*.zip \
+            dist-artifacts/macos-zip/*.zip

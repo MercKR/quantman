@@ -15,9 +15,11 @@ sys.path.insert(0, os.path.abspath("../core"))
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
+IS_MAC = sys.platform == "darwin"
+
 # localapp 버전을 __init__.py에서 직접 파싱 — onedir 출력 폴더명에 사용해
 # 사용자가 압축 풀었을 때 어느 버전인지 폴더명만 봐도 알도록 한다.
-# (zip 파일명은 패키징 단계에서 동일 명규로 부여.)
+# (zip 파일명은 패키징 단계에서 platform suffix 부여: -windows / -macos-arm64.)
 # PyInstaller spec은 `__file__` 미정의. SPECPATH(PyInstaller가 주입)가 spec 디렉터리.
 _INIT_PY = Path(SPECPATH) / "localapp" / "__init__.py"
 _m = re.search(r'__version__\s*=\s*"([^"]+)"', _INIT_PY.read_text(encoding="utf-8"))
@@ -41,12 +43,21 @@ for pkg in ("keyring", "pystray", "apscheduler", "FinanceDataReader", "zstandard
 # 포함 대상: quant_core/calendars/*.json, quant_core/universe/*.json
 datas += collect_data_files("quant_core")
 
-hiddenimports += [
-    "pystray._win32",
-    "keyring.backends.Windows",
-    "win32timezone",
-    "quant_core",
-]
+# 플랫폼별 backend hiddenimports — keyring·pystray는 런타임에 OS 기반으로 backend를
+# dynamic import하는데 PyInstaller가 정적 분석으로 추적 못 함. 명시해서 번들에 포함.
+if IS_MAC:
+    hiddenimports += [
+        "pystray._darwin",
+        "keyring.backends.macOS",
+        "quant_core",
+    ]
+else:
+    hiddenimports += [
+        "pystray._win32",
+        "keyring.backends.Windows",
+        "win32timezone",
+        "quant_core",
+    ]
 
 # 로컬앱이 쓰지 않는 대형/불필요 패키지 — 번들에서 제외
 EXCLUDES = [
@@ -79,9 +90,31 @@ exe = EXE(
     name="QuantPlatformLocal",
     console=False,            # GUI 앱 — 콘솔 창 없음
     disable_windowed_traceback=False,
+    target_arch="arm64" if IS_MAC else None,
 )
 
 coll = COLLECT(
     exe, a.binaries, a.datas,
     name=_BUNDLE_NAME,   # dist/QuantPlatformLocal-v{version}/ — 폴더명만 봐도 버전 식별.
 )
+
+if IS_MAC:
+    # macOS .app bundle. COLLECT onedir 결과를 .app/Contents/MacOS/·Resources/
+    # 구조로 감싼다. 미서명 — Apple Developer Program 미가입이라 사용자는 첫 실행
+    # 시 우클릭→열기로 Gatekeeper 우회. updater.sh가 quarantine attribute 자동 제거.
+    app = BUNDLE(
+        coll,
+        name=f"{_BUNDLE_NAME}.app",
+        icon=None,
+        bundle_identifier="com.merckr.quantplatformlocal",
+        info_plist={
+            "CFBundleName": "QuantPlatformLocal",
+            "CFBundleDisplayName": "퀀트 플랫폼 로컬앱",
+            "CFBundleShortVersionString": _VERSION,
+            "CFBundleVersion": _VERSION,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "14.0",
+            "LSUIElement": False,         # Dock 아이콘 표시 — 사용자가 강제종료 가능해야.
+            "NSHumanReadableCopyright": "© MercKR",
+        },
+    )
