@@ -266,6 +266,29 @@ def pull_preview() -> dict | None:
     return data
 
 
+def pull_timeline() -> dict | None:
+    """서버 자동매매 timeline 조회 — GUI 풀 timeline 패널용.
+
+    /sync/timeline (device-authed) 호출 — 어제·오늘·내일 6 종류 event +
+    heartbeat 상태. 응답 형식은 /trading/timeline과 동일 (서버에서 같은
+    헬퍼 재사용). 실패 시 None (caller가 마지막 표시 유지).
+    """
+    try:
+        r = requests.get(f"{PLATFORM_URL}/sync/timeline", headers=_headers(),
+                          timeout=10)
+    except Exception as e:
+        log.debug("timeline pull 네트워크 실패: %s", e)
+        return None
+    if not r.ok:
+        log.debug("timeline pull 응답 오류: %s", r.status_code)
+        return None
+    try:
+        return r.json()
+    except Exception as e:
+        log.debug("timeline pull JSON 파싱 실패: %s", e)
+        return None
+
+
 # ── Phase 29: 서버 dataset 단일 진실 공급원 pull ─────────────────────────────────
 
 def fetch_dataset_manifest() -> list[dict]:

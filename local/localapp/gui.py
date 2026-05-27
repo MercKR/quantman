@@ -196,35 +196,29 @@ class SettingsApp:
                                  font=("Segoe UI", 9))
         self.hero_sub.pack(pady=(0, 14))
 
-        # mini 자동매매 일정 — hero 바로 아래. "다음 자동매매가 언제인지" 한 줄.
-        # scheduler가 가동 중일 때만 표시(중지 상태에선 비활성). 가시성을 위해
-        # _build에서 일단 packed 위치를 확보(이후 refresh_status가 pack_forget·
-        # repack 토글) — 안 그러면 refresh_status의 pack 호출이 다른 모든 위젯
-        # 뒤에 배치되어 사용자에게 안 보임.
-        self.next_frame = tk.Frame(self.root, bg=PANEL,
-                                    highlightbackground=BORDER, highlightthickness=1)
-        # 4 라벨: 국장 시작/종료 + 미장 시작/종료. 시작=주문 발주(cycle),
-        # 종료=정산(미체결 정리·잔고 reconcile).
-        self.next_krx_cycle_label = tk.Label(self.next_frame, bg=PANEL, fg=TEXT,
-                                              font=("Segoe UI", 9), anchor="w", text="")
-        self.next_krx_settle_label = tk.Label(self.next_frame, bg=PANEL, fg=MUTED,
-                                               font=("Segoe UI", 9), anchor="w", text="")
-        self.next_us_cycle_label = tk.Label(self.next_frame, bg=PANEL, fg=TEXT,
-                                             font=("Segoe UI", 9), anchor="w", text="")
-        self.next_us_settle_label = tk.Label(self.next_frame, bg=PANEL, fg=MUTED,
-                                              font=("Segoe UI", 9), anchor="w", text="")
-        # 누락 알림 — 오늘 예정 cycle이 지났는데 cycles.jsonl에 기록 없을 때만 표시.
-        self.miss_alert_label = tk.Label(self.next_frame, bg=PANEL, fg=RED,
-                                          font=("Segoe UI", 9, "bold"), anchor="w",
-                                          text="")
-        self.next_krx_cycle_label.pack(fill="x", padx=12, pady=(6, 0))
-        self.next_krx_settle_label.pack(fill="x", padx=12, pady=(0, 0))
-        self.next_us_cycle_label.pack(fill="x", padx=12, pady=(2, 0))
-        self.next_us_settle_label.pack(fill="x", padx=12, pady=(0, 0))
-        self.miss_alert_label.pack(fill="x", padx=12, pady=(2, 6))
-        # hero 직후 위치 확보 — refresh_status가 pack_forget으로 일단 숨김 처리.
-        self.next_frame.pack(fill="x", padx=12, pady=(0, 6))
-        self.next_frame.pack_forget()
+        # ── 자동매매 timeline 패널 (hero 바로 아래) ─────────────────────────
+        # 웹앱 /monitor의 timeline과 동일 데이터(서버 /sync/timeline) 표시.
+        # 어제·오늘·내일 그룹 + 6 종류 event(국장/미장 × 후보결정/시작/종료).
+        # scheduler 가동 중일 때만 노출(.pack), 중지 시 .pack_forget.
+        self.timeline_frame = tk.Frame(self.root, bg=PANEL,
+                                        highlightbackground=BORDER, highlightthickness=1)
+        # 헤더: "자동매매 상태  ● 정상 · 로컬앱 12초 전"
+        self.timeline_header = tk.Frame(self.timeline_frame, bg=PANEL)
+        self.timeline_header.pack(fill="x", padx=12, pady=(8, 4))
+        tk.Label(self.timeline_header, text="자동매매 상태", bg=PANEL, fg=TEXT,
+                  font=("Segoe UI", 10, "bold")).pack(side="left")
+        self.timeline_status_label = tk.Label(self.timeline_header, text="",
+                                               bg=PANEL, fg=MUTED,
+                                               font=("Segoe UI", 9))
+        self.timeline_status_label.pack(side="right")
+        # 본문: rows 동적 렌더 — refresh마다 children 모두 destroy 후 재구성
+        self.timeline_body = tk.Frame(self.timeline_frame, bg=PANEL)
+        self.timeline_body.pack(fill="x", padx=12, pady=(0, 8))
+        # hero 직후 위치 확보, refresh_status가 pack_forget으로 일단 숨김.
+        self.timeline_frame.pack(fill="x", padx=12, pady=(0, 6))
+        self.timeline_frame.pack_forget()
+        # timeline 데이터 캐시 — 네트워크 실패 시 마지막 데이터 유지.
+        self._timeline_data = None
 
         # Kill switch 배너 — 활성 시에만 표시
         self.ks_banner = tk.Frame(self.root, bg=RED)
@@ -422,158 +416,182 @@ class SettingsApp:
         self.hero_label.configure(text=text, bg=color)
         self.hero_sub.configure(text=sub, bg=color)
 
-    # ── 다음 자동매매 일정 (mini timeline) ────────────────────────────────────
+    # ── 자동매매 timeline 패널 ───────────────────────────────────────────────
+    # 데이터 단일 출처: 서버 GET /sync/timeline.
+    # 웹앱 /monitor의 TradingTimeline.tsx와 동일 events·status·detail 공유.
+
+    KIND_LABEL = {
+        "krx_preview":    "국장 매매 후보 결정",
+        "krx_cycle":      "국장 자동매매 시작",
+        "krx_settlement": "국장 자동매매 종료",
+        "us_preview":     "미장 매매 후보 결정",
+        "us_cycle":       "미장 자동매매 시작",
+        "us_settlement":  "미장 자동매매 종료",
+    }
+    STATUS_ICON = {
+        "done": "✓", "scheduled": "⏳", "missed": "✗", "holiday": "—",
+    }
+
     def _schedule_minute_tick(self):
-        """매분 next-run countdown 갱신. refresh_status 안에서 next_run 라벨 다시 그림."""
+        """매분 timeline 갱신. countdown·heartbeat·신규 done 반영."""
         try:
             self.refresh_status()
         finally:
             self.root.after(60_000, self._schedule_minute_tick)
 
-    def _refresh_next_run_labels(self):
-        """APScheduler에 등록된 cycle·settlement 잡의 next_run_time을 표시.
+    def _refresh_timeline_panel_async(self):
+        """timeline data fetch in background — UI thread block 안 함."""
+        threading.Thread(target=self._fetch_and_render_timeline,
+                          daemon=True, name="timeline-fetch").start()
 
-        4종 표시 — 국장/미장 × 시작/종료. 매분 1회 root.after로 countdown 갱신.
-        + 오늘 예정 cycle이 지났는데 cycles.jsonl에 기록 없으면 누락 알림.
-        """
-        if not self.scheduler:
-            return
-        jobs = {}
-        for jid in ("krx_cycle", "krx_settlement", "us_cycle", "us_settlement"):
-            try:
-                jobs[jid] = self.scheduler.get_job(jid)
-            except Exception:
-                jobs[jid] = None
-        self.next_krx_cycle_label.configure(
-            text="다음 국장 자동매매 시작:  " + self._format_next_run(jobs["krx_cycle"]))
-        self.next_krx_settle_label.configure(
-            text="          국장 자동매매 종료:  " + self._format_next_run(jobs["krx_settlement"]))
-        self.next_us_cycle_label.configure(
-            text="다음 미장 자동매매 시작:  " + self._format_next_run(jobs["us_cycle"], fallback_us=True))
-        self.next_us_settle_label.configure(
-            text="          미장 자동매매 종료:  " + self._format_next_run(jobs["us_settlement"], fallback_us=True))
+    def _fetch_and_render_timeline(self):
+        """background: 서버 /sync/timeline 호출 → root.after로 UI 그리기."""
+        from .sync_client import pull_timeline
+        data = pull_timeline()
+        if data is not None:
+            self._timeline_data = data
+        # data가 None이면 캐시된 마지막 데이터 그대로 사용 (네트워크 일시 실패 견고함).
+        self.root.after(0, self._render_timeline)
 
-        # 누락 알림 — 오늘 예정 cycle 시각이 지났는데 cycles.jsonl에 기록 없음 = missed
-        missed = self._detect_missed_today()
-        if missed:
-            self.miss_alert_label.configure(
-                text="⚠ 오늘 누락된 cycle: " + " · ".join(missed))
-            self.miss_alert_label.pack(fill="x", padx=12, pady=(2, 6))
-        else:
-            self.miss_alert_label.pack_forget()
-
-    def _detect_missed_today(self) -> list[str]:
-        """오늘 자동매매 cycle 누락 여부. 반환: 누락된 시장명 list (예: ['KRX'])."""
-        from datetime import datetime, time as dtime, timedelta
-        from zoneinfo import ZoneInfo
-        kst = ZoneInfo("Asia/Seoul")
-        now = datetime.now(kst)
-        today = now.date()
-
-        # 오늘 평일이면 KRX 08:55, 미국 세션이 오늘 한국시각에 있었으면 US도 체크.
-        checks: list[tuple[str, datetime]] = []
-        # KRX — 평일만, 08:55 KST 이후
-        if today.weekday() < 5:    # 월~금
-            krx_sched = datetime.combine(today, dtime(8, 55), tzinfo=kst)
-            if now > krx_sched + timedelta(minutes=5):  # grace 5분 지나야 누락 판정
-                checks.append(("KRX", krx_sched))
-        # US — 캘린더에서 오늘 KST 안에 끝난 세션 있으면. 보통 오늘 새벽까지.
-        # 간단화: 어제 22:25~오늘 06:00 사이 미국 cycle이 있었는지만 본다(DST 변동 마진).
-        # 더 정확한 판정은 server timeline에 위임.
-        try:
-            from quant_core import market_calendar as mc
-            sess_prev = mc.next_session_kst("US", now - timedelta(days=2))
-            if sess_prev:
-                open_kst, _close_kst = sess_prev
-                us_sched = open_kst - timedelta(minutes=5)
-                # 오늘(또는 새벽이라면 어제) 안에 있던 세션만 — 24h 안.
-                if 0 < (now - us_sched).total_seconds() < 86400:
-                    checks.append(("US", us_sched))
-        except Exception:
-            pass
-
-        if not checks:
-            return []
-
-        # cycles.jsonl 읽어 각 sched 직후 entry 있는지 확인. 없으면 누락.
-        from .config import CYCLES_PATH
-        recent_ts: list[datetime] = []
-        try:
-            import json
-            with open(CYCLES_PATH, encoding="utf-8") as f:
-                # 마지막 100줄만 — 충분히 오늘+어제 커버.
-                lines = f.readlines()[-100:]
-            for line in lines:
-                try:
-                    d = json.loads(line)
-                    ts_s = d.get("ts")
-                    if not ts_s:
-                        continue
-                    ts = datetime.fromisoformat(ts_s.replace("Z", "+00:00"))
-                    recent_ts.append(ts.astimezone(kst))
-                except (ValueError, json.JSONDecodeError):
-                    continue
-        except FileNotFoundError:
-            pass
-
-        missed = []
-        for market, sched in checks:
-            # sched-1min ~ sched+30min 사이 entry 있으면 정상.
-            window_lo = sched - timedelta(minutes=1)
-            window_hi = sched + timedelta(minutes=30)
-            if not any(window_lo <= t <= window_hi for t in recent_ts):
-                missed.append(market)
-        return missed
-
-    def _format_next_run(self, job, fallback_us: bool = False) -> str:
-        """job.next_run_time을 사람이 읽는 형태로. None이면 적절한 fallback 메시지."""
+    def _render_timeline(self):
+        """timeline_body 안의 모든 children을 destroy 후 재구성."""
         from datetime import datetime
         from zoneinfo import ZoneInfo
         kst = ZoneInfo("Asia/Seoul")
+
+        # status header
+        data = self._timeline_data
+        if data is None:
+            self.timeline_status_label.configure(text="불러오는 중…", fg=MUTED)
+            return
+        hb_status = data.get("heartbeat_status", "error")
+        hb_at = data.get("heartbeat_at")
+        hb_color = {"normal": GREEN, "warning": AMBER, "error": RED}.get(hb_status, MUTED)
+        hb_text_map = {"normal": "정상", "warning": "응답 느림", "error": "연결 끊김"}
+        hb_label = hb_text_map.get(hb_status, "?")
+        if hb_at:
+            try:
+                hb_dt = datetime.fromisoformat(hb_at.replace("Z", "+00:00")).astimezone(kst)
+                hb_rel = self._relative_time(hb_dt, datetime.now(kst))
+                hb_subtext = f"  ·  로컬앱 {hb_rel}"
+            except Exception:
+                hb_subtext = ""
+        else:
+            hb_subtext = "  ·  로컬앱 응답 없음"
+        self.timeline_status_label.configure(
+            text=f"● {hb_label}{hb_subtext}", fg=hb_color)
+
+        # body — 기존 children destroy 후 재구성
+        for w in self.timeline_body.winfo_children():
+            w.destroy()
+
+        events = data.get("events") or []
+        if not events:
+            tk.Label(self.timeline_body, text="예정된 이벤트가 없습니다.",
+                      bg=PANEL, fg=MUTED, font=("Segoe UI", 9)).pack(fill="x", pady=4)
+            return
+
+        # 날짜별 그룹 (KST 기준)
         now = datetime.now(kst)
+        groups: dict[str, list[dict]] = {}
+        for ev in events:
+            try:
+                ev_dt = datetime.fromisoformat(ev["at"]).astimezone(kst)
+            except Exception:
+                continue
+            key = ev_dt.strftime("%Y-%m-%d")
+            groups.setdefault(key, []).append((ev_dt, ev))
+        # 날짜 정렬 (오래된 것부터)
+        for key in sorted(groups.keys()):
+            day_label = self._day_label(key, now)
+            sep = tk.Frame(self.timeline_body, bg=PANEL)
+            sep.pack(fill="x", pady=(6, 2))
+            tk.Label(sep, text=day_label, bg=PANEL, fg=MUTED,
+                      font=("Segoe UI", 8, "bold")).pack(side="left")
+            tk.Frame(sep, bg=BORDER, height=1).pack(side="left", fill="x",
+                                                     expand=True, padx=(8, 0), pady=(0, 0))
+            for ev_dt, ev in sorted(groups[key], key=lambda x: x[0]):
+                self._render_event_row(ev_dt, ev, now)
 
-        if job is None or job.next_run_time is None:
-            if fallback_us:
-                # us_cycle 잡은 하루에 한 번 동적 등록(_plan_us_session). 정오 plan 전이거나
-                # 휴장 안내 시 명시.
-                return "오늘 정오에 결정됩니다 (개장 5분 전 자동 등록)"
-            return "예정 없음"
+    def _render_event_row(self, ev_dt, ev, now):
+        """단일 event row — 시각 · 종류 · 상태·요약."""
+        row = tk.Frame(self.timeline_body, bg=PANEL)
+        row.pack(fill="x", pady=1)
+        kind = ev.get("kind", "")
+        status = ev.get("status", "")
+        # 좌측 시각
+        tk.Label(row, text=ev_dt.strftime("%H:%M"), bg=PANEL, fg=TEXT,
+                  font=("Segoe UI", 9, "bold"), width=6, anchor="w"
+                  ).pack(side="left")
+        # 종류
+        kind_label = self.KIND_LABEL.get(kind, kind)
+        tk.Label(row, text=kind_label, bg=PANEL, fg=TEXT,
+                  font=("Segoe UI", 9), anchor="w"
+                  ).pack(side="left")
+        # 우측 status·요약
+        icon = self.STATUS_ICON.get(status, "")
+        if status == "scheduled":
+            summary = self._relative_time(ev_dt, now)
+            color = MUTED
+        elif status == "done":
+            summary = ev.get("summary") or ""
+            color = GREEN
+        elif status == "missed":
+            summary = ev.get("summary") or "누락"
+            color = RED
+        elif status == "holiday":
+            summary = ev.get("summary") or "휴장"
+            color = MUTED
+        else:
+            summary, color = "", MUTED
+        right = tk.Label(row, text=f"{icon}  {summary}".strip(), bg=PANEL,
+                          fg=color, font=("Segoe UI", 9, "bold" if status == "missed" else "normal"))
+        right.pack(side="right")
+        # detail tooltip — Tkinter는 hover tooltip native 지원 X, 간단한 enter 이벤트로 status_label에 표시.
+        detail = (ev.get("detail") or "").strip()
+        if detail:
+            row.bind("<Enter>", lambda e, d=detail: self.timeline_status_label.configure(
+                text=d[:200], fg=MUTED))
+            row.bind("<Leave>", lambda e: self._render_timeline())  # 복원
 
-        nrt = job.next_run_time.astimezone(kst)
-        delta = nrt - now
-        secs = int(delta.total_seconds())
-        if secs <= 0:
-            return f"{nrt.strftime('%H:%M KST')} (곧)"
-
-        # 절대 시각 + 상대 시각.
-        # 오늘/내일/모레: 한국어 라벨, 그 외: MM-DD
+    @staticmethod
+    def _day_label(date_str: str, now) -> str:
+        """YYYY-MM-DD → '오늘 · 2026.05.27. (수)' 같은 친화적 라벨."""
+        from datetime import datetime, timedelta
+        try:
+            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return date_str
         today = now.date()
-        target = nrt.date()
-        days = (target - today).days
-        if days == 0:
-            day_label = "오늘"
-        elif days == 1:
-            day_label = "내일"
-        elif days == 2:
-            day_label = "모레"
-        else:
-            day_label = nrt.strftime("%m-%d")
+        weekday_kr = ["월", "화", "수", "목", "금", "토", "일"][d.weekday()]
+        diff = (d - today).days
+        if diff == 0:
+            return f"오늘 · {d.strftime('%Y.%m.%d.')} ({weekday_kr})"
+        if diff == 1:
+            return f"내일 · {d.strftime('%Y.%m.%d.')} ({weekday_kr})"
+        if diff == -1:
+            return f"어제 · {d.strftime('%Y.%m.%d.')} ({weekday_kr})"
+        return f"{d.strftime('%Y.%m.%d.')} ({weekday_kr})"
 
-        # 상대 시간 — 분/시간/일 단위
+    @staticmethod
+    def _relative_time(target, now) -> str:
+        """상대 시각 — '7h 30m 후', '3분 전'."""
+        from datetime import timedelta
+        delta = target - now
+        secs = int(delta.total_seconds())
+        future = secs > 0
+        secs = abs(secs)
         if secs < 60:
-            rel = "곧"
-        elif secs < 3600:
-            rel = f"{secs // 60}분 후"
-        elif secs < 86400:
-            h = secs // 3600
-            m = (secs % 3600) // 60
-            rel = f"{h}h {m}m 후" if m else f"{h}h 후"
-        else:
-            d = secs // 86400
-            h = (secs % 86400) // 3600
-            rel = f"{d}일 {h}h 후" if h else f"{d}일 후"
-
-        return f"{day_label} {nrt.strftime('%H:%M KST')}  ({rel})"
+            return "곧" if future else "방금"
+        if secs < 3600:
+            return f"{secs // 60}분 {'후' if future else '전'}"
+        if secs < 86400:
+            h, m = secs // 3600, (secs % 3600) // 60
+            base = f"{h}h {m}m" if m else f"{h}h"
+            return f"{base} {'후' if future else '전'}"
+        d, h = secs // 86400, (secs % 86400) // 3600
+        base = f"{d}일 {h}h" if h else f"{d}일"
+        return f"{base} {'후' if future else '전'}"
 
     def _render_setup_area(self, kis_ok: bool, dev_ok: bool):
         """자격증명+페어링 둘 다 완료면 한 줄 bar, 아니면 LabelFrame 펼침.
@@ -622,14 +640,14 @@ class SettingsApp:
         ks = killswitch.load()
         ks_active = bool(ks.get("active"))
 
-        # mini 자동매매 일정 — scheduler 가동 중일 때만 표시.
-        # scheduler가 멈춰있으면 "다음 자동매매" 자체가 의미 없음.
-        # after=self.hero로 hero 직후 위치 강제(repack 시 root 끝으로 밀리는 것 방지).
+        # 자동매매 timeline 패널 — scheduler 가동 중일 때만 표시.
+        # 서버 /sync/timeline 호출해 어제·오늘·내일 6 종류 event 렌더.
+        # after=self.hero로 hero 직후 위치 강제(repack 시 root 끝 밀림 방지).
         if running and not ks_active:
-            self._refresh_next_run_labels()
-            self.next_frame.pack(fill="x", padx=12, pady=(0, 6), after=self.hero)
+            self.timeline_frame.pack(fill="x", padx=12, pady=(0, 6), after=self.hero)
+            self._refresh_timeline_panel_async()
         else:
-            self.next_frame.pack_forget()
+            self.timeline_frame.pack_forget()
 
         # hero 부제목: 버전 + 이메일(있을 때) + 상태 메시지
         ident = f"v{__version__}"

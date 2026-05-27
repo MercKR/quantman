@@ -302,6 +302,55 @@ def pull_preview(
     return preview
 
 
+@router.get("/timeline")
+def pull_timeline(
+    device: Device = Depends(get_current_device),
+    session: Session = Depends(get_session),
+) -> dict:
+    """로컬앱이 자기 계정의 자동매매 timeline을 풀(pull) — 디바이스 인증.
+
+    웹용 `/trading/timeline`(유저 JWT)과 동일 데이터를 디바이스 인증으로 노출.
+    로컬앱 GUI가 hero 아래 패널에 어제·오늘·내일 6 종류 event(국장/미장 ×
+    후보결정·시작·종료) + heartbeat 상태를 렌더할 때 호출.
+
+    역할 분리: 디바이스(로컬앱)는 `/sync/*`·디바이스 토큰, 웹은 `/trading/*`·
+    유저 JWT. 동일 헬퍼(_krx_events·_us_events·_preview_events) 재사용으로
+    웹·로컬 표시 결과 항상 동일 보장.
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+    from zoneinfo import ZoneInfo
+    from ..models import HeartbeatEvent
+    from . import trading
+    KST = ZoneInfo("Asia/Seoul")
+    now = datetime.now(KST)
+    window_start = now - timedelta(hours=trading.WINDOW_HOURS)
+    window_end = now + timedelta(hours=trading.WINDOW_HOURS)
+
+    settings = session.exec(
+        select(UserSettings).where(UserSettings.user_id == device.user_id)
+    ).first()
+    last_hb = settings.last_heartbeat_at if settings else None
+    if last_hb and last_hb.tzinfo is None:
+        last_hb = last_hb.replace(tzinfo=_tz.utc)
+
+    snaps = trading._snapshots_in_window(session, device.user_id, window_start, window_end)
+    heartbeats = trading._heartbeats_in_window(session, device.user_id,
+                                                 window_start, window_end)
+
+    events = (
+        trading._krx_events(snaps, heartbeats, now, window_start, window_end)
+        + trading._us_events(snaps, heartbeats, now, window_start, window_end)
+        + trading._preview_events(snaps, now, window_start, window_end)
+    )
+    events.sort(key=lambda e: e["at"])
+    return {
+        "now": now.isoformat(),
+        "heartbeat_at": last_hb.isoformat() if last_hb else None,
+        "heartbeat_status": trading._heartbeat_status(last_hb, now),
+        "events": events,
+    }
+
+
 @router.post("/tradable_symbols", deprecated=True)
 def push_tradable_symbols(
     body: TradableSymbolsSyncIn,
