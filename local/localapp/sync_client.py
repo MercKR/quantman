@@ -94,6 +94,12 @@ def fetch_dataset_bundle(local_data_dir: Path) -> dict:
             tmp_path = tmp.name
 
         # Step 2 — 디스크 파일에서 안전하게 zstd 디코드 + tar 추출.
+        # v0.9.6-beta — bundle 적용한 종목들을 universe(managed_kr_stocks·
+        # managed_overseas_stocks)에 자동 등록. 이전엔 client load_all이 universe
+        # 화이트리스트 기반인데 server bundle download 흐름과 단절 → 디스크엔
+        # 4459 parquet 있어도 dataset dict에 macro 51개만 로드 → trader가
+        # 매수 후보 종목(AAPL 등) prev_close 못 찾아 skip_no_data로 매수 0건.
+        extracted_symbols: list[str] = []
         dctx = zstandard.ZstdDecompressor()
         with open(tmp_path, "rb") as f, \
                 dctx.stream_reader(f) as zr, \
@@ -104,6 +110,30 @@ def fetch_dataset_bundle(local_data_dir: Path) -> dict:
                 tar.extract(member, path=local_data_dir,
                              set_attrs=False, filter="data")
                 n_extracted += 1
+                # symbol 추출 — "subdir/AAPL.parquet" → "AAPL"
+                stem = Path(member.name).stem
+                if stem:
+                    extracted_symbols.append(stem)
+
+        # bundle 종목들을 KRX(6자리 숫자) / overseas(영문 ticker)로 분류해 universe 등록.
+        # macro symbol(S&P500·달러원 등)은 ALL_SYMBOLS에 이미 있으니 overseas 등록에서 제외.
+        from quant_core import data_fetcher as _df
+        macro_set = set(_df.ALL_SYMBOLS)
+        kr_codes, overseas = [], []
+        for sym in extracted_symbols:
+            if sym in macro_set:
+                continue
+            if sym.isdigit() and len(sym) == 6:
+                kr_codes.append(sym)
+            elif sym and sym[0].isalpha():
+                overseas.append({"code": sym, "name": sym})
+        if kr_codes:
+            _df.save_managed_kr_codes(sorted(set(kr_codes)))
+        if overseas:
+            # code 기준 dedupe (save_managed_overseas가 내부 dedupe도 함).
+            _df.save_managed_overseas(overseas)
+        log.info("universe 자동 등록 — KRX %d종목 · Overseas %d종목",
+                  len(kr_codes), len(overseas))
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
