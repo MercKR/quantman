@@ -407,6 +407,10 @@ def start(market: str = "KRX") -> dict:
         us_subscribed = len(held) if market == "US" else 0
 
         # Phase 33 — 체결 통보 WebSocket (HTS ID 설정된 경우만)
+        # v0.9.12 — 시장별 인스턴스. KR=H0STCNI0/9 (국내), US=H0GSCNI0/9 (해외).
+        # 옛 v0.9.11까지 KR만 spawn해서 해외 매수 fill 이벤트를 못 받아 orders.jsonl·
+        # pending_orders 갱신 안 되던 결함 fix. intraday_loop은 한 시장씩 가동 (KRX
+        # 09:00~15:30 vs US 22:30~05:00 — 시간 겹치지 않음)이라 한 인스턴스로 충분.
         order_ws = None
         kis_creds = load_kis() or {}
         hts_id = kis_creds.get("hts_id", "")
@@ -414,11 +418,13 @@ def start(market: str = "KRX") -> dict:
             try:
                 order_ws = KisOrderWebSocket(
                     broker, hts_id,
-                    on_exec=lambda evt: _on_exec_event(trader, broker, evt))
+                    on_exec=lambda evt: _on_exec_event(trader, broker, evt),
+                    market=market)
                 order_ws.start()
-                log.info("체결 통보 WebSocket 시작 (HTS ID=%s)", hts_id)
+                log.info("[%s] 체결 통보 WebSocket 시작 (tr=%s, HTS ID=%s)",
+                          market, order_ws._tr_id, hts_id)
             except Exception as e:
-                log.warning("체결 통보 WebSocket 시작 실패: %s", e)
+                log.warning("[%s] 체결 통보 WebSocket 시작 실패: %s", market, e)
                 order_ws = None
         else:
             log.info("HTS ID 미설정 — 체결 통보 WebSocket skip "

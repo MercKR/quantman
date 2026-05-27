@@ -1,14 +1,25 @@
 """KIS 체결 통보 WebSocket — 주문·체결·취소·거부 즉시 push 수신.
 
-KIS H0STCNI0 (실전) / H0STCNI9 (모의):
+지원 시장 (v0.9.12 — 해외 추가):
+  국내 KRX  → TR_ID H0STCNI0 (실전) / H0STCNI9 (모의), 26 fields
+  해외 US   → TR_ID H0GSCNI0 (실전) / H0GSCNI9 (모의), 25 fields, 미국 종목
+              체결단가는 4자리 packed (EX: '001480100' → 148.01)
+
+공통 동작:
   • tr_key = HTS ID (계좌번호 아님)
   • payload AES-CBC 암호화 — 구독 응답에 key/iv 함께 옴
   • 한 사용자 1개 구독만 (체결가는 종목별 20개와 별도 슬롯)
-  • 26개 field, CARET 구분
+  • CARET(^) 구분 fields
   • CNTG_YN: 2=체결, 1=주문·정정·취소·거부 접수
 
 핸들러는 ledger·trades·pending_orders를 즉시 갱신 + 서버 push.
 시세 WebSocket(kis_websocket.py)과 같은 패턴, AES 복호화만 추가.
+
+v0.9.12 변경 사유 — 해외 매수 fill 이벤트가 우리 orders.jsonl에 안 남는 결함:
+  v0.9.11까지 H0STCNI0(국내) 만 구독해서 해외 H0GSCNI0 fill 수신 0. 결과 사용자
+  catch-up 매수 4개 KIS에선 체결됐는데 우리 ledger·orders.jsonl 미반영 →
+  pending_orders.json stale + cycle summary n_bought=0. 본질 fix: 시장별
+  market="KR"/"US" 인자로 두 인스턴스 spawn (intraday_loop에서 market에 따라).
 """
 
 from __future__ import annotations
@@ -26,14 +37,38 @@ from cryptography.hazmat.primitives.padding import PKCS7
 
 log = logging.getLogger("localapp.kis_order_ws")
 
-# H0STCNI0 payload 26개 field (KIS 공식 spec)
-EXEC_FIELDS = [
+# H0STCNI0 payload 26 fields (국내, KIS 공식 spec)
+EXEC_FIELDS_DOMESTIC = [
     "CUST_ID", "ACNT_NO", "ODER_NO", "OODER_NO", "SELN_BYOV_CLS", "RCTF_CLS",
     "ODER_KIND", "ODER_COND", "STCK_SHRN_ISCD", "CNTG_QTY", "CNTG_UNPR",
     "STCK_CNTG_HOUR", "RFUS_YN", "CNTG_YN", "ACPT_YN", "BRNC_NO", "ODER_QTY",
     "ACNT_NAME", "ORD_COND_PRC", "ORD_EXG_GB", "POPUP_YN", "FILLER", "CRDT_CLS",
     "CRDT_LOAN_DATE", "CNTG_ISNM40", "ODER_PRC",
 ]
+
+# H0GSCNI0 payload 25 fields (해외, KIS 공식 spec). ODER_KIND2 (vs ODER_KIND),
+# CNTG_ISNM (vs CNTG_ISNM40), DEBT_GB·DEBT_DATE·START_TM·END_TM·TM_DIV_TP·
+# CNTG_UNPR12 등 해외 전용 필드. 국내와 키 이름 차이 있어 별도 정의.
+EXEC_FIELDS_OVERSEAS = [
+    "CUST_ID", "ACNT_NO", "ODER_NO", "OODER_NO", "SELN_BYOV_CLS", "RCTF_CLS",
+    "ODER_KIND2", "STCK_SHRN_ISCD", "CNTG_QTY", "CNTG_UNPR", "STCK_CNTG_HOUR",
+    "RFUS_YN", "CNTG_YN", "ACPT_YN", "BRNC_NO", "ODER_QTY", "ACNT_NAME",
+    "CNTG_ISNM", "ODER_COND", "DEBT_GB", "DEBT_DATE", "START_TM", "END_TM",
+    "TM_DIV_TP", "CNTG_UNPR12",
+]
+
+
+def _decode_us_price(packed: str) -> float:
+    """미국 종목 체결단가 packed → float.
+
+    KIS H0GSCNI0 spec: 미국은 4자리 소수점 packed. EX: AAPL 148.01 → '001480100'.
+    국가별 자리수 다름 (일본 1, 중국 3, 홍콩 3, 베트남 0) — 현재 우리 자동매매는
+    미국만 다루므로 4 fixed. 다른 국가 추가 시 ODER_COND 필드로 분기 필요.
+    """
+    try:
+        return float(packed) / 10000
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def _aes_cbc_decrypt(key: str, iv: str, b64_cipher: str) -> str:
@@ -53,19 +88,20 @@ def _aes_cbc_decrypt(key: str, iv: str, b64_cipher: str) -> str:
     return plain.decode("utf-8")
 
 
-def parse_exec_payload(plain: str) -> list[dict]:
+def parse_exec_payload(plain: str, fields: list[str]) -> list[dict]:
     """복호화된 평문 → 체결 통보 dict 리스트.
 
     한 메시지에 여러 체결이 들어올 수 있음 — RECORD 단위 분리 후 CARET fields.
+    fields는 시장별 spec (EXEC_FIELDS_DOMESTIC or EXEC_FIELDS_OVERSEAS).
     """
     out = []
     for record in plain.split("\n"):
         record = record.strip()
         if not record:
             continue
-        fields = record.split("^")
-        d = {EXEC_FIELDS[i]: fields[i] if i < len(fields) else ""
-             for i in range(len(EXEC_FIELDS))}
+        parts = record.split("^")
+        d = {fields[i]: parts[i] if i < len(parts) else ""
+             for i in range(len(fields))}
         out.append(d)
     return out
 
@@ -83,13 +119,25 @@ class KisOrderWebSocket:
     """
 
     def __init__(self, broker, hts_id: str,
-                 on_exec: Callable[[dict], None]):
+                 on_exec: Callable[[dict], None],
+                 market: str = "KR"):
         if not hts_id:
             raise ValueError("hts_id required - set via setup")
+        if market not in ("KR", "US"):
+            raise ValueError(f"market must be 'KR' or 'US', got {market!r}")
         self.broker = broker
         self.hts_id = hts_id
         self.on_exec = on_exec
-        self._tr_id = "H0STCNI9" if broker.virtual else "H0STCNI0"
+        self._market = market
+        # v0.9.12 — 시장별 tr_id·fields·체결단가 디코더.
+        if market == "KR":
+            self._tr_id = "H0STCNI9" if broker.virtual else "H0STCNI0"
+            self._fields = EXEC_FIELDS_DOMESTIC
+            self._decode_price = None   # 국내는 그대로 float
+        else:  # market == "US"
+            self._tr_id = "H0GSCNI9" if broker.virtual else "H0GSCNI0"
+            self._fields = EXEC_FIELDS_OVERSEAS
+            self._decode_price = _decode_us_price
         self._ws: ws_lib.WebSocketApp | None = None
         self._thread: threading.Thread | None = None
         self._stop_flag = False
@@ -161,8 +209,8 @@ class KisOrderWebSocket:
         if len(parts) < 4:
             return
         tr_id = parts[1]
-        if tr_id not in ("H0STCNI0", "H0STCNI9"):
-            return
+        if tr_id != self._tr_id:
+            return   # 다른 시장 tr_id (다른 인스턴스가 처리)
         cipher_text = parts[3]
         if not self._aes_key or not self._aes_iv:
             log.warning("[order-ws] AES key 없음 — tick 폐기")
@@ -172,8 +220,12 @@ class KisOrderWebSocket:
         except Exception as e:
             log.exception("[order-ws] 복호화 실패: %s", e)
             return
-        events = parse_exec_payload(plain)
+        events = parse_exec_payload(plain, self._fields)
         for evt in events:
+            # v0.9.12 — 해외 미국 종목 CNTG_UNPR packed → float 정규화.
+            # on_exec 콜백은 모든 시장 동일 키 형식 받음.
+            if self._decode_price is not None and "CNTG_UNPR" in evt:
+                evt["CNTG_UNPR"] = str(self._decode_price(evt["CNTG_UNPR"]))
             try:
                 self.on_exec(evt)
             except Exception as e:

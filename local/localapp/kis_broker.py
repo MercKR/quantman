@@ -286,8 +286,14 @@ class KisBroker:
     def overseas_snapshot(self) -> dict:
         """미국 USD 예수금 + 환율 + 보유종목 (KIS 검증된 필드).
 
-        present-balance: USD 현금(frcr_dncl_amt_2)·환율(frst_bltn_exrt)·외화평가총액.
+        present-balance: USD 현금(frcr_dncl_amt_2)·환율(frst_bltn_exrt).
         inquire-balance: 보유종목(ovrs_pdno/ovrs_cblc_qty/pchs_avg_pric/now_pric2).
+
+        foreign_eval_krw — v0.9.12 변경: KIS `output3.frcr_evlu_tota` 필드를
+        쓰던 옛 코드가 실측 ~5.4배 더 큰 값 반환 (사용자 보유 $39K × fx ≈ ₩59M
+        인데 KIS 응답 ₩320M). KIS docs description 부재 + mismatch — 의미 모호.
+        본질 fix: 환산 식을 *직접 계산*으로 — `(usd_cash + Σ qty·eval_price) × fx`.
+        모든 보유가 USD라는 가정 (현 시점 우리 자동매매 범위).
         """
         from . import market_index
         pb = self._overseas_present_raw()
@@ -297,8 +303,6 @@ class KisBroker:
                 usd_cash = float(row.get("frcr_dncl_amt_2", 0) or 0)
                 fx = float(row.get("frst_bltn_exrt", 0) or 0)
                 break
-        out3 = pb.get("output3", {}) or {}
-        foreign_eval_krw = float(out3.get("frcr_evlu_tota", 0) or 0)
 
         positions = []
         try:
@@ -321,6 +325,10 @@ class KisBroker:
                 })
         except Exception as e:
             log.warning("해외 보유종목 조회 실패 — 현금·환율만 반영: %s", e)
+
+        # foreign_eval_krw 직접 계산 — KIS frcr_evlu_tota 필드 mismatch (~5x) 회피.
+        positions_eval_usd = sum(p["qty"] * p["eval_price"] for p in positions)
+        foreign_eval_krw = (usd_cash + positions_eval_usd) * fx if fx > 0 else 0.0
 
         return {"usd_cash": usd_cash, "fx_usdkrw": fx,
                 "foreign_eval_krw": foreign_eval_krw, "positions": positions}

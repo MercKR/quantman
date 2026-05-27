@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-05-28 — 해외 체결통보 `H0GSCNI0` 별도 구독 필요 (국내 H0STCNI0과 다름)
+
+**증상**: 미장 catch-up 매수 4건이 KIS에선 정상 체결됐는데 우리 `orders.jsonl`에
+filled 이벤트 0건, `pending_orders.json` stale. cycle summary `n_bought=0`.
+
+**원인**: 우리 옛 `KisOrderWebSocket` (v0.9.11까지)은 `H0STCNI0/H0STCNI9` (국내주식
+실시간체결통보)만 구독. **해외주식은 `H0GSCNI0/H0GSCNI9` 별도 endpoint** —
+fields 25개·키 이름 일부 다름·미국 종목 체결단가는 4자리 packed (`'001480100'` →
+148.01). 옛 코드 line 92 `self._tr_id = "H0STCNI9" if broker.virtual else "H0STCNI0"`
+에 해외 분기 없음.
+
+**해결** (v0.9.12):
+- `EXEC_FIELDS_OVERSEAS` 신규 + `_decode_us_price` 함수
+- `KisOrderWebSocket(market=...)` 인자 — KR/US 시장별 tr_id·fields·decode 분기
+- `intraday_loop`에서 시장에 따라 `market=` 전달
+
+**우리 코드**: `local/localapp/kis_order_websocket.py:91-103` (`__init__`), `:174-188`
+(`_handle_exec_message`). `local/localapp/intraday_loop.py:415-422`.
+
+---
+
+## 2026-05-28 — `inquire-present-balance` `output3.frcr_evlu_tota` 필드 의미 mismatch
+
+**증상**: 사용자 보유 ~$39K (3종목)인데 `foreign_eval_krw` 응답 ₩319,541,151
+(=$213K equivalent). 실제 환산 ₩59M와 ~5.4배 차이.
+
+**원인**: KIS docs description 부재 + 실측 mismatch. "외화평가총액"이라는 필드명만
+있고 환산 식 불명. 매수원가 + 평가 + 신용한도 등 합산 가능성 (확정 못 함).
+
+**해결** (v0.9.12): KIS 필드 의문 회피 — 직접 계산.
+`foreign_eval_krw = (usd_cash + Σ qty·eval_price) × fx`. 모든 보유 USD 가정.
+
+**검증** (사용자 PC 실측):
+- positions_eval_usd: $39,421.17, fx: 1,501.60
+- 새 식 결과: ₩59,194,829 (= USD × fx)
+
+**우리 코드**: `local/localapp/kis_broker.py:286-329` (`overseas_snapshot`).
+
+---
+
 ## 2026-05-28 — `HHDFS00000300` 응답에 OHLC 없음 (open 필드 X)
 
 **증상**: trader catch-up이 `broker.today_open(symbol)` 호출 시 6 종목 모두 0.0 반환 → 매수 0건.

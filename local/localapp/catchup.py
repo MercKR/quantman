@@ -170,11 +170,17 @@ def _classify_entry(entry: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _last_of(entries: list[dict], market: str, kind: str) -> datetime | None:
-    """entries 중 (market, kind) 매칭하는 가장 최근 ts."""
+def _last_of(entries: list[dict], market: str,
+              kind: str | tuple[str, ...]) -> datetime | None:
+    """entries 중 (market, kind) 매칭하는 가장 최근 ts.
+
+    kind는 단일 문자열 또는 tuple — tuple이면 어느 하나와 매칭. cycle vs
+    catchup_cycle 같이 의미상 동등한 kind들을 같이 매칭하는 데 사용 (v0.9.12).
+    """
+    kinds = (kind,) if isinstance(kind, str) else kind
     for e in reversed(entries):
         m, k = _classify_entry(e)
-        if m == market and k == kind:
+        if m == market and k in kinds:
             return _entry_ts(e)
     return None
 
@@ -275,7 +281,10 @@ def _decide_catchup_plan(now: datetime | None = None) -> CatchupPlan:
 
     # ── KRX 장중 catch-up (cycle + 손절) ─────────────────────────────────
     if _is_krx_intraday(now):
-        last_cycle = _last_of(entries, "KRX", "cycle")
+        # v0.9.12 — cycle + catchup_cycle 둘 다 매칭. 옛 코드는 catchup_cycle을
+        # 무시해서 catch-up 후 PC 재부팅 시 또 catch-up 실행 (중복 자원 낭비).
+        # 자금 안전은 L-01 intent journal idempotency가 차단했으나 cycle 자체 낭비.
+        last_cycle = _last_of(entries, "KRX", ("cycle", "catchup_cycle"))
         if last_cycle is None or last_cycle.date() < now.date():
             plan.krx_cycle_needed = True
             plan.reasons.append(
@@ -287,7 +296,8 @@ def _decide_catchup_plan(now: datetime | None = None) -> CatchupPlan:
 
     # ── US 장중 catch-up (cycle + 손절) ──────────────────────────────────
     if _is_us_intraday(now):
-        last_cycle = _last_of(entries, "US", "cycle")
+        # v0.9.12 — cycle + catchup_cycle 둘 다 매칭 (위 KRX와 동일 사유).
+        last_cycle = _last_of(entries, "US", ("cycle", "catchup_cycle"))
         if last_cycle is None or last_cycle.date() < now.date():
             plan.us_cycle_needed = True
             plan.reasons.append(
