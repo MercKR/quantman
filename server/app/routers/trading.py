@@ -181,9 +181,17 @@ def _match_snapshot(snaps: list[SyncSnapshot], scheduled: datetime,
     오차 허용: scheduled-2min ~ scheduled+30min. KRX 08:55 cycle은 보통
     08:55:00~08:56:00 사이에 push됨. US는 야간이라 마진 더 줘도 안전.
     cycle_summary.market 필드가 있으면 동일 시장만 매칭.
+
+    v0.9.13 G-8 — 2차 fallback: 같은 거래일·같은 market의 catchup_cycle 또는
+    같은 거래일 post_close_settlement도 정시 cycle/settle의 결과로 인정. 사용자
+    PC가 08:55 cron 시점 OFF였다가 09:38 부팅 시 catch-up이 같은 trading day
+    분량을 실행했다면, UI에 "누락" 표시는 거짓 음성. 30분 윈도우 밖의 catch-up
+    실행도 정시 cycle 결과로 표시되도록 함. 자금 안전 영향 0 (UI 표시만).
     """
+    sched_date = scheduled.date()
     lo = scheduled - timedelta(minutes=2)
     hi = scheduled + timedelta(minutes=30)
+    # 1차: ±30min 윈도우 — 정시 cycle의 정상 push 매칭
     for s in snaps:
         # received_at은 tz-naive로 저장될 수 있어 KST로 정규화.
         ra = s.received_at
@@ -196,6 +204,26 @@ def _match_snapshot(snaps: list[SyncSnapshot], scheduled: datetime,
         cs = (s.payload or {}).get("cycle_summary") or {}
         snap_market = cs.get("market")
         if snap_market and snap_market != market:
+            continue
+        return s
+    # 2차 (G-8): 같은 거래일 catchup_cycle/post_close_settlement도 정시 결과로 인정
+    for s in snaps:
+        ra = s.received_at
+        if ra.tzinfo is None:
+            ra = ra.replace(tzinfo=timezone.utc).astimezone(KST)
+        else:
+            ra = ra.astimezone(KST)
+        cs = (s.payload or {}).get("cycle_summary") or {}
+        if cs.get("market") != market:
+            continue
+        # cycle_summary.today가 scheduled 거래일과 일치해야 — catch-up이 어느
+        # trading day 분량을 cover하는지 명시적 매칭. today 누락 entry는 무시.
+        cs_today = cs.get("today")
+        if cs_today != sched_date.isoformat():
+            continue
+        # received_at도 같은 KST 거래일 안에 있어야 — 5/29 부팅으로 5/28 cycle을
+        # 늦게 catch-up한 케이스를 5/28 timeline에 끼지 않도록.
+        if ra.date() != sched_date:
             continue
         return s
     return None
