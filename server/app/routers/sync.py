@@ -287,7 +287,10 @@ def pull_preview(
     이전엔 로컬앱이 유저 전용 `/preview/next-day`를 호출해 항상 401 → 신규 진입 차단
     버그가 있었다(이 엔드포인트로 교체해 해결).
 
-    스냅샷 없음·preview 미생성 시 available=false (정상 상태, 캐시 fallback 없음).
+    v0.9.13 — preview catch-up on-demand build:
+    사용자 PC가 server cron 시점(07:30·18:15)에 꺼져 있어도 KRX 매수 catch-up이
+    동작하도록, snapshot에 preview 없으면 *즉시* build_user_preview 호출 + merge.
+    cron 의존성 제거. build_user_preview는 KIS 호출 0회 (수십ms).
     """
     snap = session.exec(
         select(SyncSnapshot).where(SyncSnapshot.user_id == device.user_id)
@@ -296,9 +299,26 @@ def pull_preview(
     if snap is None or not snap.payload:
         return {"available": False, "reason": "스냅샷 없음 — 로컬앱 sync 필요"}
     preview = (snap.payload or {}).get("next_day_preview")
-    if preview is None:
+    if preview is not None:
+        return preview
+
+    # On-demand build (v0.9.13) — preview 미준비 시 자리에서 생성.
+    from .. import preview_engine
+    try:
+        preview = preview_engine.build_user_preview(
+            session, device.user_id, "on_demand_pull")
+    except Exception as e:
+        _log.exception("on-demand preview build 실패 (user=%s): %s",
+                        device.user_id, e)
         return {"available": False,
-                "reason": "preview 아직 생성 안 됨 (다음 cron 갱신 대기)"}
+                "reason": f"preview 생성 실패: {type(e).__name__}"}
+    if preview.get("available"):
+        # SyncSnapshot에 merge — 다음 호출은 빠른 경로로 빠짐.
+        new_payload = dict(snap.payload or {})
+        new_payload["next_day_preview"] = preview
+        snap.payload = new_payload
+        session.add(snap)
+        session.commit()
     return preview
 
 
