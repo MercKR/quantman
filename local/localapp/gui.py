@@ -748,7 +748,10 @@ class SettingsApp:
         # 단계 헤더에 진행 상태 표시 — 저장된 모드(virtual) 기반 라벨
         if kis:
             mode = "모의투자" if kis.get("virtual", True) else "실전투자"
-            kis_header = f"① KIS 자격증명 ({mode})        ✓ 등록됨"
+            # v0.9.15 — HTS ID 등록 여부도 표시. 미등록 시 사용자가 실시간 체결통보
+            # 못 받고 있음을 인지하도록.
+            hts_suffix = "" if (kis.get("hts_id") or "").strip() else " · HTS ID 미설정"
+            kis_header = f"① KIS 자격증명 ({mode}{hts_suffix})        ✓ 등록됨"
         else:
             kis_header = "① KIS 자격증명        입력 필요"
         self.kf.configure(text=kis_header)
@@ -764,6 +767,10 @@ class SettingsApp:
             self.e_key.insert(0, kis["app_key"])
             self.e_acct.delete(0, "end")
             self.e_acct.insert(0, kis["account_no"])
+            # v0.9.15 — HTS ID도 미리 채움 (재편집 시 사용자가 다시 입력 안 해도 됨).
+            # secret은 보안상 미리 채우지 않음 (사용자가 매번 재입력).
+            self.e_hts.delete(0, "end")
+            self.e_hts.insert(0, kis.get("hts_id", ""))
 
         eq = _read_json(EQUITY_PATH, [])
         led = _read_json(LEDGER_PATH, {})
@@ -1390,17 +1397,23 @@ class SettingsApp:
         ttk.Label(
             f, style="Muted.TLabel", wraplength=580, justify="left",
             text="KIS 마이페이지에서 발급받은 App Key · App Secret · 계좌번호를 입력하세요. "
-                 "키는 이 PC의 Windows 자격증명 저장소에만 저장되며, 플랫폼 서버로 "
-                 "전송되지 않습니다."
+                 "HTS ID는 KIS HTS·영웅문 로그인 ID로, 실시간 체결통보(WebSocket) "
+                 "구독에만 사용됩니다. 미입력 시 REST 폴링으로 fallback (체결 인지가 "
+                 "다소 늦지만 자금 안전엔 영향 없음). 키는 이 PC의 Windows 자격증명 "
+                 "저장소에만 저장되며, 플랫폼 서버로 전송되지 않습니다."
         ).pack(anchor="w", pady=(8, 8))
 
         # 입력란
         self.e_key = self._make_wizard_entry(f, "App Key")
         self.e_secret = self._make_wizard_entry(f, "App Secret", show="*")
         self.e_acct = self._make_wizard_entry(f, "계좌번호 (예: 50001234-01)")
+        # v0.9.15 — HTS ID (선택): KIS WebSocket 체결통보 H0STCNI0/H0GSCNI0의 tr_key.
+        # KIS HTS 또는 영웅문에 로그인할 때 쓰는 사용자 ID (이메일 아님). 없으면
+        # 체결통보 WebSocket 구독 skip → REST 폴링이 fill 인지 (~수십초 지연).
+        self.e_hts = self._make_wizard_entry(f, "HTS ID (선택 — 실시간 체결통보용)")
 
         # 입력 변경 시 결과·버튼 reset (다시 테스트해야 저장 가능)
-        for ent in (self.e_key, self.e_secret, self.e_acct):
+        for ent in (self.e_key, self.e_secret, self.e_acct, self.e_hts):
             ent.bind("<KeyRelease>", lambda _e: self._wizard_on_input_change())
 
         # 결과·진행 상태 (한 줄 안내)
@@ -1553,7 +1566,9 @@ class SettingsApp:
         key = self.e_key.get().strip()
         secret = self.e_secret.get().strip()
         acct = self.e_acct.get().strip()
-        secrets_store.save_kis(key, secret, acct, virtual=self.wizard_virtual)
+        hts_id = self.e_hts.get().strip()  # v0.9.15 — 선택 입력, 빈 문자열이면 WS 구독 skip
+        secrets_store.save_kis(key, secret, acct, virtual=self.wizard_virtual,
+                                hts_id=hts_id)
         self.e_secret.delete(0, "end")
         self.setup_collapsed = True
         mode = "모의투자" if self.wizard_virtual else "실전투자"
