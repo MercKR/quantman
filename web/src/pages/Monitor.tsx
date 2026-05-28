@@ -5,6 +5,7 @@ import {
   PositionDetailCards, RiskBanner, StrategyCardGrid,
 } from "../components/MonitorCards";
 import { CsvExportBar } from "../components/MonitorTools";
+import TradeOutcomes from "../components/TradeOutcomes";
 import TradingTimeline from "../components/TradingTimeline";
 import type {
   CommandRow, CommandType, DeviceRow, MarketContext, NextDayPreview,
@@ -274,6 +275,11 @@ export default function Monitor() {
           </table>
         )}
       </div>
+
+      {/* v0.9.13~ — 매매 결정 outcome view: 각 decision의 실제 체결/미체결/거부
+          /건너뜀 사유를 한 표로 통합. 옛 패턴은 주문내역+사이클로그+미체결 3 패널
+          cross-reference 필요 — 사용자 문의 "X 왜 못 샀지?"에 한 번에 답하기 위해. */}
+      <TradeOutcomes cycles={cycles} orders={orders} pending={pending} />
 
       {/* Recent orders + CSV export */}
       <div className="panel">
