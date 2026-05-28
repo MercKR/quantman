@@ -183,8 +183,15 @@ def get_bundle(request: Request, device: Device = Depends(get_current_device)):
             status.HTTP_410_GONE,
             "dataset bundle 미준비 — 다음 cron 갱신 후 가능")
     etag = f'"{etag_val}"'
-    # If-None-Match 헤더로 클라가 같은 ETag 들고 있으면 304
-    if request.headers.get("if-none-match") == etag:
+    # If-None-Match 헤더로 클라가 같은 ETag 들고 있으면 304.
+    # v0.9.14 fix — client(sync_client.fetch_dataset_bundle)는 응답 ETag를 strip('"')
+    # 후 저장 + If-None-Match로 따옴표 없이 송신. RFC 7232상 ETag는 따옴표 포함이지만
+    # 우리 client 옛 버전들이 이미 그렇게 동작하므로 서버가 양쪽 모두 수용. 미적용 시
+    # client가 같은 etag 보내도 매번 mismatch → 매번 풀 다운로드(150MB, ~60~150s) →
+    # 매 cycle 시작이 2~3분 지연. 실측: 5/28 22:25 미장 cycle에서 dataset 재다운로드
+    # 147s로 발주 의도가에서 시초가가 ~4분 벗어났음.
+    incoming = request.headers.get("if-none-match", "")
+    if incoming == etag or incoming == etag_val:
         return Response(status_code=304, headers={"ETag": etag})
     return FileResponse(
         bp, media_type="application/zstd",
