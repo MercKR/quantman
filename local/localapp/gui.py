@@ -1782,6 +1782,12 @@ class SettingsApp:
         results = data.get("results") or {}
         if not results:
             return ""
+        # v0.9.13 D-5 — helpers 준비 실패 (KIS 자격증명 미등록 등) 전용 메시지.
+        # "실행됨" 헤더가 오해 소지 있어 별도 분기.
+        if "_helpers_unavailable" in results:
+            v = results["_helpers_unavailable"]
+            return (f"⚠️ Catch-up 실행 보류 — {v.get('error', '')}\n"
+                    f"  보류 항목: {v.get('plan_summary', '(없음)')}")
         parts = ["⏰ 자동 catch-up 실행됨:"]
         for k, v in results.items():
             if v.get("error"):
@@ -1801,7 +1807,10 @@ class SettingsApp:
                 applied = v.get("reconcile_applied", 0)
                 drift = v.get("reconcile_drift", False)
                 drift_mark = f"drift {applied}건 정정" if drift else "차이 없음"
-                parts.append(f"  · {k}: reconcile {drift_mark}")
+                # v0.9.13 D-2 — 며칠 누락됐는지 표시 (2영업일 이상 누락 시만).
+                days = v.get("days_missed", 0)
+                days_tail = f" ({days}영업일 누적 누락)" if days >= 2 else ""
+                parts.append(f"  · {k}: reconcile {drift_mark}{days_tail}")
         return "\n".join(parts) if len(parts) > 1 else ""
 
     def _dismiss_catchup_banner(self):

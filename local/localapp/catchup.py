@@ -53,8 +53,10 @@ class CatchupPlan:
     # Settlement (장 마감 후 정산) catch-up
     krx_settlement_needed: bool = False
     krx_settlement_date: str | None = None    # 정산 대상 거래일 ISO
+    krx_settlement_days_missed: int = 0       # v0.9.13 D-2 — 며칠 누락
     us_settlement_needed: bool = False
     us_settlement_date: str | None = None
+    us_settlement_days_missed: int = 0        # v0.9.13 D-2 — 며칠 누락
 
     # Full cycle catch-up (장중 PC 켰을 때)
     krx_cycle_needed: bool = False
@@ -176,9 +178,21 @@ def _last_of(entries: list[dict], market: str,
 
     kind는 단일 문자열 또는 tuple — tuple이면 어느 하나와 매칭. cycle vs
     catchup_cycle 같이 의미상 동등한 kind들을 같이 매칭하는 데 사용 (v0.9.12).
+
+    v0.9.13 D-1 — summary.error 있는 entry는 "실행 완료"로 보지 않음. cycle 외부
+    예외(데이터 fetch 실패·KIS 일시 거부 등)로 종료된 cycle이 cycles.jsonl에 남았을
+    때 catch-up이 자동 재시도 가능. 자금 안전은 L-01 intent journal idempotency가
+    차단 (submitting state로 끝난 intent는 KIS 당일 주문 매칭으로 마감).
+    실제로 runner.run_cycle outer try/except 경로는 log_cycle 호출 안 함 → 보통
+    error entry는 안 남지만, trader.cycle 내부 log_cycle 직후의 예외나 settlement
+    오류 등 edge case 대비 안전망.
     """
     kinds = (kind,) if isinstance(kind, str) else kind
     for e in reversed(entries):
+        # error entry는 "실행 완료"로 보지 않음 — 재시도 허용
+        summary = e.get("summary") or {}
+        if summary.get("error"):
+            continue
         m, k = _classify_entry(e)
         if m == market and k in kinds:
             return _entry_ts(e)
@@ -207,6 +221,43 @@ def _is_us_intraday(now: datetime) -> bool:
         return False
     open_kst, close_kst = sess
     return open_kst <= now <= close_kst
+
+
+def _count_business_days_missed(market: str, last_settle_date: date | None,
+                                  target_date: date) -> int:
+    """v0.9.13 D-2 — last_settle_date 이후 ~ target_date(포함) 사이의 영업일 수.
+
+    last_settle_date가 None이면 (catch-up 이력 자체 없음) target_date 기준 최대
+    7영업일 거슬러 올라가며 카운트 — 신규 사용자의 경우 너무 길게 표시 안 되도록.
+    캘린더 만료 등으로 판정 불가 시 0 반환 (안전 default).
+
+    호출자는 "단일 settle 호출로 catch-up 충분"하다는 사실은 알고, 이 카운트는
+    *사용자 가시성* (며칠 누락이라는 사실)만을 위해 사용.
+    """
+    try:
+        if last_settle_date is None:
+            # 이력 없음 — 7영업일 윈도우만 카운트.
+            count = 0
+            d = target_date
+            for _ in range(14):  # 최대 2주 거슬러
+                if mc.is_session_day(market, d):
+                    count += 1
+                    if count >= 7:
+                        return count
+                d = d - timedelta(days=1)
+            return count
+        # target_date 부터 last_settle_date 까지 거꾸로
+        count = 0
+        d = target_date
+        while d > last_settle_date:
+            if mc.is_session_day(market, d):
+                count += 1
+            d = d - timedelta(days=1)
+            if count >= 30:  # 안전 상한
+                break
+        return count
+    except mc.CalendarError:
+        return 0
 
 
 def _recent_krx_business_day(now: datetime) -> date | None:
@@ -257,9 +308,16 @@ def _decide_catchup_plan(now: datetime | None = None) -> CatchupPlan:
             if last_settle is None or last_settle.date() < last_krx_biz:
                 plan.krx_settlement_needed = True
                 plan.krx_settlement_date = last_krx_biz.isoformat()
+                # v0.9.13 D-2 — 며칠 누락됐는지 계산. 단일 settle 호출로
+                # current-state reconcile 완료되지만, 사용자에게 "5일 누적
+                # 미정산" 같은 가시성 제공. KRX 영업일만 카운트.
+                plan.krx_settlement_days_missed = _count_business_days_missed(
+                    "KR", last_settle.date() if last_settle else None,
+                    last_krx_biz)
                 plan.reasons.append(
                     f"KRX settlement 누락 — 마지막 settle={last_settle}, "
-                    f"대상={last_krx_biz}")
+                    f"대상={last_krx_biz}, "
+                    f"누락 영업일={plan.krx_settlement_days_missed}")
 
     # ── US settlement (close+5분) catch-up 필요 판단 ──────────────────────
     # 가장 최근 US 세션 close가 5분 이상 지났는데 settle 없으면 trigger.
@@ -275,9 +333,14 @@ def _decide_catchup_plan(now: datetime | None = None) -> CatchupPlan:
                     or last_us_settle.date() < prev_close_kst.date()):
                 plan.us_settlement_needed = True
                 plan.us_settlement_date = prev_close_kst.date().isoformat()
+                # v0.9.13 D-2 — US 영업일 카운트.
+                plan.us_settlement_days_missed = _count_business_days_missed(
+                    "US", last_us_settle.date() if last_us_settle else None,
+                    prev_close_kst.date())
                 plan.reasons.append(
                     f"US settlement 누락 — 마지막 settle={last_us_settle}, "
-                    f"대상close={prev_close_kst}")
+                    f"대상close={prev_close_kst}, "
+                    f"누락 영업일={plan.us_settlement_days_missed}")
 
     # ── KRX 장중 catch-up (cycle + 손절) ─────────────────────────────────
     if _is_krx_intraday(now):
@@ -484,7 +547,17 @@ def run_catchup_on_startup() -> dict:
 
     helpers = _prepare_helpers()
     if helpers is None:
-        log.info("catch-up: helpers 준비 실패 — plan만 결정하고 종료")
+        # v0.9.13 D-5 — 옛 코드는 silent return → 사용자 모름. plan은 있는데
+        # 자격증명 누락 등으로 실행 0건이면 amber 배너로 명시 알림. KIS 자격증명
+        # 등록 흐름을 모르는 신규 사용자에게 가장 흔한 silent fail 경로.
+        log.warning("catch-up: helpers 준비 실패 — plan은 있으나 실행 불가, "
+                    "사용자에게 amber 배너 표시")
+        results["_helpers_unavailable"] = {
+            "error": "KIS 자격증명 미등록 또는 broker 초기화 실패 — "
+                     "[설정] 메뉴에서 KIS appkey·계좌번호 입력 필요",
+            "plan_summary": str(plan),
+        }
+        _save_result(plan, results)
         return {"plan": plan, "results": results}
     broker, trader, get_strat_def = helpers
 
@@ -557,7 +630,10 @@ def _save_result(plan: CatchupPlan, results: dict) -> None:
     }
     for k, v in results.items():
         out: dict = {"error": v.get("error")} if v.get("error") else {}
-        if k.endswith("_stop_loss"):
+        if k == "_helpers_unavailable":
+            # v0.9.13 D-5 — helpers 준비 실패 알림. plan_summary로 무엇이 보류됐는지 표시.
+            out["plan_summary"] = v.get("plan_summary", "")
+        elif k.endswith("_stop_loss"):
             out["checked"] = v.get("checked", 0)
             out["fired"] = v.get("fired", 0)
         elif k.endswith("_cycle"):
@@ -568,6 +644,11 @@ def _save_result(plan: CatchupPlan, results: dict) -> None:
             recon = v.get("reconciliation") or {}
             out["reconcile_drift"] = bool(recon.get("has_drift"))
             out["reconcile_applied"] = len(recon.get("applied") or [])
+            # v0.9.13 D-2 — 누락 영업일 수 (가시성)
+            if k == "krx_settle":
+                out["days_missed"] = plan.krx_settlement_days_missed
+            elif k == "us_settle":
+                out["days_missed"] = plan.us_settlement_days_missed
         serializable["results"][k] = out
 
     try:
