@@ -1,11 +1,19 @@
 """트레이 상주 — 설정 창을 시스템 트레이로 감싼다.
 
 창을 닫아도 종료되지 않고 트레이에 상주하며 스케줄러가 계속 돈다.
-tkinter는 메인 스레드, 트레이 아이콘은 데몬 스레드에서 구동한다.
+
+스레드 모델은 OS마다 다르다:
+- Windows/Linux: tkinter는 메인 스레드, 트레이 아이콘은 데몬 스레드에서 구동.
+- macOS: 트레이 아이콘(pystray)은 AppKit(NSStatusItem) 기반이라 반드시
+  메인 스레드에서 동작해야 한다. 데몬 스레드에서 icon.run()을 호출하면
+  "NSUpdateCycleInitialize() is called off the main thread"로 크래시(SIGTRAP).
+  → run_detached()로 아이콘만 등록하고, tkinter mainloop(메인 스레드)가
+    공유 NSApplication 런루프를 대신 구동하게 한다.
 """
 
 from __future__ import annotations
 
+import sys
 import threading
 
 import pystray
@@ -54,8 +62,15 @@ class TrayApp:
         self.app.root.destroy()
 
     def run(self):
-        threading.Thread(target=self.icon.run, daemon=True).start()
-        self.app.run()                      # tkinter mainloop (메인 스레드)
+        if sys.platform == "darwin":
+            # macOS: AppKit은 메인 스레드 전용. 아이콘은 run_detached로 등록만
+            # 하고, tkinter mainloop가 공유 NSApplication 런루프를 구동한다.
+            self.icon.run_detached()
+            self.app.run()                  # tkinter mainloop (메인 스레드)
+        else:
+            # Windows/Linux: 트레이는 데몬 스레드, tkinter는 메인 스레드.
+            threading.Thread(target=self.icon.run, daemon=True).start()
+            self.app.run()                  # tkinter mainloop (메인 스레드)
 
 
 def main():
