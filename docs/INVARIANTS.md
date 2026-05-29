@@ -137,14 +137,18 @@
 - ✅ INV-FILL-3 — `test_fill_paths.py::test_rest_polling_recognizes_fill`
 - ✅ INV-LEDGER-2 — `test_ledger_consistency.py::test_split_buy_weighted_average`
 - ✅ INV-RECON-1 — `test_ledger_consistency.py::test_external_sale_drift_reconciled` + `test_external_buy_does_not_touch_ledger`
+- ✅ INV-PRICE-1 — `test_risk_guards.py::test_buy_limit_clamped_to_daily_price_limit`
 
-**남은 갭:**
+**남은 갭 (정직한 상태 분류):**
 
-| INV | 상태 | 채울 단계 |
+| INV | 상태 | 사유/다음 단계 |
 |---|---|---|
-| INV-CAL-2 | 강제 O, 테스트 X (incident 재현) | P4 §9 (점검가드 제거 회귀) |
-| INV-CATCHUP-1 | 강제 O, 테스트 X | P4 (catch-up 멱등 시나리오) |
-| INV-KS-1 (매수 0) | 강제 O, 시나리오 X | P4 (full cycle 셋업 필요) |
-| INV-PRICE-1 | 강제 O, 테스트 X | P4 (±30% 클램프) |
-| INV-API-1/2 | 강제 O, 테스트 X | 별도(throttle 단위) |
-| INV-SEC-1 | 강제 O, 단언 테스트 X | P4 (push payload 민감키 부재) |
+| INV-KS-1 (매수 0) | 강제 O, 시나리오 X | `trader.cycle` 전체 + stub dataset/candidate 필요 → full-cycle scaffold 증분. ks 활성·cancel은 `test_killswitch_intraday`가 이미 커버 |
+| INV-CATCHUP-1 | 강제 O, 테스트 X | cycles.jsonl + catchup 머신 셋업 → full-cycle scaffold 증분 |
+| INV-CAL-2 | 강제 O, 테스트 X | 점검가드 *제거됨* — 과거 버그 재현엔 옛 코드 필요(현 코드 회귀는 약함) |
+| INV-API-1/2 | 강제 O, 테스트 X | throttle 단위 테스트(별도·저우선) |
+| INV-SEC-1 | 강제 O(경계설계) | **sim 부적합** — SimBroker엔 유출할 자격증명이 없어 누설을 못 잡음. account_snapshot 안전필드만 + 코드리뷰로 강제. live 페이로드 정적검사가 더 적합 |
+
+> 남은 항목 = (a) full-cycle scaffold 필요 증분, (b) live 게이트 의존, (c) sim 부적합
+> (경계설계로 강제). 환경이 갖춰져 (a)는 "택소노미 행+불변식+시나리오" 루틴으로 추가
+> 가능 — 억지로 무거운 scaffold를 지금 만들지 않는다(Over-engineering 금지).
