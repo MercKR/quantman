@@ -35,8 +35,21 @@
 | **P1** | INVARIANTS.md + ORDER_STATE_MACHINE.md (불변식·상태머신·9축 택소노미) | ✅ 완료 |
 | **P2** | SimBroker·invariants·scenario + KRX 하루 E2E + import 가드 | ✅ 완료 (125 passed) |
 | **P4** | 9축 갭 시나리오 백필 + 과거 incident 재현 + 커버리지 맵 | 🔄 진행 중 (체결경로·원장정합성 채움, 131 passed) |
-| **P5** | M4(universe 단일출처) 리팩토링을 환경 위에서 실행 | 🔲 대기 |
+| **P5** | M4(universe 단일출처) — **전제 미성립**: 이미 단일화됨(아래) | ✅ 검증 결과 no-op |
 | **P3** | record-replay 픽스처(live 캡처) — **live 게이트 의존** | ⏳ 게이트 |
+
+**M4(축5) 검증 결과 — 리팩토링 불필요 (2026-05-30)**: universe 분산 전제를 코드로
+검증한 결과 이미 단일 소싱이다. (1) dataset universe = `dataset_scope.needed_symbols`
+한 함수(runner.py:201·intraday_loop.py:390,501 모두 호출). (2) 시장 분류 =
+`market_index.market_group_of` 단일 출처(M1에서 이미 통합). `_market_group_safe`(trader)·
+`_in_market`(intraday_loop)는 같은 출처를 감싼 thin wrapper(fallback 차이뿐). M1의
+"거래소맵 4벌" 같은 결함 class 없음 → **억지 리팩토링 회피(Over-engineering 금지)**.
+축5는 M1+dataset_scope로 이미 해소된 것으로 판단.
+
+**잔여 시나리오 백필(전체 cycle 필요 — dataset 주입 seam 후속 작업)**: INV-KS-1(ks→매수0)·
+INV-PRICE-1(±30% 클램프)·INV-CATCHUP-1·INV-CAL-2(점검가드 회귀)는 `trader.cycle` 전체
+구동 + dataset 주입이 필요해, composition-root/dataset seam(spec P4 후속)에서 추가한다.
+환경이 이미 갖춰져 추가는 "택소노미 행+불변식+시나리오" 루틴으로 환원됨.
 
 산출물: `docs/INVARIANTS.md`, `docs/ORDER_STATE_MACHINE.md`, `local/sim/{broker,invariants,scenario}.py`,
 `local/tests/scenarios/`, `local/tests/test_sim_prod_boundary.py`.
