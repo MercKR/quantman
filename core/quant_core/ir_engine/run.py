@@ -21,7 +21,7 @@ from ..backtest import (
 )
 from ..blocks import EvalContext, evaluate
 from ..blocks.catalog import get, has
-from .backtest import run_backtest_ir
+from .backtest import run_backtest_ir, run_portfolio_ir
 from .spec import StrategyIR
 from .sweep import daily_returns, summarize_returns, sweep_condition
 
@@ -36,8 +36,9 @@ def run_strategy_ir(strategy: StrategyIR, dataset: dict[str, pd.DataFrame]) -> d
     sim = strategy.simulation
     if ent == "on_signal":
         u = strategy.universe
+        ex = strategy.position.exit
+        sz = strategy.position.sizing
         if u.kind == "single" and len(u.symbols) == 1:
-            ex = strategy.position.exit
             return run_backtest_ir(
                 dataset, u.symbols[0], strategy.signal,
                 sell_node=ex.condition, hold_days=ex.hold_days,
@@ -46,11 +47,21 @@ def run_strategy_ir(strategy: StrategyIR, dataset: dict[str, pd.DataFrame]) -> d
                 fill=sim.fill, initial_capital=sim.initial_capital,
                 **_cost_kw(sim), start=sim.start, end=sim.end,
             )
-        return _empty("on_signal 리스트/포트폴리오 경로는 S3에서 지원됩니다.")
+        # 리스트 유니버스 → 이벤트 드리븐 포트폴리오 (S3)
+        return run_portfolio_ir(
+            dataset, u.symbols, strategy.signal,
+            sell_node=ex.condition, hold_days=ex.hold_days,
+            take_profit=ex.take_profit, stop_loss=ex.stop_loss,
+            trail_atr_mult=ex.trail_atr_mult, trail_pct=ex.trail_pct,
+            fill=sim.fill, initial_capital=sim.initial_capital,
+            amount_pct=sz.amount_pct,
+            amount_krw=(sz.amount_krw if sz.mode == "fixed_amount" else None),
+            **_cost_kw_nocur(sim), start=sim.start, end=sim.end,
+        )
     return _run_rebalance(strategy, dataset)
 
 
-def _cost_kw(sim) -> dict:
+def _cost_kw_nocur(sim) -> dict:
     out = {}
     if sim.commission is not None:
         out["commission"] = sim.commission
@@ -58,6 +69,11 @@ def _cost_kw(sim) -> dict:
         out["slippage"] = sim.slippage
     if sim.sell_tax is not None:
         out["sell_tax"] = sim.sell_tax
+    return out
+
+
+def _cost_kw(sim) -> dict:
+    out = _cost_kw_nocur(sim)
     out["currency"] = sim.currency
     return out
 
