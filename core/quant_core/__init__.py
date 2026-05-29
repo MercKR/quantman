@@ -4,12 +4,12 @@ from .strategy import (Condition, ConditionGroup, ExecutionPolicy, ExitRules,
                        Modifier, Operand, SellRules, Strategy,
                        SELF_SYMBOL, is_self_ref,
                        parse_trade_symbols, sell_pct_for_reason)
-from .dataset import load_dataset
-from .data_fetcher import symbol_category
+from .dataset import load_dataset, load_dataset_for
+from .data_fetcher import symbol_category, ALL_SYMBOLS
 from .engine import run_strategy_backtest, evaluate_buy_signal
 from .analysis import (run_analysis, run_temporal_stability, build_signal_mask,
                         explain_buy_signal, explain_buy_signal_per_symbol,
-                        describe_condition)
+                        describe_condition, referenced_symbols)
 from .backtest import run_backtest
 from .indicators import (compute_all, get_indicator_columns, get_indicator_group,
                          get_indicator_label, get_indicator_unit,
@@ -22,9 +22,11 @@ __all__ = [
     "Condition", "ConditionGroup", "ExecutionPolicy", "ExitRules", "Modifier",
     "Operand", "SellRules", "Strategy", "SELF_SYMBOL", "is_self_ref",
     "parse_trade_symbols", "sell_pct_for_reason",
-    "load_dataset", "symbol_category", "run_strategy_backtest", "evaluate_buy_signal",
+    "load_dataset", "load_dataset_for", "symbol_category", "ALL_SYMBOLS",
+    "run_strategy_backtest", "evaluate_buy_signal",
     "run_analysis", "run_temporal_stability", "build_signal_mask",
     "explain_buy_signal", "explain_buy_signal_per_symbol", "describe_condition",
+    "referenced_symbols",
     "run_backtest", "compute_all", "get_indicator_columns", "get_indicator_group",
     "get_indicator_label", "get_indicator_unit", "get_indicator_compare_group",
     "get_all_indicator_columns",

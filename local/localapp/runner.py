@@ -167,7 +167,6 @@ def run_cycle(market: str = "KRX", catchup: bool = False) -> dict:
         try:
             from .datafetch import refresh_market_data
             refresh_market_data()
-            dataset = qc.load_dataset(with_indicators=True)
             broker = make_broker()
             trader = Trader(broker)
 
@@ -187,6 +186,17 @@ def run_cycle(market: str = "KRX", catchup: bool = False) -> dict:
                           len(buy_candidates), n_total)
             else:
                 log.info("preview 후보 없음 — 매수 0, 청산만 진행")
+
+            # B1 — dataset을 실제 사용 종목만 로드 (전체 4468 지표 계산 5분+ → 수초).
+            # broker·preview 이후로 옮긴 이유: 보유(ledger)·후보가 있어야 needed
+            # 집합을 계산할 수 있기 때문. 매수는 신호 재평가 안 하고(매수후보=preview),
+            # 매도는 build_signal_mask가 조건 참조 종목을 보므로 dataset_scope가
+            # macro ∪ 타겟/후보 ∪ 보유 ∪ 조건참조를 모두 포함.
+            from . import dataset_scope
+            needed = dataset_scope.needed_symbols(
+                strategies, buy_candidates, trader.ledger)
+            dataset = qc.load_dataset_for(needed, with_indicators=True)
+            log.info("dataset 로드 — %d종목 (scoped, 전체 universe 대신)", len(dataset))
 
             # Phase 38.7/38.10 — 사용자 위험 한도. 실패 시 빈 dict → default fallback.
             risk_limits = pull_risk_limits()

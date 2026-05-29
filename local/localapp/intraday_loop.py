@@ -351,7 +351,6 @@ def start(market: str = "KRX") -> dict:
 
         _us_realtime_warned = False         # 세션마다 재감지
         log.info("intraday stop loop 시작 (market=%s)", market)
-        dataset = qc.load_dataset(with_indicators=True)
         broker = make_broker()
         trader = Trader(broker)
 
@@ -360,6 +359,14 @@ def start(market: str = "KRX") -> dict:
         except Exception as e:
             log.warning("strategies pull 실패 (보유 종목만 추적): %s", e)
             strategies = []
+
+        # B1 — 손절 loop은 매도 평가만 → 보유 종목 + 조건 참조 + macro만 로드.
+        # broker·strategies 이후로 옮겨 needed 집합 계산 (전체 4468 지표 5분+ 회피).
+        from . import dataset_scope
+        dataset = qc.load_dataset_for(
+            dataset_scope.needed_symbols(strategies, [], trader.ledger),
+            with_indicators=True)
+        log.info("dataset 로드 — %d종목 (scoped, intraday loop)", len(dataset))
 
         manager = IntradayStopManager(
             broker=broker,
@@ -465,7 +472,10 @@ def start(market: str = "KRX") -> dict:
                 # 빈 strategies + 빈 candidates → 진입 0, 청산 패스만 실행.
                 # trader.cycle은 _CYCLE_LOCK을 acquire (현 thread가 이미 락을
                 # 쥐지 않은 상태로 호출).
-                trader.cycle(strategies=[], dataset=qc.load_dataset(
+                # B1 — 청산 전용이라 보유 종목 + 조건참조 + macro만 로드.
+                from . import dataset_scope as _ds
+                trader.cycle(strategies=[], dataset=qc.load_dataset_for(
+                    _ds.needed_symbols([], [], trader.ledger),
                     with_indicators=True),
                               buy_candidates=[], risk_limits=rl, market=market)
             except Exception as e:

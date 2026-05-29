@@ -464,6 +464,44 @@ def _is_group(node) -> bool:
     return isinstance(node, dict) and isinstance(node.get("conditions"), list)
 
 
+def referenced_symbols(nodes: list) -> set[str]:
+    """조건 노드(단일/그룹) 목록에서 명시 참조된 외부 종목 심볼 집합을 추출.
+
+    build_signal_mask가 평가 시 ``data[symbol]``로 접근하는 종목들이다. 제외 대상:
+      - SELF_SYMBOL placeholder([이 종목]) — current_symbol로 치환되므로 외부 종목 아님
+      - constant 피연산자 — 종목 무관(숫자)
+      - symbol 누락 operand
+
+    용도: 로컬 cycle/intraday loop이 dataset을 부분집합으로 좁혀 로드할 때
+    (load_dataset_for) build_signal_mask가 참조하는 종목을 빠짐없이 포함시켜야
+    한다. 누락 시 _resolve_operand가 데이터 부족 → 빈 mask → 신호 미발동
+    (매도 신호가 조용히 안 나가는 fund-safety 위험). 그래서 정확 추출이 필수.
+
+    raw dict(서버 전략 정의 JSON)·model_dump 둘 다 처리. 그룹은 재귀.
+    """
+    out: set[str] = set()
+
+    def _walk(node_list) -> None:
+        for node in node_list or []:
+            if not isinstance(node, dict):
+                continue
+            if isinstance(node.get("conditions"), list):
+                _walk(node["conditions"])
+                continue
+            for side in ("left", "right"):
+                op = node.get(side)
+                if not isinstance(op, dict):
+                    continue
+                if op.get("kind") == "constant":
+                    continue
+                sym = op.get("symbol")
+                if sym and sym != SELF_SYMBOL:
+                    out.add(sym)
+
+    _walk(nodes)
+    return out
+
+
 def _combine_nodes(
     data: dict[str, pd.DataFrame],
     nodes: list[dict],

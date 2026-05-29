@@ -10,8 +10,16 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 log = logging.getLogger("localapp.datafetch")
+
+# Fix A — refresh 직렬화 lock. 기동 시 startup `dataset-initial` 스레드와 catch-up
+# cycle의 refresh가 동시에 같은 4468 parquet를 같은 디렉터리에 다운로드·추출하던
+# race(2026-05-29 실측: 02:37·02:38 두 번 적용, 10:27도 동일)를 차단. 두 번째
+# 호출은 첫 다운로드 완료를 기다린 뒤 ETag 304로 즉시 skip(server ETag fix 결합).
+# 대역폭 2배 낭비 + 추출 중 부분 기록 parquet를 load가 읽을 손상 위험 제거.
+_REFRESH_LOCK = threading.Lock()
 
 
 def refresh_market_data() -> bool:
@@ -21,7 +29,14 @@ def refresh_market_data() -> bool:
     또는 packaging 미완료(410)면 manifest 종목별 다운로드(~114분)로 폴백.
 
     실패해도(네트워크·서버 다운 등) 예외를 던지지 않는다 — 기존 로컬 캐시로 진행.
+
+    Fix A — _REFRESH_LOCK으로 동시 호출 직렬화 (race·중복 다운로드 차단).
     """
+    with _REFRESH_LOCK:
+        return _refresh_market_data_locked()
+
+
+def _refresh_market_data_locked() -> bool:
     try:
         from quant_core import data_fetcher
         from .sync_client import fetch_dataset_bundle, sync_dataset
