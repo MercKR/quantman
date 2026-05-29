@@ -7,7 +7,6 @@ sim은 production 복사본이 아니다: Trader(broker) 생성자 + intraday_lo
 
 from __future__ import annotations
 
-import datetime
 import sys
 from pathlib import Path
 
@@ -47,23 +46,7 @@ def test_invariants_catch_negative_qty():
 
 
 # ── KRX 하루 E2E ──────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def isolated_trader(tmp_path, monkeypatch):
-    """trader 영속 경로를 tmp로 격리 + KST 날짜 고정 + 서버 push 차단."""
-    from localapp import trader as tr
-    from localapp import intraday_loop, killswitch
-    for name in ("LEDGER_PATH", "EQUITY_PATH", "PENDING_ORDERS_PATH",
-                 "REBALANCE_PATH", "TRADES_PATH"):
-        monkeypatch.setattr(tr, name, tmp_path / f"{name}.json")
-    monkeypatch.setattr(killswitch, "KILLSWITCH_PATH", tmp_path / "ks.json")
-    monkeypatch.setattr(intraday_loop, "push_snapshot", lambda *a, **k: None)
-    monkeypatch.setattr(tr, "kst_today", lambda: datetime.date(2026, 6, 1))
-
-    broker = SimBroker()
-    t = tr.Trader(broker)
-    return t, broker
-
+# isolated_trader 픽스처는 conftest.py에 공용 정의.
 
 def test_krx_day_buy_fill_sell_settlement(isolated_trader):
     t, broker = isolated_trader

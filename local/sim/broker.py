@@ -70,3 +70,10 @@ class SimBroker:
         """REST 조회(order_status)가 filled를 반환하도록 상태 갱신."""
         s = self._statuses[order_no]
         s.update(status="filled", filled_qty=qty, remain_qty=0, fill_price=price)
+
+    def set_positions(self, positions: list[dict]) -> None:
+        """account_snapshot()이 반환할 KIS 보유 포지션을 설정(reconcile 시나리오용).
+
+        각 항목: {symbol, qty, avg_price, ...} — analytics.reconcile_ledger가 symbol로 매칭.
+        """
+        self._positions = list(positions)
