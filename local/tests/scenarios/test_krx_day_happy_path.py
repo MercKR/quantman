@@ -31,3 +31,15 @@ def test_simbroker_records_and_pads_odno():
     assert b.submitted[0]["symbol"] == "005930"
     st = b.order_status(r["order_no"], "005930")
     assert st["status"] == "submitted"
+
+
+# ── 불변식 단언 ───────────────────────────────────────────────────────────────
+
+def test_invariants_catch_negative_qty():
+    from sim.invariants import check_ledger_nonneg
+
+    class _T:
+        ledger = {"s1": {"qty": -1}}
+        pending: dict = {}
+    with pytest.raises(AssertionError, match="INV-LEDGER-1"):
+        check_ledger_nonneg(_T())
