@@ -21,11 +21,12 @@ from sim.broker import SimBroker
 @pytest.fixture
 def isolated_trader(tmp_path, monkeypatch):
     from localapp import trader as tr
-    from localapp import intraday_loop, killswitch
+    from localapp import intraday_loop, killswitch, intents
     for name in ("LEDGER_PATH", "EQUITY_PATH", "PENDING_ORDERS_PATH",
                  "REBALANCE_PATH", "TRADES_PATH"):
         monkeypatch.setattr(tr, name, tmp_path / f"{name}.json")
     monkeypatch.setattr(killswitch, "KILLSWITCH_PATH", tmp_path / "ks.json")
+    monkeypatch.setattr(intents, "INTENTS_PATH", tmp_path / "intents.jsonl")
     monkeypatch.setattr(intraday_loop, "push_snapshot", lambda *a, **k: None)
     monkeypatch.setattr(tr, "kst_today", lambda: datetime.date(2026, 6, 1))
 
