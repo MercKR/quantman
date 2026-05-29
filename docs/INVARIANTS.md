@@ -138,13 +138,13 @@
 - ✅ INV-LEDGER-2 — `test_ledger_consistency.py::test_split_buy_weighted_average`
 - ✅ INV-RECON-1 — `test_ledger_consistency.py::test_external_sale_drift_reconciled` + `test_external_buy_does_not_touch_ledger`
 - ✅ INV-PRICE-1 — `test_risk_guards.py::test_buy_limit_clamped_to_daily_price_limit`
+- ✅ INV-KS-1 — `test_risk_guards.py::test_killswitch_blocks_new_buys` (실 `trader.cycle` 진입게이트)
 
 **남은 갭 (정직한 상태 분류):**
 
 | INV | 상태 | 사유/다음 단계 |
 |---|---|---|
-| INV-KS-1 (매수 0) | 강제 O, 시나리오 X | `trader.cycle` 전체 + stub dataset/candidate 필요 → full-cycle scaffold 증분. ks 활성·cancel은 `test_killswitch_intraday`가 이미 커버 |
-| INV-CATCHUP-1 | 강제 O, 테스트 X | cycles.jsonl + catchup 머신 셋업 → full-cycle scaffold 증분 |
+| INV-CATCHUP-1 | 강제 O, 테스트 X | cycles.jsonl + catchup 머신 셋업 → full-cycle 증분(저우선) |
 | INV-CAL-2 | 강제 O, 테스트 X | 점검가드 *제거됨* — 과거 버그 재현엔 옛 코드 필요(현 코드 회귀는 약함) |
 | INV-API-1/2 | 강제 O, 테스트 X | throttle 단위 테스트(별도·저우선) |
 | INV-SEC-1 | 강제 O(경계설계) | **sim 부적합** — SimBroker엔 유출할 자격증명이 없어 누설을 못 잡음. account_snapshot 안전필드만 + 코드리뷰로 강제. live 페이로드 정적검사가 더 적합 |
