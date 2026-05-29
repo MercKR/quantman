@@ -55,3 +55,20 @@ def get(op: str) -> BlockDef:
 
 def has(op: str) -> bool:
     return op in CATALOG
+
+
+def catalog_spec() -> list[dict]:
+    """등록된 모든 블록의 명세 — 프론트 빌더가 어떤 블록·슬롯·기본값을 제공할지 안다."""
+    out = []
+    for op, b in sorted(CATALOG.items()):
+        out.append({
+            "op": op,
+            "out_type": b.out_type.value,
+            "slots": {k: v.value for k, v in b.slots.items()},
+            "variadic": b.variadic,
+            "variadic_type": b.variadic_type.value if b.variadic_type else None,
+            "param_defaults": b.param_defaults,
+            "requires_panel": b.requires_panel,
+            "doc": b.doc,
+        })
+    return out

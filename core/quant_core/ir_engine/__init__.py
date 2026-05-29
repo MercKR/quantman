@@ -11,13 +11,14 @@ from .compare import (  # noqa: F401
     bootstrap_mean_ci, compare_partition, distribution, excess_distribution,
     two_sample_test, walk_forward_consistency,
 )
+from .service import backtest_from_spec  # noqa: F401
 from .sweep import (  # noqa: F401
     daily_returns, partition_by_label, run_condition_sweep, summarize_returns,
     sweep_condition,
 )
 
 __all__ = [
-    "run_backtest_ir",
+    "run_backtest_ir", "backtest_from_spec",
     "run_condition_sweep", "sweep_condition", "partition_by_label",
     "summarize_returns", "daily_returns",
     "two_sample_test", "bootstrap_mean_ci", "walk_forward_consistency",

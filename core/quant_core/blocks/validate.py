@@ -21,9 +21,12 @@ from .node import OP_CONST, OP_DATA, Node
 from .types import Shape
 
 # 심각도 — 비전 우선순위(무결성＞정합성＞완결성)를 수치화.
-SEV_INTEGRITY = 40   # 규칙4 (integrity.py)
-SEV_ERROR = 30       # 규칙0·1·2·3 정합성 — 거부
-SEV_INFO = 10        # 규칙5 완결성 — 자동 보정
+# is_error 임계 = SEV_ERROR(30). 무결성도 하드 위반(look-ahead)은 차단(40),
+# 자문(PIT 미태깅·생존편향)은 경고(25)로 표시만 한다.
+SEV_INTEGRITY = 40        # 규칙4 하드 위반 (look-ahead·비-causal) — 거부
+SEV_ERROR = 30            # 규칙0·1·2·3 정합성 — 거부
+SEV_INTEGRITY_WARN = 25   # 규칙4 자문 (PIT·생존편향) — 표시(차단 안 함)
+SEV_INFO = 10             # 규칙5 완결성 — 자동 보정
 
 # eval_fn이 기본값 없이 params[..]로 접근하는 필수 잎 빈칸.
 _REQUIRED_PARAMS = {

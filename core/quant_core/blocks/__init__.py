@@ -9,6 +9,7 @@ screener spec 셋을 하나의 재귀 트리(Node)로 통합한다. 평가기·U
 """
 
 from . import ops_advanced, ops_arith, ops_core, ops_cs, ops_ts  # noqa: F401  (import 시 블록 등록)
+from .catalog import catalog_spec  # noqa: F401
 from .context import EvalContext, resolve_data, select_symbol  # noqa: F401
 from .evaluate import evaluate  # noqa: F401
 from .node import Node, const, data  # noqa: F401
@@ -21,7 +22,7 @@ from .validate import (  # noqa: F401
 )
 
 __all__ = [
-    "Node", "data", "const", "ValueType", "Shape",
+    "Node", "data", "const", "ValueType", "Shape", "catalog_spec",
     "EvalContext", "evaluate", "select_symbol", "resolve_data",
     "validate", "is_valid", "apply_defaults", "available_refs", "infer_shape", "Issue",
     "DatasetMeta", "apply_delay", "integrity_issues", "data_time_issues", "param_time_issues",

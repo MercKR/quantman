@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from ..indicators import FUND_INDICATOR_COLS
 from .node import OP_DATA, Node
-from .validate import SEV_INTEGRITY, Issue
+from .validate import SEV_INTEGRITY, SEV_INTEGRITY_WARN, Issue
 
 _FUND_SET = set(FUND_INDICATOR_COLS)
 
@@ -85,7 +85,7 @@ def data_time_issues(node: Node, meta: DatasetMeta) -> list[Issue]:
         issues.append(Issue("R4", SEV_INTEGRITY,
                             "delay<1 — 당일 종가로 당일 체결은 look-ahead. delay>=1 권장"))
     if not meta.has_pit and (_referenced_indicators(node) & _FUND_SET):
-        issues.append(Issue("R4", SEV_INTEGRITY,
+        issues.append(Issue("R4", SEV_INTEGRITY_WARN,
                             "펀더멘털 지표 사용 + PIT 미태깅 — 미래 실적 누출 위험(Phase 3)"))
     return issues
 
