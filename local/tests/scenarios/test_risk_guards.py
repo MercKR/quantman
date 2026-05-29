@@ -29,3 +29,27 @@ def test_buy_limit_clamped_to_daily_price_limit(isolated_trader):
     limit = broker.submitted[-1]["limit"]
     assert limit < 140000, f"INV-PRICE-1: 클램프 안 됨(tolerance 그대로 적용) limit={limit}"
     assert ref < limit <= int(ref * 1.30) + 100, f"INV-PRICE-1: ±30% 상한 밖 limit={limit}"
+
+
+def test_killswitch_blocks_new_buys(isolated_trader):
+    """INV-KS-1: kill switch active면 cycle 진입 패스가 차단돼 신규 매수가 0이다.
+
+    진입 패스는 _enter_from_preview 직전 ks_active 게이트로 막힌다(보유 청산은 별개).
+    ledger·dataset 비어도 게이트가 buy_candidates 처리 전에 차단하므로 현실적 시세
+    셋업 없이 검증 가능.
+    """
+    from localapp import killswitch
+    t, broker = isolated_trader
+    killswitch.activate("테스트 — 일일손실 한도 도달")
+    assert killswitch.is_active()
+
+    candidates = [{"strategy_id": "s1",
+                   "candidates": [{"symbol": "005930"}],
+                   "screener_members": ["005930"]}]
+    payload = t.cycle(strategies=[], dataset={}, buy_candidates=candidates,
+                      risk_limits={"kill_switch_daily_loss_pct": 3.0}, market="KRX")
+
+    buys = [s for s in broker.submitted if s["side"] == "buy"]
+    assert buys == [], f"INV-KS-1 위반: killswitch active인데 매수 발주됨 {buys}"
+    assert any(d["action"] == "skip_killswitch" for d in payload["decisions"]), \
+        "skip_killswitch 결정이 기록되지 않음"

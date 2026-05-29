@@ -21,12 +21,15 @@ from sim.broker import SimBroker
 @pytest.fixture
 def isolated_trader(tmp_path, monkeypatch):
     from localapp import trader as tr
-    from localapp import intraday_loop, killswitch, intents
+    from localapp import intraday_loop, killswitch, intents, order_log
     for name in ("LEDGER_PATH", "EQUITY_PATH", "PENDING_ORDERS_PATH",
                  "REBALANCE_PATH", "TRADES_PATH"):
         monkeypatch.setattr(tr, name, tmp_path / f"{name}.json")
     monkeypatch.setattr(killswitch, "KILLSWITCH_PATH", tmp_path / "ks.json")
     monkeypatch.setattr(intents, "INTENTS_PATH", tmp_path / "intents.jsonl")
+    # order_log 쓰기를 tmp로 격리 — 시나리오가 실사용자 ~/.quant-platform 로그를 오염하지 않게.
+    for name in ("ORDERS_PATH", "CYCLES_PATH", "SLIPPAGE_PATH"):
+        monkeypatch.setattr(order_log, name, tmp_path / f"{name}.jsonl")
     monkeypatch.setattr(intraday_loop, "push_snapshot", lambda *a, **k: None)
     monkeypatch.setattr(tr, "kst_today", lambda: datetime.date(2026, 6, 1))
 
