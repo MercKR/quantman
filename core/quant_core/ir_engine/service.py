@@ -15,6 +15,8 @@ from ..blocks import (
 )
 from ..blocks.validate import prioritize
 from .backtest import run_backtest_ir
+from .run import run_strategy_ir, run_sweep
+from .spec import StrategyIR, validate_strategy
 
 # run_backtest_ir로 그대로 전달할 청산/체결/기간 파라미터 (None이면 drop → 엔진 기본값).
 _EXIT_KW = (
@@ -87,4 +89,34 @@ def backtest_from_spec(
     res = run_backtest_ir(dataset, trade_symbol, buy, sell_node=sell, **exit_kw)
     # 비-error 무결성 경고(예: 펀더멘털 PIT 미태깅)를 결과에 동봉
     res["warnings"] = [_issue_dict(i) for i in issues]
+    return res
+
+
+def strategy_from_spec(
+    spec: dict,
+    dataset: dict[str, pd.DataFrame],
+    *,
+    valid_refs: set[str] | None = None,
+    meta: DatasetMeta | None = None,
+) -> dict:
+    """완전한 StrategyIR(dict)을 검증·실행. 단일/팩터/포트폴리오/펼침 모두 처리.
+
+    sweep.axis != none이면 펼침(resultset), 아니면 1회 백테스트.
+    """
+    try:
+        s = StrategyIR.model_validate(spec)
+    except Exception as e:  # noqa: BLE001 — 사용자 입력 파싱 실패
+        return {"success": False, "error": f"전략 파싱 오류: {e}"}
+
+    if valid_refs is None:
+        valid_refs = available_refs(dataset)
+    issues = validate_strategy(s, valid_refs, meta)
+    errors = [i for i in issues if i.is_error]
+    if errors:
+        return {"success": False, "error": errors[0].message,
+                "issues": [_issue_dict(i) for i in issues]}
+
+    res = run_sweep(s, dataset) if s.sweep.axis != "none" else run_strategy_ir(s, dataset)
+    if res.get("success"):
+        res["warnings"] = [_issue_dict(i) for i in issues]
     return res

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from quant_core.blocks import DatasetMeta, available_refs, catalog_spec
-from quant_core.ir_engine import backtest_from_spec
+from quant_core.ir_engine import backtest_from_spec, strategy_from_spec
 
 from ..data_cache import get_dataset
 from ..deps import get_current_user
@@ -58,5 +58,29 @@ def ir_backtest(body: IrBacktestIn, user: User = Depends(get_current_user)):
         return {"success": False, "error": res.get("error"),
                 "issues": res.get("issues", [])}
     payload = serialize_backtest(res)
+    payload["warnings"] = res.get("warnings", [])
+    return payload
+
+
+@router.post("/strategy")
+def ir_strategy(body: dict, user: User = Depends(get_current_user)):
+    """완전한 StrategyIR(유니버스·신호·포지션 4부품·시뮬·펼침) 백테스트.
+
+    sweep.axis != none이면 펼침 resultset(버킷), 아니면 1회 백테스트 결과.
+    """
+    dataset = get_dataset()
+    res = strategy_from_spec(
+        body, dataset, valid_refs=available_refs(dataset), meta=DatasetMeta())
+    if not res.get("success"):
+        return {"success": False, "error": res.get("error"),
+                "issues": res.get("issues", [])}
+    if res.get("axis"):   # 펼침 resultset (equity Series는 JSON 비호환이라 제외)
+        out = {"success": True, "axis": res["axis"], "buckets": res.get("buckets", {}),
+               "warnings": res.get("warnings", [])}
+        for k in ("overall", "param", "metrics"):
+            if k in res:
+                out[k] = res[k]
+        return out
+    payload = serialize_backtest(res)          # 1회 백테스트
     payload["warnings"] = res.get("warnings", [])
     return payload
