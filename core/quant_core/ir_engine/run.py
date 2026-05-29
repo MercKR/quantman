@@ -22,8 +22,14 @@ from ..backtest import (
 from ..blocks import EvalContext, evaluate
 from ..blocks.catalog import get, has
 from .backtest import run_backtest_ir, run_portfolio_ir
+from .compare import (
+    compare_partition, one_sample_test, two_sample_test, walk_forward_consistency,
+)
+from .metrics import finalize_metrics
 from .spec import StrategyIR
-from .sweep import daily_returns, summarize_returns, sweep_condition
+from .sweep import (
+    daily_returns, partition_by_label, summarize_returns, sweep_condition,
+)
 
 TRADING_DAYS = 252
 
@@ -84,6 +90,10 @@ def _universe_symbols(strategy: StrategyIR, dataset: dict) -> list[str]:
     u = strategy.universe
     if u.kind in ("single", "list"):
         return [s for s in u.symbols if s in dataset and not dataset[s].empty]
+    if u.kind == "screener":
+        # 동적 스크리너 해결은 데이터 연동 후(legacy screener 통합 예정).
+        # 조용히 all로 폴백하지 않는다 — validate_strategy가 사전 차단.
+        return []
     # all — 매크로/자산 지수 제외, OHLC 보유 종목
     macro: set = set()
     if u.exclude_macro:
@@ -271,7 +281,8 @@ def _run_rebalance(strategy: StrategyIR, dataset: dict) -> dict:
         bench += ((1 + rets[s]).cumprod() * w0).to_numpy()
     benchmark = pd.Series(bench, index=master, name="Buy&Hold")
 
-    met = _metrics(equity, benchmark, pd.DataFrame())
+    met = finalize_metrics(_metrics(equity, benchmark, pd.DataFrame()),
+                           equity, benchmark, pd.DataFrame())
     met["turnover"] = float(turnover.mean() * 100)
     return {"success": True, "error": None, "equity": equity,
             "benchmark": benchmark, "trades": pd.DataFrame(), "metrics": met}
@@ -340,9 +351,119 @@ def run_sweep(strategy: StrategyIR, dataset: dict) -> dict:
             label_series = lab[col]
         else:
             label_series = lab
+        rets = daily_returns(res["equity"])
+        parts = partition_by_label(rets, label_series)
         return {"success": True, "axis": "condition",
-                "overall": summarize_returns(daily_returns(res["equity"])),
+                "overall": summarize_returns(rets),
                 "buckets": sweep_condition(res["equity"], label_series),
+                "compare": compare_partition(parts),   # A1 — 국면 간 유의성
                 "metrics": res["metrics"], "equity": res["equity"]}
 
+    if sw.axis == "time":
+        return _run_event_study(strategy, dataset)
+
     return _empty(f"미지원 펼침 축: {sw.axis}")
+
+
+# ── 기간분할 (비전 §3.5·§6) — 워크포워드/OOS/시계열 k-fold ────────────────────
+
+def run_period_split(strategy: StrategyIR, dataset: dict) -> dict:
+    """전략을 1회 실행한 뒤 수익을 시간순 폴드로 나눠 OOS 일관성을 본다.
+
+    walk_forward·kfold: 4폴드(시간순), oos: 인샘플/아웃샘플 2분할. 무작위 분할이
+    아니라 항상 시간 순서 유지(§6.2 — 미래로 학습해 과거 검증하는 오류 차단).
+    """
+    res = run_strategy_ir(strategy, dataset)
+    if not res.get("success"):
+        return res
+    rets = daily_returns(res["equity"])
+    mode = strategy.simulation.period_split
+    n = 2 if mode == "oos" else 4
+    folds = [f for f in np.array_split(rets.to_numpy(), n) if len(f) > 0]
+    buckets = {}
+    for i, f in enumerate(folds):
+        if mode == "oos":
+            label = "인샘플" if i == 0 else "아웃샘플"
+        else:
+            label = f"구간{i + 1}"
+        buckets[label] = summarize_returns(pd.Series(f))
+    return {"success": True, "axis": "period_split", "buckets": buckets,
+            "consistency": walk_forward_consistency(rets, n_folds=n),
+            "metrics": res["metrics"]}
+
+
+# ── 이벤트 스터디 (비전 §4 시간축) ────────────────────────────────────────────
+
+def _run_event_study(strategy: StrategyIR, dataset: dict) -> dict:
+    """이벤트(신호 참) 발생일 기준 forward N일 수익 분포 + entry-시점 라벨 조건 + 유의성.
+
+    "돌파 후 과매도 반등이 실제로 유의한가", "변동성 확대가 mean reversion 선행지표인가"
+    같은 질문에 답한다. 백테스트(P&L)가 아니라 조건부 forward 수익 분석.
+    """
+    from collections import defaultdict
+
+    syms = _universe_symbols(strategy, dataset)
+    if not syms:
+        return _empty("이벤트 분석 유니버스에 종목이 없습니다.")
+    windows = strategy.sweep.windows or [5, 10, 20]
+    ctx = EvalContext.from_dataset(dataset)
+    ev_node = strategy.sweep.event or strategy.signal
+    ev_panel = evaluate(ev_node, ctx)
+    if not isinstance(ev_panel, pd.DataFrame):
+        return _empty("이벤트 신호가 패널을 산출하지 않습니다.")
+    ev_panel = ev_panel.astype(bool)
+
+    label_panel = None
+    if strategy.sweep.label is not None:
+        lp = evaluate(strategy.sweep.label, ctx)
+        label_panel = lp if isinstance(lp, pd.DataFrame) else None
+
+    sim = strategy.simulation
+    collected: dict[int, list] = {w: [] for w in windows}   # w → [(ret, regime)]
+    n_events = 0
+    for sym in syms:
+        df = dataset.get(sym)
+        if df is None or "Close" not in df.columns:
+            continue
+        close = df["Close"]
+        idx = close.index
+        if sym not in ev_panel.columns:
+            continue
+        ev = ev_panel[sym].reindex(idx, fill_value=False)
+        if sim.start is not None:
+            ev = ev[ev.index >= pd.Timestamp(sim.start)]
+        if sim.end is not None:
+            ev = ev[ev.index <= pd.Timestamp(sim.end)]
+        fwd = {w: (close.shift(-w) / close - 1.0) for w in windows}
+        reg = (label_panel[sym].reindex(idx)
+               if (label_panel is not None and sym in label_panel.columns) else None)
+        ev_dates = ev.index[ev.to_numpy(dtype=bool)]
+        n_events += len(ev_dates)
+        for d in ev_dates:
+            r = float(reg.loc[d]) if (reg is not None and not pd.isna(reg.loc[d])) else None
+            for w in windows:
+                v = fwd[w].get(d, np.nan)
+                if not pd.isna(v):
+                    collected[w].append((float(v), r))
+
+    overall: dict = {}
+    by_regime: dict | None = {} if label_panel is not None else None
+    for w in windows:
+        rets = pd.Series([x[0] for x in collected[w]], dtype=float)
+        overall[str(w)] = one_sample_test(rets)
+        if by_regime is not None:
+            groups: dict = defaultdict(list)
+            for v, r in collected[w]:
+                if r is not None:
+                    groups[r].append(v)
+            regimes = {str(k): one_sample_test(pd.Series(v)) for k, v in groups.items()}
+            keys = sorted(groups.keys())
+            pairwise = {}
+            for i in range(len(keys)):
+                for j in range(i + 1, len(keys)):
+                    pairwise[f"{keys[i]}_vs_{keys[j]}"] = two_sample_test(
+                        pd.Series(groups[keys[i]]), pd.Series(groups[keys[j]]))
+            by_regime[str(w)] = {"by_regime": regimes, "pairwise": pairwise}
+
+    return {"success": True, "axis": "time", "windows": [str(w) for w in windows],
+            "n_events": int(n_events), "overall": overall, "by_regime": by_regime}

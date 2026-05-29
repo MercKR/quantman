@@ -61,6 +61,11 @@ PARAM_SPECS: dict[str, list[dict]] = {
     "group_neutralize": [{"name": "group_type", "kind": "select", "label": "그룹",
                           "options": ["Industry", "Sector"], "default": "Industry"}],
     "hump": [{"name": "threshold", "kind": "number", "label": "임계", "default": 0.0, "min": 0}],
+    "winsorize": [{"name": "lower", "kind": "number", "label": "하단(%)", "default": 5, "min": 0, "max": 100},
+                  {"name": "upper", "kind": "number", "label": "상단(%)", "default": 95, "min": 0, "max": 100}],
+    # ── 달력 라벨 ──
+    "calendar": [{"name": "unit", "kind": "select", "label": "단위",
+                  "options": ["weekday", "month", "monthweek"], "default": "weekday"}],
 }
 
 
@@ -106,7 +111,9 @@ BLOCK_META: dict[str, dict] = {
     "group_aggregate": {"label": "그룹 집계", "category": "그룹"},
     "group_neutralize": {"label": "그룹 중립화", "category": "그룹"},
     "bucket": {"label": "구간분할", "category": "라벨"},
+    "calendar": {"label": "달력 라벨", "category": "라벨"},
     "hump": {"label": "턴오버 억제", "category": "변환"},
+    "winsorize": {"label": "이상치 클립", "category": "변환"},
     "modifier": {"label": "지속성/최근성", "category": "수식어"},
 }
 

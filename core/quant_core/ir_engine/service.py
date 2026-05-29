@@ -15,7 +15,7 @@ from ..blocks import (
 )
 from ..blocks.validate import prioritize
 from .backtest import run_backtest_ir
-from .run import run_strategy_ir, run_sweep
+from .run import run_period_split, run_strategy_ir, run_sweep
 from .spec import StrategyIR, validate_strategy
 
 # run_backtest_ir로 그대로 전달할 청산/체결/기간 파라미터 (None이면 drop → 엔진 기본값).
@@ -116,7 +116,12 @@ def strategy_from_spec(
         return {"success": False, "error": errors[0].message,
                 "issues": [_issue_dict(i) for i in issues]}
 
-    res = run_sweep(s, dataset) if s.sweep.axis != "none" else run_strategy_ir(s, dataset)
+    if s.sweep.axis != "none":
+        res = run_sweep(s, dataset)
+    elif s.simulation.period_split != "single":
+        res = run_period_split(s, dataset)
+    else:
+        res = run_strategy_ir(s, dataset)
     if res.get("success"):
         res["warnings"] = [_issue_dict(i) for i in issues]
     return res

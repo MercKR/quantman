@@ -7,10 +7,10 @@
 """
 
 from .backtest import run_backtest_ir  # noqa: F401
-from .run import run_strategy_ir, run_sweep  # noqa: F401
+from .run import run_period_split, run_strategy_ir, run_sweep  # noqa: F401
 from .compare import (  # noqa: F401
     bootstrap_mean_ci, compare_partition, distribution, excess_distribution,
-    two_sample_test, walk_forward_consistency,
+    one_sample_test, two_sample_test, walk_forward_consistency,
 )
 from .service import backtest_from_spec, strategy_from_spec  # noqa: F401
 from .spec import (  # noqa: F401
@@ -23,7 +23,7 @@ from .sweep import (  # noqa: F401
 )
 
 __all__ = [
-    "run_backtest_ir", "run_strategy_ir", "run_sweep",
+    "run_backtest_ir", "run_strategy_ir", "run_sweep", "run_period_split",
     "backtest_from_spec", "strategy_from_spec",
     "StrategyIR", "Universe", "PositionSpec", "Sizing", "Entry", "Exit",
     "Overlays", "SimSpec", "SweepSpec", "validate_strategy", "signal_out_type",

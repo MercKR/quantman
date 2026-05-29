@@ -263,14 +263,31 @@ export interface IrSweepBucket {
   error?: string;
 }
 
-// StrategyIR 백테스트 결과 — 단일(equity/metrics) 또는 펼침(axis/buckets) 통합.
+export interface IrEventStat {
+  n: number; mean?: number; t_stat?: number; p_value?: number; prob_positive?: number;
+}
+export interface IrPairTest {
+  p_value?: number; mean_diff?: number; mean_a?: number; mean_b?: number;
+  n_a?: number; n_b?: number;
+}
+
+// StrategyIR 백테스트 결과 — 단일(equity/metrics)·펼침(axis/buckets)·이벤트(time) 통합.
 export interface IrStrategyResult extends BacktestResult {
   warnings?: IrIssue[];
   issues?: IrIssue[];
-  axis?: "condition" | "parameter" | "asset";
+  axis?: "condition" | "parameter" | "asset" | "time" | "period_split";
   buckets?: Record<string, IrSweepBucket>;
-  overall?: IrSweepBucket;
+  overall?: IrSweepBucket | Record<string, IrEventStat>;
   param?: string;
+  // condition축 유의성 (A1)
+  compare?: { pairwise?: Record<string, IrPairTest> };
+  // time축 이벤트 스터디 (A2)
+  windows?: string[];
+  n_events?: number;
+  by_regime?: Record<string, {
+    by_regime: Record<string, IrEventStat>;
+    pairwise: Record<string, IrPairTest>;
+  }>;
 }
 
 export interface BacktestRunSummary {

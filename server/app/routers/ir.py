@@ -75,10 +75,10 @@ def ir_strategy(body: dict, user: User = Depends(get_current_user)):
         return {"success": False, "error": res.get("error"),
                 "issues": res.get("issues", [])}
     if res.get("axis"):   # 펼침 resultset (equity Series는 JSON 비호환이라 제외)
-        out = {"success": True, "axis": res["axis"], "buckets": res.get("buckets", {}),
-               "warnings": res.get("warnings", [])}
-        for k in ("overall", "param", "metrics"):
-            if k in res:
+        out = {"success": True, "axis": res["axis"], "warnings": res.get("warnings", [])}
+        for k in ("buckets", "overall", "param", "metrics", "compare",
+                  "windows", "by_regime", "n_events"):
+            if k in res and res[k] is not None:
                 out[k] = res[k]
         return out
     payload = serialize_backtest(res)          # 1회 백테스트

@@ -158,6 +158,22 @@ def _ev_ts_halflife(resolved, params, ctx):
     return pd.DataFrame(out, index=x.index)
 
 
+# ── 축1: 달력 라벨링 (요일·월) — 입력 없이 날짜 인덱스에서 파생 ────────────────
+
+def _ev_calendar(resolved, params, ctx):
+    """날짜 인덱스에서 요일/월/월중주차 라벨 패널 생성 (펼침 달력 분할용)."""
+    unit = params.get("unit", "weekday")
+    idx = ctx.master_idx
+    if unit == "month":
+        vals = idx.month
+    elif unit == "monthweek":
+        vals = (idx.day - 1) // 7 + 1
+    else:  # weekday (0=월)
+        vals = idx.dayofweek
+    s = pd.Series(np.asarray(vals, dtype=float), index=idx)
+    return pd.DataFrame({sym: s for sym in ctx.symbols}, index=idx)
+
+
 # ── 등록 ──────────────────────────────────────────────────────────────────────
 
 register(BlockDef("ts_corr", ValueType.SCORE, _ev_ts_corr,
@@ -190,3 +206,6 @@ register(BlockDef("ts_autocorr", ValueType.SCORE, _ev_ts_autocorr,
 register(BlockDef("ts_halflife", ValueType.SCORE, _ev_ts_halflife,
                   slots={"signal": ValueType.SCORE},
                   param_defaults={"window": 60}, doc="평균회귀 반감기"))
+register(BlockDef("calendar", ValueType.LABEL, _ev_calendar,
+                  param_defaults={"unit": "weekday"},
+                  doc="달력 라벨(요일·월·월중주차)"))

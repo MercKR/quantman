@@ -21,6 +21,19 @@ def _clean(r: pd.Series) -> pd.Series:
     return r.dropna() if isinstance(r, pd.Series) else pd.Series(r).dropna()
 
 
+def one_sample_test(returns: pd.Series) -> dict:
+    """1표본 t-검정 — 수익률 평균이 0과 유의하게 다른가(이벤트 스터디용)."""
+    arr = _clean(returns).to_numpy(dtype=float)
+    if len(arr) < 2:
+        return {"n": int(len(arr)), "mean": np.nan, "t_stat": np.nan,
+                "p_value": np.nan, "prob_positive": np.nan}
+    from scipy import stats
+    t, p = stats.ttest_1samp(arr, 0.0)
+    return {"n": int(len(arr)), "mean": float(arr.mean() * 100),
+            "t_stat": float(t), "p_value": float(p),
+            "prob_positive": float((arr > 0).mean() * 100)}
+
+
 def two_sample_test(a: pd.Series, b: pd.Series) -> dict:
     """Welch 2표본 t-검정 — 두 수익률 분포의 평균이 유의하게 다른가."""
     a, b = _clean(a), _clean(b)

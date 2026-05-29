@@ -17,6 +17,7 @@ from ..backtest import (
 )
 from ..blocks import EvalContext, Node, evaluate, select_symbol
 from ..exec_defaults import round_to_tick
+from .metrics import finalize_metrics
 
 _REASON_KEYS = (
     ("익절", "tp"), ("손절", "sl"), ("ATR트레일링", "atr"),
@@ -244,7 +245,8 @@ def run_backtest_ir(
     return {
         "success": True, "error": None,
         "equity": equity_s, "benchmark": benchmark_s, "trades": trades_df,
-        "metrics": _metrics(equity_s, benchmark_s, trades_df),
+        "metrics": finalize_metrics(_metrics(equity_s, benchmark_s, trades_df),
+                                    equity_s, benchmark_s, trades_df),
     }
 
 
@@ -532,4 +534,5 @@ def run_portfolio_ir(
     trades_df = pd.DataFrame(trades)
     return {"success": True, "error": None, "equity": equity_s,
             "benchmark": benchmark_s, "trades": trades_df,
-            "metrics": _metrics(equity_s, benchmark_s, trades_df)}
+            "metrics": finalize_metrics(_metrics(equity_s, benchmark_s, trades_df),
+                                        equity_s, benchmark_s, trades_df)}

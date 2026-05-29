@@ -27,6 +27,16 @@ _cs("normalize", cs_normalize, "횡단 평균 차감(평균0)")
 _cs("scale", cs_scale, "절대 비중합=1 스케일")
 
 
+def _ev_winsorize(resolved, params, ctx):
+    """횡단 이상치 클립 — 매 날짜 [lower%, upper%] 분위로 극단값 절단(목적태그)."""
+    x = resolved["signal"]
+    lo = float(params.get("lower", 5)) / 100.0
+    hi = float(params.get("upper", 95)) / 100.0
+    ql = x.quantile(lo, axis=1)
+    qh = x.quantile(hi, axis=1)
+    return x.clip(lower=ql, upper=qh, axis=0)
+
+
 def _ev_group_neutralize(resolved, params, ctx):
     return group_neutralize(resolved["signal"], params.get("group_type", "Industry"))
 
@@ -42,3 +52,7 @@ register(BlockDef("group_neutralize", ValueType.SCORE, _ev_group_neutralize,
 register(BlockDef("hump", ValueType.SCORE, _ev_hump,
                   slots={"signal": ValueType.SCORE},
                   param_defaults={"threshold": 0.0}, doc="가중치 변동폭 억제(턴오버↓)"))
+register(BlockDef("winsorize", ValueType.SCORE, _ev_winsorize,
+                  slots={"signal": ValueType.SCORE},
+                  param_defaults={"lower": 5, "upper": 95}, requires_panel=True,
+                  doc="횡단 이상치 클립(분위 절단)"))

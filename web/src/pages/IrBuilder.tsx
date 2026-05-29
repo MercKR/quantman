@@ -3,7 +3,7 @@ import { api } from "../api";
 import BlockTree, { type Catalog } from "../components/BlockTree";
 import EquityChart from "../components/EquityChart";
 import type {
-  IrBlockSpec, IrNode, IrStrategyResult, SymbolInfo,
+  IrBlockSpec, IrEventStat, IrNode, IrStrategyResult, SymbolInfo,
 } from "../types";
 
 /**
@@ -17,6 +17,7 @@ const METRIC_LABELS: [string, string, string][] = [
   ["total_return", "총수익률", "%"], ["cagr", "연수익률(CAGR)", "%"],
   ["mdd", "최대낙폭(MDD)", "%"], ["sharpe", "샤프", ""],
   ["n_trades", "거래수", ""], ["win_rate", "승률", "%"],
+  ["avg_trade_return", "평균 거래수익률", "%"], ["avg_hold", "평균 보유일", ""],
 ];
 
 const SIZING_OPTS: [string, string][] = [
@@ -40,7 +41,7 @@ function fmt(v: number | null | undefined, suffix: string): string {
 }
 
 type Mode = "rule" | "factor";
-type SweepAxis = "none" | "condition" | "parameter" | "asset";
+type SweepAxis = "none" | "condition" | "parameter" | "asset" | "time";
 
 export default function IrBuilder() {
   const [catalogList, setCatalogList] = useState<IrBlockSpec[]>([]);
@@ -69,8 +70,23 @@ export default function IrBuilder() {
   const [sweepParamValues, setSweepParamValues] = useState("10, 20, 30");
   const [sweepAssets, setSweepAssets] = useState("");
   const [sweepLabel, setSweepLabel] = useState<IrNode | null>(null);
+  const [sweepWindows, setSweepWindows] = useState("5, 10, 20");
 
   const [capital, setCapital] = useState(10_000_000);
+  // 시뮬레이션 (A5)
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [delay, setDelay] = useState(1);
+  const [fill, setFill] = useState("next_open");
+  const [leverage, setLeverage] = useState(1);
+  const [periodSplit, setPeriodSplit] = useState("single");
+  // 포지션 세부·오버레이 (A6)
+  const [maxPositionPct, setMaxPositionPct] = useState<number | "">("");
+  const [volWindow, setVolWindow] = useState(20);
+  const [volTarget, setVolTarget] = useState<number | "">("");
+  const [turnoverDamp, setTurnoverDamp] = useState<number | "">("");
+  const [maxDdStop, setMaxDdStop] = useState<number | "">("");
+
   const [result, setResult] = useState<IrStrategyResult | null>(null);
   const [running, setRunning] = useState(false);
 
@@ -114,6 +130,15 @@ export default function IrBuilder() {
   function buildStrategy(): Record<string, unknown> {
     const syms = universeSymbols.split(",").map((s) => s.trim()).filter(Boolean);
     const sweep = buildSweep();
+    const sim: Record<string, unknown> = {
+      initial_capital: capital, delay, fill, leverage, period_split: periodSplit,
+      start: startDate || null, end: endDate || null,
+    };
+    const overlays: Record<string, unknown> = {};
+    if (volTarget !== "") overlays.vol_target = volTarget;
+    if (turnoverDamp !== "") overlays.turnover_damp = turnoverDamp;
+    if (maxDdStop !== "") overlays.max_drawdown_stop = maxDdStop;
+
     if (mode === "rule") {
       return {
         name: "연구소 전략",
@@ -130,21 +155,24 @@ export default function IrBuilder() {
             stop_loss: stopLoss === "" ? null : stopLoss,
             condition: exitMode === "on_condition" ? exitCond : null,
           },
+          overlays,
         },
-        simulation: { initial_capital: capital },
+        simulation: sim,
         sweep,
       };
     }
+    const sizing: Record<string, unknown> = { mode: sizingMode, vol_window: volWindow };
+    if (maxPositionPct !== "") sizing.max_position_pct = maxPositionPct;
     return {
       name: "연구소 팩터",
       universe: syms.length ? { kind: "list", symbols: syms } : { kind: "all" },
       signal,
       position: {
-        direction,
-        sizing: { mode: sizingMode },
+        direction, sizing,
         entry: { mode: "scheduled", rebalance, top_n: topN === "" ? null : topN },
+        overlays,
       },
-      simulation: { initial_capital: capital },
+      simulation: sim,
       sweep,
     };
   }
@@ -159,6 +187,13 @@ export default function IrBuilder() {
     }
     if (sweepAxis === "asset") {
       return { axis: "asset", assets: sweepAssets.split(",").map((s) => s.trim()).filter(Boolean) };
+    }
+    if (sweepAxis === "time") {
+      return {
+        axis: "time", label: sweepLabel,
+        windows: sweepWindows.split(",").map((x) => Number(x.trim()))
+          .filter((n) => !Number.isNaN(n)),
+      };
     }
     if (sweepAxis === "condition") return { axis: "condition", label: sweepLabel };
     return { axis: "none" };
@@ -254,6 +289,16 @@ export default function IrBuilder() {
                 {REBALANCE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
             </label>
+            <label className="lab-field">종목당 상한(%)
+              <input type="number" value={maxPositionPct} placeholder="무제한"
+                     onChange={(e) => setMaxPositionPct(e.target.value === "" ? "" : Number(e.target.value))} />
+            </label>
+            {sizingMode === "vol_inverse" && (
+              <label className="lab-field">변동성 창(일)
+                <input type="number" value={volWindow}
+                       onChange={(e) => setVolWindow(Number(e.target.value))} />
+              </label>
+            )}
           </div>
         ) : (
           <>
@@ -286,6 +331,53 @@ export default function IrBuilder() {
             )}
           </>
         )}
+        <div className="lab-row" style={{ marginTop: 10 }}>
+          <label className="lab-field">변동성 타겟(%)
+            <input type="number" value={volTarget} placeholder="없음"
+                   onChange={(e) => setVolTarget(e.target.value === "" ? "" : Number(e.target.value))} />
+          </label>
+          <label className="lab-field">턴오버 억제
+            <input type="number" step={0.01} value={turnoverDamp} placeholder="없음"
+                   onChange={(e) => setTurnoverDamp(e.target.value === "" ? "" : Number(e.target.value))} />
+          </label>
+          <label className="lab-field">MDD 스톱(%)
+            <input type="number" value={maxDdStop} placeholder="없음"
+                   onChange={(e) => setMaxDdStop(e.target.value === "" ? "" : Number(e.target.value))} />
+          </label>
+        </div>
+      </div>
+
+      {/* 시뮬레이션 */}
+      <div className="panel">
+        <div className="panel-title">시뮬레이션</div>
+        <div className="lab-row">
+          <label className="lab-field">시작일
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </label>
+          <label className="lab-field">종료일
+            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          </label>
+          <label className="lab-field">체결지연(일)
+            <input type="number" value={delay} onChange={(e) => setDelay(Number(e.target.value))} />
+          </label>
+          <label className="lab-field">체결
+            <select value={fill} onChange={(e) => setFill(e.target.value)}>
+              <option value="next_open">익일 시가</option>
+              <option value="close">당일 종가</option>
+            </select>
+          </label>
+          <label className="lab-field">레버리지
+            <input type="number" step={0.5} value={leverage}
+                   onChange={(e) => setLeverage(Number(e.target.value))} />
+          </label>
+          <label className="lab-field">기간분할
+            <select value={periodSplit} onChange={(e) => setPeriodSplit(e.target.value)}>
+              <option value="single">없음</option>
+              <option value="walk_forward">워크포워드</option>
+              <option value="oos">인/아웃샘플</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       {/* 펼침 */}
@@ -298,6 +390,7 @@ export default function IrBuilder() {
               <option value="parameter">파라미터 그리드</option>
               <option value="asset">종목별</option>
               <option value="condition">국면별</option>
+              <option value="time">이벤트 분석</option>
             </select>
           </label>
           {sweepAxis === "parameter" && (
@@ -318,10 +411,25 @@ export default function IrBuilder() {
                      onChange={(e) => setSweepAssets(e.target.value)} />
             </label>
           )}
+          {sweepAxis === "time" && (
+            <label className="lab-field">forward 윈도우 (일, 쉼표)
+              <input type="text" value={sweepWindows} placeholder="5, 10, 20" style={{ minWidth: 160 }}
+                     onChange={(e) => setSweepWindows(e.target.value)} />
+            </label>
+          )}
         </div>
-        {sweepAxis === "condition" && (
+        {sweepAxis === "time" && (
+          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            이벤트 = 위 신호가 참인 날. 각 이벤트 후 윈도우별 수익 분포·유의성을 분석합니다(P&L 아님).
+            국면 블록을 넣으면 이벤트 시점 국면별로 나눠 비교합니다(선택).
+          </p>
+        )}
+        {(sweepAxis === "condition" || sweepAxis === "time") && (
           <div style={{ marginTop: 10 }}>
-            <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>국면 라벨 블록 (예: VIX 구간분할)</div>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
+              {sweepAxis === "time"
+                ? "국면 라벨 블록 (선택 — 예: 실현변동성 구간분할)"
+                : "국면 라벨 블록 (예: VIX 구간분할)"}</div>
             <BlockTree node={sweepLabel} catalog={catalog} symbols={symbols}
                        selfIndicators={selfIndicators} requiredType="label"
                        onChange={setSweepLabel} />
@@ -357,13 +465,20 @@ function ResultPanel({ result }: { result: IrStrategyResult }) {
     );
   }
 
+  // 이벤트 스터디 결과 (A2)
+  if (result.axis === "time") {
+    return <EventStudyPanel result={result} />;
+  }
+
   // 펼침 결과 — 버킷 표
   if (result.axis && result.buckets) {
     const rows = Object.entries(result.buckets);
+    const pairwise = result.compare?.pairwise ?? {};
     return (
       <div className="panel">
         <div className="panel-title">펼침 결과 — {result.axis === "parameter" ? "파라미터"
-          : result.axis === "asset" ? "종목별" : "국면별"}</div>
+          : result.axis === "asset" ? "종목별"
+          : result.axis === "period_split" ? "기간분할" : "국면별"}</div>
         {result.warnings?.length ? (
           <div className="warn-banner">⚠ {result.warnings.map((w) => w.message).join(" · ")}</div>
         ) : null}
@@ -382,6 +497,13 @@ function ResultPanel({ result }: { result: IrStrategyResult }) {
             ))}
           </tbody>
         </table>
+        {Object.keys(pairwise).length ? (
+          <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+            유의성(2표본 t): {Object.entries(pairwise).map(([k, v]) =>
+              `${k} → p=${v.p_value != null ? v.p_value.toFixed(4) : "—"}` +
+              (v.p_value != null && v.p_value < 0.05 ? " (유의)" : "")).join(" · ")}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -411,6 +533,83 @@ function ResultPanel({ result }: { result: IrStrategyResult }) {
         <div style={{ marginTop: 16 }}>
           <EquityChart equity={result.equity} benchmark={result.benchmark} />
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+function EventStudyPanel({ result }: { result: IrStrategyResult }) {
+  const windows = result.windows ?? [];
+  const overall = (result.overall ?? {}) as Record<string, IrEventStat>;
+  const byRegime = result.by_regime;
+  const pcell = (p?: number) => (
+    <td className={p != null && p < 0.05 ? "pos" : ""}>
+      {p != null ? p.toFixed(4) : "—"}</td>);
+  return (
+    <div className="panel">
+      <div className="panel-title">이벤트 분석 — forward 수익 분포</div>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        총 이벤트 {result.n_events ?? 0}건. p&lt;0.05면 평균이 0과 유의하게 다름.
+      </p>
+      <table className="sweep-table">
+        <thead><tr><th>윈도우(일)</th><th>표본</th><th>평균수익(%)</th>
+          <th>양(+)확률(%)</th><th>p-value</th></tr></thead>
+        <tbody>
+          {windows.map((w) => {
+            const o = overall[w] ?? ({} as IrEventStat);
+            return (
+              <tr key={w}>
+                <td>{w}</td><td>{o.n ?? "—"}</td>
+                <td className={(o.mean ?? 0) >= 0 ? "pos" : "neg"}>{fmt(o.mean, "")}</td>
+                <td>{fmt(o.prob_positive, "")}</td>
+                {pcell(o.p_value)}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {byRegime ? (
+        <>
+          <div className="panel-title" style={{ marginTop: 18, fontSize: 14 }}>
+            국면별 (이벤트 시점 기준)</div>
+          {windows.map((w) => {
+            const wr = byRegime[w];
+            if (!wr) return null;
+            return (
+              <div key={w} style={{ marginBottom: 12 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>{w}일 후</div>
+                <table className="sweep-table">
+                  <thead><tr><th>국면</th><th>표본</th><th>평균수익(%)</th>
+                    <th>양확률(%)</th><th>p(vs 0)</th></tr></thead>
+                  <tbody>
+                    {Object.entries(wr.by_regime).map(([rk, o]) => (
+                      <tr key={rk}>
+                        <td>{rk}</td><td>{o.n ?? "—"}</td>
+                        <td className={(o.mean ?? 0) >= 0 ? "pos" : "neg"}>{fmt(o.mean, "")}</td>
+                        <td>{fmt(o.prob_positive, "")}</td>
+                        {pcell(o.p_value)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {Object.keys(wr.pairwise).length ? (
+                  <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                    국면 차이: {Object.entries(wr.pairwise).map(([k, v]) =>
+                      `${k} Δ=${v.mean_diff != null ? v.mean_diff.toFixed(2) : "—"}%, ` +
+                      `p=${v.p_value != null ? v.p_value.toFixed(4) : "—"}` +
+                      (v.p_value != null && v.p_value < 0.05 ? " (유의)" : "")).join(" · ")}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </>
+      ) : null}
+
+      {result.warnings?.length ? (
+        <div className="warn-banner" style={{ marginTop: 10 }}>
+          ⚠ {result.warnings.map((w) => w.message).join(" · ")}</div>
       ) : null}
     </div>
   );

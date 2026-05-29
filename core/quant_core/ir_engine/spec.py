@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from ..blocks.catalog import get, has
 from ..blocks.integrity import DatasetMeta, integrity_issues
 from ..blocks.node import Node
-from ..blocks.validate import SEV_ERROR, Issue, prioritize, validate
+from ..blocks.validate import SEV_ERROR, SEV_INTEGRITY_WARN, Issue, prioritize, validate
 
 # ── 유니버스 (대상 종목 집합) ─────────────────────────────────────────────────
 
@@ -110,11 +110,12 @@ class SimSpec(BaseModel):
 
 class SweepSpec(BaseModel):
     axis: Literal["none", "condition", "parameter", "asset", "time"] = "none"
-    label: Optional[Node] = None        # condition축: 라벨 블록(국면 등)
+    label: Optional[Node] = None        # condition·time축: 라벨 블록(국면 등)
     param_path: Optional[str] = None    # parameter축: "simulation.commission" 등 경로
     param_values: list = Field(default_factory=list)  # parameter축: 값 목록
     assets: list[str] = Field(default_factory=list)   # asset축: 종목/유니버스 목록
-    event: Optional[Node] = None        # time축: 이벤트 조건(이벤트 스터디)
+    event: Optional[Node] = None        # time축: 이벤트 조건(미지정 시 signal 사용)
+    windows: list[int] = Field(default_factory=lambda: [5, 10, 20])  # time축: forward 윈도우(일)
 
 
 # ── 전략 (통합) ───────────────────────────────────────────────────────────────
@@ -152,6 +153,17 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
         issues.append(Issue("S-size", SEV_ERROR,
                             "신호비례 사이징은 신호가 score여야 합니다.", "position.sizing"))
 
+    # 포지션 짝 제약 (비전 §3.3)
+    if pos.sizing.mode == "fixed_risk" and pos.sizing.atr_mult is None:
+        issues.append(Issue("S-pair", SEV_ERROR,
+                            "고정위험 사이징은 atr_mult가 필요합니다.", "position.sizing"))
+    if pos.sizing.mode == "kelly":
+        issues.append(Issue("S-pair", SEV_INTEGRITY_WARN,
+                            "켈리 사이징은 현재 동일가중으로 근사됩니다(입력 미지원).", "position.sizing"))
+    if ent.mode == "always" and pos.exit.mode != "daily":
+        issues.append(Issue("S-pair", SEV_INTEGRITY_WARN,
+                            "상시 진입은 매일 리밸런싱이라 청산 규칙이 무시됩니다.", "position.exit"))
+
     # 유니버스
     if u.kind == "single" and len(u.symbols) != 1:
         issues.append(Issue("S-univ", SEV_ERROR, "단일 유니버스는 종목 1개가 필요합니다.", "universe"))
@@ -160,6 +172,10 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
     if ent.mode == "on_signal" and u.kind == "all":
         issues.append(Issue("S-univ", SEV_ERROR,
                             "전체 유니버스는 정기리밸런싱(scheduled)·상시(always) 진입과 함께 쓰세요.", "universe"))
+    if u.kind == "screener":
+        issues.append(Issue("S-univ", SEV_ERROR,
+                            "screener 유니버스 동적 해결은 데이터 연동 후 지원됩니다 — 현재는 전체/리스트를 쓰세요.",
+                            "universe"))
 
     # 매도 조건 노드
     if pos.exit.condition is not None:
@@ -170,8 +186,22 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
     # 펼침
     if s.sweep.axis == "condition" and s.sweep.label is None:
         issues.append(Issue("S-sweep", SEV_ERROR, "조건축 펼침은 라벨 블록이 필요합니다.", "sweep"))
+    if s.sweep.axis == "time":
+        ev = s.sweep.event or s.signal
+        if signal_out_type(ev) != "condition":
+            issues.append(Issue("S-event", SEV_ERROR,
+                                "이벤트 분석은 이벤트 신호가 condition(발생 여부)이어야 합니다.", "sweep.event"))
+        if not s.sweep.windows:
+            issues.append(Issue("S-event", SEV_ERROR, "이벤트 분석은 forward 윈도우가 필요합니다.", "sweep.windows"))
     if s.sweep.label is not None:
         issues += list(validate(s.sweep.label, valid_refs))
+    if s.sweep.event is not None:
+        issues += list(validate(s.sweep.event, valid_refs))
+
+    # 기간분할 × 펼침 동시 사용 금지 (2D 모호성 차단)
+    if s.sweep.axis != "none" and s.simulation.period_split != "single":
+        issues.append(Issue("S-split", SEV_ERROR,
+                            "기간분할과 펼침은 동시에 쓸 수 없습니다 — 하나만 선택하세요.", "simulation"))
 
     # 무결성
     if meta is None:
