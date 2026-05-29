@@ -1,6 +1,7 @@
 import type {
   AnalysisResult, BacktestResult, BacktestRunDetail, BacktestRunSummary,
-  CommandRow, CommandType, DeviceRow, MarketContext, NextDayPreview, PortfolioRisk,
+  CommandRow, CommandType, DeviceRow, IrBacktestResult, IrBlockSpec, IrNode,
+  MarketContext, NextDayPreview, PortfolioRisk,
   ScreenerField, ScreenerMatch, ScreenerPreset, ScreenerSpecIO, ScreenerUserPreset,
   StrategyDef, StrategyRow, StrategyStats, StrategyVersionRow,
   SymbolInfo, SyncSnapshot, TradingTimeline, UserSettingsIO,
@@ -181,6 +182,24 @@ export const api = {
 
   // 자동매매 타임라인 — [now-24h, now+24h] 이벤트 + heartbeat 상태
   getTradingTimeline: () => req<TradingTimeline>("/trading/timeline"),
+
+  // 블록 IR 노코드 빌더 (P1-7) — 자기서술 카탈로그 + IR 백테스트
+  irCatalog: () => req<{ blocks: IrBlockSpec[] }>("/ir/catalog"),
+  runIrBacktest: (body: {
+    trade_symbol: string;
+    buy: IrNode;
+    sell?: IrNode | null;
+    hold_days?: number | null;
+    take_profit?: number | null;
+    stop_loss?: number | null;
+    trail_atr_mult?: number | null;
+    trail_pct?: number | null;
+    initial_capital?: number;
+    start?: string;
+    end?: string;
+  }) => req<IrBacktestResult>("/ir/backtest", {
+    method: "POST", body: JSON.stringify(body),
+  }),
 };
 
 // 로컬앱 다운로드 — 플랫폼별 zip URL 조회.

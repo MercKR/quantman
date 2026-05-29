@@ -2097,3 +2097,57 @@ thead th { color: var(--muted); font-weight: 600; }
 .trading-timeline .tl-loading,
 .trading-timeline .tl-empty   { color: var(--muted); font-size: 13px; padding: 8px 0; }
 .trading-timeline .tl-error   { color: var(--red); font-size: 13px; }
+
+/* ── 전략 연구소 (블록 IR 노코드 빌더, P1-7) ───────────────────────────────── */
+.panel-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+
+.lab-row { display: flex; flex-wrap: wrap; gap: 14px; }
+.lab-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px;
+  font-weight: 600; color: var(--muted); }
+.lab-field input, .lab-field select { font-weight: 400; min-width: 160px; }
+
+.lab-actions { position: sticky; bottom: 0; padding: 14px 0; margin-top: 6px;
+  background: linear-gradient(transparent, var(--bg) 40%); display: flex; }
+.lab-actions button { padding: 10px 22px; font-size: 15px; }
+
+/* 블록 — 문장빌더 미학(테라코타 좌보더). 출력 타입별 좌보더 색으로 점수/조건 구분 */
+.block { border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 9px 11px; background: var(--panel); margin: 5px 0; }
+.block[data-out="condition"] { border-left-color: var(--accent-strong); }
+.block[data-out="label"] { border-left-color: var(--amber); }
+.block-leaf { border-left-color: var(--border); background: var(--accent-soft); padding: 6px 8px; }
+.block-unknown { border-left-color: var(--red); color: var(--red); }
+
+.block-head { display: flex; align-items: center; gap: 8px; }
+.block-label { font-weight: 600; font-size: 14px; }
+.block-type { font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 7px; }
+.block-x { margin-left: auto; background: transparent; border: none; color: var(--muted);
+  cursor: pointer; padding: 2px 6px; font-size: 13px; font-weight: 700; }
+.block-x:hover { background: transparent; color: var(--red); }
+
+.block-params { display: flex; flex-wrap: wrap; gap: 10px; margin: 7px 0 2px; }
+.block-params label { display: flex; align-items: center; gap: 5px; font-size: 12px;
+  color: var(--muted); font-weight: 600; margin: 0; }
+.block-params input, .block-params select { padding: 4px 8px; font-size: 13px; font-weight: 400; }
+.block-params input { width: 84px; }
+
+.block-slot { display: flex; gap: 8px; align-items: flex-start; margin: 5px 0 0 6px;
+  padding-left: 9px; border-left: 1px dashed var(--border); }
+.slot-label { font-size: 12px; color: var(--muted); min-width: 44px; padding-top: 7px; }
+.slot-body { flex: 1; min-width: 0; }
+
+.leaf-row { display: flex; align-items: center; gap: 6px; }
+.leaf-row select, .leaf-row input { padding: 4px 8px; font-size: 13px; }
+.const-input { width: 140px; }
+
+.slot-picker { border-style: dashed; color: var(--muted); background: var(--bg); }
+
+.stat-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
+.stat-grid .stat { flex: 1; min-width: 110px; }
+
+.warn-banner { background: var(--amber-soft); color: var(--amber); border: 1px solid var(--amber);
+  border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
+.result-fail { border-color: var(--red); }
+.issue-list { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.issue-list code { background: var(--red-soft); color: var(--red); padding: 1px 5px; border-radius: 4px; }

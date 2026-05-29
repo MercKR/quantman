@@ -211,6 +211,51 @@ export interface BacktestResult {
   run_created_at?: string;
 }
 
+// ── 블록 IR (노코드 빌더) ────────────────────────────────────────────────────
+// 자기서술 카탈로그(/ir/catalog)를 소비 — 프론트는 블록 지식을 하드코딩하지 않는다.
+
+export interface IrNode {
+  op: string;
+  inputs?: Record<string, IrNode>;     // 가지 빈칸 — 슬롯명 → 하위 블록(재귀)
+  params?: Record<string, unknown>;    // 잎 빈칸 — window·op·ref·value 등
+}
+
+export type IrValueType =
+  "score" | "condition" | "scalar" | "label" | "distribution" | "resultset";
+
+export interface IrParamSpec {
+  name: string;
+  kind: "ref" | "number" | "number_list" | "select";
+  label?: string;
+  options?: string[];
+  default?: unknown;
+  required?: boolean;
+  min?: number;
+  max?: number;
+}
+
+export interface IrBlockSpec {
+  op: string;
+  label: string;
+  category: string;
+  out_type: IrValueType;
+  slots: Record<string, IrValueType>;     // 슬롯명 → 요구 타입
+  variadic: boolean;
+  variadic_type: IrValueType | null;
+  params: IrParamSpec[];
+  requires_panel: boolean;
+  doc: string;
+}
+
+export interface IrIssue {
+  rule: string; severity: number; message: string; path: string;
+}
+
+export interface IrBacktestResult extends BacktestResult {
+  warnings?: IrIssue[];   // 비차단 무결성 경고 (PIT 미태깅 등)
+  issues?: IrIssue[];     // 차단 사유 (success=false일 때)
+}
+
 export interface BacktestRunSummary {
   id: number;
   name: string;
