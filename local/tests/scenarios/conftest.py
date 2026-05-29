@@ -16,7 +16,6 @@ if str(_LOCAL) not in sys.path:
     sys.path.insert(0, str(_LOCAL))
 
 from sim.broker import SimBroker
-from sim import scenario
 
 
 @pytest.fixture
@@ -32,13 +31,3 @@ def isolated_trader(tmp_path, monkeypatch):
 
     broker = SimBroker()
     return tr.Trader(broker), broker
-
-
-def buy_and_fill(trader, broker, sid: str, symbol: str, qty: int, price: float,
-                  strat_name: str = "T"):
-    """매수 발주(SUBMITTED→PENDING) → WS 전량 체결(PENDING→FILLED). order_no 반환."""
-    r = broker.buy_limit(symbol, qty, int(price))
-    trader._after_submit(r, sid, strat_name, {}, symbol, "buy", qty, price, int(price),
-                          {"use_limit": True, "buy_tolerance_pct": 1.0}, [], reason="매수신호")
-    scenario.inject_ws_fill(trader, broker, r["order_no"], qty, price)
-    return r["order_no"]
