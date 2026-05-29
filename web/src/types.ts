@@ -256,6 +256,23 @@ export interface IrBacktestResult extends BacktestResult {
   issues?: IrIssue[];     // 차단 사유 (success=false일 때)
 }
 
+export interface IrSweepBucket {
+  n: number;
+  mean?: number; std?: number; sharpe?: number;
+  cum_return?: number; win_rate?: number;
+  error?: string;
+}
+
+// StrategyIR 백테스트 결과 — 단일(equity/metrics) 또는 펼침(axis/buckets) 통합.
+export interface IrStrategyResult extends BacktestResult {
+  warnings?: IrIssue[];
+  issues?: IrIssue[];
+  axis?: "condition" | "parameter" | "asset";
+  buckets?: Record<string, IrSweepBucket>;
+  overall?: IrSweepBucket;
+  param?: string;
+}
+
 export interface BacktestRunSummary {
   id: number;
   name: string;

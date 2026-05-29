@@ -2151,3 +2151,11 @@ thead th { color: var(--muted); font-weight: 600; }
 .result-fail { border-color: var(--red); }
 .issue-list { margin: 8px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
 .issue-list code { background: var(--red-soft); color: var(--red); padding: 1px 5px; border-radius: 4px; }
+
+.sweep-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.sweep-table th, .sweep-table td { text-align: right; padding: 6px 10px;
+  border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.sweep-table th:first-child, .sweep-table td:first-child { text-align: left; }
+.sweep-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.sweep-table td.pos { color: var(--up); font-weight: 600; }
+.sweep-table td.neg { color: var(--down); font-weight: 600; }

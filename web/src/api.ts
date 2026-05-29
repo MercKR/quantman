@@ -1,6 +1,7 @@
 import type {
   AnalysisResult, BacktestResult, BacktestRunDetail, BacktestRunSummary,
   CommandRow, CommandType, DeviceRow, IrBacktestResult, IrBlockSpec, IrNode,
+  IrStrategyResult,
   MarketContext, NextDayPreview, PortfolioRisk,
   ScreenerField, ScreenerMatch, ScreenerPreset, ScreenerSpecIO, ScreenerUserPreset,
   StrategyDef, StrategyRow, StrategyStats, StrategyVersionRow,
@@ -200,6 +201,11 @@ export const api = {
   }) => req<IrBacktestResult>("/ir/backtest", {
     method: "POST", body: JSON.stringify(body),
   }),
+  // StrategyIR 전체 구조(유니버스·신호·포지션 4부품·시뮬·펼침) 백테스트
+  runIrStrategy: (strategy: Record<string, unknown>) =>
+    req<IrStrategyResult>("/ir/strategy", {
+      method: "POST", body: JSON.stringify(strategy),
+    }),
 };
 
 // 로컬앱 다운로드 — 플랫폼별 zip URL 조회.
