@@ -1,0 +1,192 @@
+"""신규 고급 블록 — 비전이 요구하나 기존 엔진엔 없던 연산.
+
+명세 §3: 축2b(시계열 관계)·축3 dispersion·축4 group_rank/aggregate·축1 bucket·
+축2a 시계열 동역학(halflife/autocorr). 보강① 포함.
+
+기존 코드에 없어 새로 구현 — 수학적 속성으로 검증(test_blocks_advanced.py).
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from ..expression_parser import get_symbol_group
+from .catalog import BlockDef, register
+from .types import ValueType
+
+
+# ── 축2b: 시계열 간 관계 ──────────────────────────────────────────────────────
+
+def _ev_ts_corr(resolved, params, ctx):
+    """두 패널의 롤링 상관(동행성). 종목별(컬럼별) 계산."""
+    a, b = resolved["a"], resolved["b"]
+    w = int(params.get("window", 20))
+    out = {}
+    for col in a.columns:
+        out[col] = a[col].rolling(w).corr(b[col]) if col in b.columns else np.nan
+    return pd.DataFrame(out, index=a.index)
+
+
+def _ev_ts_regression(resolved, params, ctx):
+    """롤링 선형적합 — output=beta(민감도) 또는 residual(고유 움직임)."""
+    y, x = resolved["y"], resolved["x"]
+    w = int(params.get("window", 20))
+    kind = params.get("output", "beta")
+    res = {}
+    for col in y.columns:
+        if col not in x.columns:
+            res[col] = pd.Series(np.nan, index=y.index)
+            continue
+        yc, xc = y[col], x[col]
+        cov = yc.rolling(w).cov(xc)
+        var = xc.rolling(w).var().replace(0, np.nan)
+        beta = cov / var
+        if kind == "beta":
+            res[col] = beta
+        else:  # residual = y - (alpha + beta*x), alpha = mean_y - beta*mean_x
+            alpha = yc.rolling(w).mean() - beta * xc.rolling(w).mean()
+            res[col] = yc - (alpha + beta * xc)
+    return pd.DataFrame(res, index=y.index)
+
+
+def _ev_orthogonalize(resolved, params, ctx):
+    """횡단 직교화 — 매 날짜 a를 b로 회귀한 잔차(b 방향 성분 제거)."""
+    a, b = resolved["a"], resolved["b"]
+    res = pd.DataFrame(np.nan, index=a.index, columns=a.columns, dtype=float)
+    for t in a.index:
+        av, bv = a.loc[t], b.loc[t]
+        m = av.notna() & bv.notna()
+        if int(m.sum()) >= 2:
+            xv = bv[m].to_numpy(dtype=float)
+            yv = av[m].to_numpy(dtype=float)
+            xm, ym = xv.mean(), yv.mean()
+            denom = ((xv - xm) ** 2).sum()
+            beta = ((xv - xm) * (yv - ym)).sum() / denom if denom > 0 else 0.0
+            res.loc[t, m] = yv - (ym + beta * (xv - xm))
+    return res
+
+
+# ── 축4: 그룹 ─────────────────────────────────────────────────────────────────
+
+def _groups(cols, group_type):
+    mapping = {c: get_symbol_group(c, group_type) for c in cols}
+    g: dict = {}
+    for c, grp in mapping.items():
+        g.setdefault(grp, []).append(c)
+    return g
+
+
+def _ev_group_rank(resolved, params, ctx):
+    x = resolved["signal"]
+    out = pd.DataFrame(np.nan, index=x.index, columns=x.columns, dtype=float)
+    for _, cols in _groups(x.columns, params.get("group_type", "Industry")).items():
+        out[cols] = x[cols].rank(axis=1, pct=True)
+    return out
+
+
+def _ev_group_aggregate(resolved, params, ctx):
+    x = resolved["signal"]
+    stat = params.get("stat", "mean")
+    out = pd.DataFrame(np.nan, index=x.index, columns=x.columns, dtype=float)
+    for _, cols in _groups(x.columns, params.get("group_type", "Industry")).items():
+        agg = x[cols].sum(axis=1) if stat == "sum" else x[cols].mean(axis=1)
+        for c in cols:
+            out[c] = agg
+    return out
+
+
+# ── 축3: 횡단 산포 ────────────────────────────────────────────────────────────
+
+def _ev_cs_dispersion(resolved, params, ctx):
+    """그날 종목값의 횡단 표준편차(산포)를 전 종목에 브로드캐스트."""
+    x = resolved["signal"]
+    disp = x.std(axis=1)
+    return pd.DataFrame({c: disp for c in x.columns}, index=x.index)
+
+
+# ── 축1: 구간분할 → label ─────────────────────────────────────────────────────
+
+def _ev_bucket(resolved, params, ctx):
+    """경계값 리스트로 값을 구간 라벨(0..len(edges))로. NaN 보존."""
+    x = resolved["signal"]
+    edges = params["edges"]
+    arr = x.to_numpy(dtype=float)
+    out = np.digitize(arr, bins=np.asarray(edges, dtype=float), right=False).astype(float)
+    out[np.isnan(arr)] = np.nan
+    return pd.DataFrame(out, index=x.index, columns=x.columns)
+
+
+# ── 축2a: 시계열 동역학 (보강①) ──────────────────────────────────────────────
+
+def _ev_ts_autocorr(resolved, params, ctx):
+    """롤링 자기상관(지속성) — 주어진 lag."""
+    x = resolved["signal"]
+    w = int(params.get("window", 20))
+    lag = int(params.get("lag", 1))
+
+    def ac(v):
+        s = pd.Series(v)
+        return s.autocorr(lag) if len(s) > lag else np.nan
+
+    out = {col: x[col].rolling(w).apply(ac, raw=True) for col in x.columns}
+    return pd.DataFrame(out, index=x.index)
+
+
+def _ev_ts_halflife(resolved, params, ctx):
+    """롤링 평균회귀 반감기 — AR(1) Δ=a+b·level_lag, phi=1+b, hl=-ln2/ln(phi)."""
+    x = resolved["signal"]
+    w = int(params.get("window", 60))
+
+    def hl(v):
+        v = np.asarray(v, dtype=float)
+        if len(v) < 3 or np.any(np.isnan(v)):
+            return np.nan
+        lev = v[:-1]
+        dlt = np.diff(v)
+        lm = lev.mean()
+        denom = ((lev - lm) ** 2).sum()
+        if denom <= 0:
+            return np.nan
+        b = ((lev - lm) * (dlt - dlt.mean())).sum() / denom
+        phi = 1 + b
+        if phi <= 0 or phi >= 1:
+            return np.nan          # 비정상·발산 — 반감기 정의 안 됨
+        return -np.log(2) / np.log(phi)
+
+    out = {col: x[col].rolling(w).apply(hl, raw=True) for col in x.columns}
+    return pd.DataFrame(out, index=x.index)
+
+
+# ── 등록 ──────────────────────────────────────────────────────────────────────
+
+register(BlockDef("ts_corr", ValueType.SCORE, _ev_ts_corr,
+                  slots={"a": ValueType.SCORE, "b": ValueType.SCORE},
+                  param_defaults={"window": 20}, doc="롤링 상관(동행성)"))
+register(BlockDef("ts_regression", ValueType.SCORE, _ev_ts_regression,
+                  slots={"y": ValueType.SCORE, "x": ValueType.SCORE},
+                  param_defaults={"window": 20, "output": "beta"},
+                  doc="롤링 선형적합(베타/잔차)"))
+register(BlockDef("orthogonalize", ValueType.SCORE, _ev_orthogonalize,
+                  slots={"a": ValueType.SCORE, "b": ValueType.SCORE},
+                  requires_panel=True, doc="횡단 직교화(잔차)"))
+register(BlockDef("group_rank", ValueType.SCORE, _ev_group_rank,
+                  slots={"signal": ValueType.SCORE},
+                  param_defaults={"group_type": "Industry"}, requires_panel=True,
+                  doc="그룹 내 순위"))
+register(BlockDef("group_aggregate", ValueType.SCORE, _ev_group_aggregate,
+                  slots={"signal": ValueType.SCORE},
+                  param_defaults={"group_type": "Industry", "stat": "mean"},
+                  requires_panel=True, doc="그룹별 평균·합"))
+register(BlockDef("cs_dispersion", ValueType.SCORE, _ev_cs_dispersion,
+                  slots={"signal": ValueType.SCORE}, requires_panel=True,
+                  doc="횡단 산포(표준편차)"))
+register(BlockDef("bucket", ValueType.LABEL, _ev_bucket,
+                  slots={"signal": ValueType.SCORE},
+                  doc="경계값으로 구간 라벨 부여"))
+register(BlockDef("ts_autocorr", ValueType.SCORE, _ev_ts_autocorr,
+                  slots={"signal": ValueType.SCORE},
+                  param_defaults={"window": 20, "lag": 1}, doc="롤링 자기상관(지속성)"))
+register(BlockDef("ts_halflife", ValueType.SCORE, _ev_ts_halflife,
+                  slots={"signal": ValueType.SCORE},
+                  param_defaults={"window": 60}, doc="평균회귀 반감기"))

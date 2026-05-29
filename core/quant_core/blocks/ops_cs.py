@@ -1,0 +1,44 @@
+"""축3 횡단 + 축4 그룹 + 변환 — expression_parser 순수함수 재사용.
+
+명세 §3 축3·축4. 기존 조건 문법엔 없던 연산. alpha 수식 엔진(ExpressionParser)에만
+있던 것을 타입드 블록으로 승격해 문장으로 노출한다.
+"""
+
+from __future__ import annotations
+
+from ..expression_parser import (
+    cs_normalize, cs_rank, cs_scale, cs_zscore, group_neutralize, hump,
+)
+from .catalog import BlockDef, register
+from .types import ValueType
+
+
+def _cs(op: str, fn, doc: str) -> None:
+    """(panel) → panel 횡단 함수를 블록으로 등록. PANEL 형태 입력 필요(규칙2)."""
+    def ev(resolved, params, ctx):
+        return fn(resolved["signal"])
+    register(BlockDef(op, ValueType.SCORE, ev, slots={"signal": ValueType.SCORE},
+                      requires_panel=True, doc=doc))
+
+
+_cs("rank", cs_rank, "횡단 순위(0~1)")
+_cs("zscore", cs_zscore, "횡단 표준화(평균0·표준편차1)")
+_cs("normalize", cs_normalize, "횡단 평균 차감(평균0)")
+_cs("scale", cs_scale, "절대 비중합=1 스케일")
+
+
+def _ev_group_neutralize(resolved, params, ctx):
+    return group_neutralize(resolved["signal"], params.get("group_type", "Industry"))
+
+
+def _ev_hump(resolved, params, ctx):
+    return hump(resolved["signal"], float(params.get("threshold", 0.0)))
+
+
+register(BlockDef("group_neutralize", ValueType.SCORE, _ev_group_neutralize,
+                  slots={"signal": ValueType.SCORE},
+                  param_defaults={"group_type": "Industry"}, requires_panel=True,
+                  doc="동일 그룹 평균 차감(그룹 효과 제거)"))
+register(BlockDef("hump", ValueType.SCORE, _ev_hump,
+                  slots={"signal": ValueType.SCORE},
+                  param_defaults={"threshold": 0.0}, doc="가중치 변동폭 억제(턴오버↓)"))
