@@ -18,6 +18,7 @@ if str(_LOCAL) not in sys.path:
     sys.path.insert(0, str(_LOCAL))
 
 from sim.broker import SimBroker
+from sim import invariants, scenario
 
 
 # ── SimBroker 기본 ────────────────────────────────────────────────────────────
@@ -43,3 +44,56 @@ def test_invariants_catch_negative_qty():
         pending: dict = {}
     with pytest.raises(AssertionError, match="INV-LEDGER-1"):
         check_ledger_nonneg(_T())
+
+
+# ── KRX 하루 E2E ──────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def isolated_trader(tmp_path, monkeypatch):
+    """trader 영속 경로를 tmp로 격리 + KST 날짜 고정 + 서버 push 차단."""
+    from localapp import trader as tr
+    from localapp import intraday_loop, killswitch
+    for name in ("LEDGER_PATH", "EQUITY_PATH", "PENDING_ORDERS_PATH",
+                 "REBALANCE_PATH", "TRADES_PATH"):
+        monkeypatch.setattr(tr, name, tmp_path / f"{name}.json")
+    monkeypatch.setattr(killswitch, "KILLSWITCH_PATH", tmp_path / "ks.json")
+    monkeypatch.setattr(intraday_loop, "push_snapshot", lambda *a, **k: None)
+    monkeypatch.setattr(tr, "kst_today", lambda: datetime.date(2026, 6, 1))
+
+    broker = SimBroker()
+    t = tr.Trader(broker)
+    return t, broker
+
+
+def test_krx_day_buy_fill_sell_settlement(isolated_trader):
+    t, broker = isolated_trader
+    sid = "strat1"
+
+    # 1) 매수 발주 → pending 등록 (실 _after_submit: SUBMITTED→PENDING)
+    r = broker.buy_limit("005930", 10, 70000)
+    t._after_submit(r, sid, "삼성", {}, "005930", "buy", 10, 70000, 70000,
+                    {"use_limit": True, "buy_tolerance_pct": 1.0}, [], reason="매수신호")
+    assert any(p["order_no"] == "0000000001" for p in t.pending.values())
+    invariants.check_all(t)
+
+    # 2) WS 체결 통보 → 원장 반영 (실 _on_exec_event: PENDING→FILLED)
+    scenario.inject_ws_fill(t, broker, "0000000001", 10, 70000.0)
+    assert t.ledger[sid]["qty"] == 10
+    assert not t.pending          # 전량 체결 → pending 회수
+    invariants.check_all(t)
+
+    # 3) 중복 체결 통보 → INV-FILL-1: qty 불변
+    scenario.inject_ws_fill(t, broker, "0000000001", 10, 70000.0)
+    assert t.ledger[sid]["qty"] == 10, "INV-FILL-1: 중복 체결이 이중 반영됨"
+
+    # 4) 매도 발주 + 체결 → 포지션 청산 (OPEN→FLAT)
+    r2 = broker.sell_limit("005930", 10, 71000)
+    t._after_submit(r2, sid, "삼성", {}, "005930", "sell", 10, 71000, 71000,
+                    {"use_limit": True, "sell_tolerance_pct": 1.0}, [], reason="청산")
+    scenario.inject_ws_fill(t, broker, r2["order_no"], 10, 71000.0)
+    assert sid not in t.ledger    # FLAT
+    invariants.check_all(t)
+
+    # 5) settlement — 미체결 정리 + reconcile(외부 매도 없음 → drift 없음)
+    scenario.run_settlement(t, broker, "2026-06-01")
+    invariants.check_all(t)
