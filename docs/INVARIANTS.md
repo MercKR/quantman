@@ -132,13 +132,19 @@
 
 ## 갭 요약 (강제 안 됨 / 테스트 미비 — Workbench가 채울 대상)
 
+**P4에서 채워진 항목** (시나리오 추가 완료):
+- ✅ INV-FILL-2 — `test_fill_paths.py::test_unpadded_ws_oder_no_is_recognized` (E2E unpadded WS)
+- ✅ INV-FILL-3 — `test_fill_paths.py::test_rest_polling_recognizes_fill`
+- ✅ INV-LEDGER-2 — `test_ledger_consistency.py::test_split_buy_weighted_average`
+- ✅ INV-RECON-1 — `test_ledger_consistency.py::test_external_sale_drift_reconciled` + `test_external_buy_does_not_touch_ledger`
+
+**남은 갭:**
+
 | INV | 상태 | 채울 단계 |
 |---|---|---|
-| INV-CAL-2 | 강제 O, 테스트 X (incident 재현) | P4 §9 |
-| INV-CATCHUP-1 | 강제 O, 테스트 X | P4 |
-| INV-LEDGER-2 | 강제 O, 테스트 X | P2/P4 시나리오 |
-| INV-RECON-1 | 강제 O, 테스트 X | P4 시나리오 |
-| INV-KS-1 (매수 0) | 강제 O, 시나리오 X | P4 |
-| INV-PRICE-1 | 강제 O, 테스트 X | P4 |
-| INV-API-1/2 | 강제 O, 테스트 X | 별도 |
-| INV-SEC-1 | 강제 O, 단언 테스트 X | P4 (보안 회귀) |
+| INV-CAL-2 | 강제 O, 테스트 X (incident 재현) | P4 §9 (점검가드 제거 회귀) |
+| INV-CATCHUP-1 | 강제 O, 테스트 X | P4 (catch-up 멱등 시나리오) |
+| INV-KS-1 (매수 0) | 강제 O, 시나리오 X | P4 (full cycle 셋업 필요) |
+| INV-PRICE-1 | 강제 O, 테스트 X | P4 (±30% 클램프) |
+| INV-API-1/2 | 강제 O, 테스트 X | 별도(throttle 단위) |
+| INV-SEC-1 | 강제 O, 단언 테스트 X | P4 (push payload 민감키 부재) |

@@ -34,7 +34,7 @@
 |---|---|---|
 | **P1** | INVARIANTS.md + ORDER_STATE_MACHINE.md (불변식·상태머신·9축 택소노미) | ✅ 완료 |
 | **P2** | SimBroker·invariants·scenario + KRX 하루 E2E + import 가드 | ✅ 완료 (125 passed) |
-| **P4** | 9축 갭 시나리오 백필 + 과거 incident 재현 + 커버리지 맵 | 🔲 진행 예정 |
+| **P4** | 9축 갭 시나리오 백필 + 과거 incident 재현 + 커버리지 맵 | 🔄 진행 중 (체결경로·원장정합성 채움, 131 passed) |
 | **P5** | M4(universe 단일출처) 리팩토링을 환경 위에서 실행 | 🔲 대기 |
 | **P3** | record-replay 픽스처(live 캡처) — **live 게이트 의존** | ⏳ 게이트 |
 
