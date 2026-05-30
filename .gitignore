@@ -44,6 +44,13 @@ core/data/fundamentals/*.parquet
 core/data/managed_kr_stocks.json
 core/data/managed_overseas_stocks.json
 core/data/us_market_caps.json
+core/data/_classification.json
+core/data/_listing.json
+
+# 대용량 데이터셋 번들(로컬앱 배포용 생성물, 155MB+) · 외부 doc 캐시 — repo 미포함
+core/dataset-bundle.tar.zst
+core/dataset-bundle.meta
+docs_cache/
 
 # 웹
 node_modules/

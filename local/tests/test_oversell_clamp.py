@@ -22,23 +22,26 @@ from localapp.intraday_stop import IntradayStopManager
 
 
 def _strat_def_for_loss():
-    """손절 -1%로 항상 트리거되는 최소 전략 정의."""
+    """손절 -1%로 항상 트리거되는 최소 IR 전략 정의."""
     return {
-        "name": "T",
-        "trade_symbol": "005930",
-        "universe": {"market": "KOSPI", "n_top": 10},
-        "buy_signal": {"all": []},
-        "sell_rules": {"stop_loss": -1.0},
-        "execution": {},
+        "name": "T", "engine": "ir",
+        "universe": {"kind": "single", "symbols": ["005930"]},
+        "signal": {"op": "compare", "params": {"op": ">"},
+                   "inputs": {"left": {"op": "data", "params": {"ref": "__SELF__.Close"}},
+                              "right": {"op": "const", "params": {"value": 0}}}},
+        "position": {"direction": "long", "entry": {"mode": "on_signal"},
+                     "exit": {"stop_loss": -1.0}},
     }
 
 
 def _ledger_one(symbol="005930", qty=10, entry=100.0, peak=100.0):
+    # 원장 엔트리가 definition을 자기완결로 보유(production _apply_fill과 동형) —
+    # on_tick은 pos["definition"]으로 청산 룰을 읽는다.
     return {
         "T:005930": {
             "symbol": symbol, "qty": qty,
             "entry_price": entry, "peak_price": peak,
-            "strategy_name": "T",
+            "strategy_name": "T", "definition": _strat_def_for_loss(),
         }
     }
 
@@ -50,7 +53,6 @@ def _mgr_with(broker_snapshot, ledger=None, submit=None):
     mgr = IntradayStopManager(
         broker=broker,
         get_ledger=lambda: ledger or _ledger_one(),
-        get_strat_def=lambda sid: _strat_def_for_loss(),
         submit_sell_fn=submit,
         dataset={},
     )

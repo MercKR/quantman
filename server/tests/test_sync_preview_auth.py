@@ -140,3 +140,57 @@ def test_web_preview_still_user_authed():
     r = client.get("/preview/next-day", headers=_jwt(tok))
     assert r.status_code == 200
     assert r.json()["available"] is True
+
+
+# ── /sync/strategies — engine을 definition에 주입(로컬앱 IR 디스패치 정합성) ─────
+
+_IR_DEF_MIN = {
+    "name": "IR pull",
+    "universe": {"kind": "single", "symbols": ["005930"]},
+    "signal": {"op": "compare", "params": {"op": ">"},
+               "inputs": {"left": {"op": "data", "params": {"ref": "__SELF__.Close"}},
+                          "right": {"op": "const", "params": {"value": 0}}}},
+    "position": {"direction": "long", "entry": {"mode": "on_signal"}},
+}
+
+
+def test_sync_strategies_injects_engine_into_definition():
+    """로컬앱 pull 시 definition에 engine 주입 — trader·intraday_stop이 그걸로 디스패치.
+
+    StrategyIR.model_dump엔 engine 필드가 없어 stored definition엔 빠져 있다(아래 create
+    응답으로 확인). /sync/strategies가 column 값을 definition에 합쳐 자기완결 spec으로 serve.
+    """
+    from app.routers import strategies as strategies_router
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as s:
+        user = User(email="t@example.com")
+        s.add(user); s.commit(); s.refresh(user)
+        s.add(Device(user_id=user.id, name="dev", token_hash=hash_token(_DEVICE_TOKEN)))
+        s.commit()
+        user_id = user.id
+
+    app = FastAPI()
+    app.include_router(strategies_router.router)
+    app.include_router(sync_router.router)
+
+    def _override():
+        with Session(engine) as s:
+            yield s
+    app.dependency_overrides[get_session] = _override
+    client = TestClient(app)
+    tok = create_access_token(user_id)
+
+    # IR 전략(paper) 생성 — 실 create 경로(검증 후 model_dump 저장)
+    r = client.post("/strategies", headers=_jwt(tok),
+                    json={"definition": _IR_DEF_MIN, "run_mode": "paper", "engine": "ir"})
+    assert r.status_code == 201, r.text
+    assert "engine" not in r.json()["definition"]   # stored definition엔 engine 없음(버그 전제)
+
+    # 로컬앱 pull — engine이 top-level + definition 양쪽에 실려 옴
+    rows = client.get("/sync/strategies", headers=_dev()).json()
+    assert len(rows) == 1
+    assert rows[0]["engine"] == "ir"
+    assert rows[0]["definition"]["engine"] == "ir"   # serve 시점 주입 → 로컬앱 디스패치 가능

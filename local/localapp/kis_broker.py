@@ -20,14 +20,26 @@ from datetime import datetime, timedelta
 import requests
 
 from .config import APP_DIR
-from .file_security import restrict_to_owner
 from .secrets_store import load_kis
+from .state_store import save_json
 
 log = logging.getLogger("localapp.kis_broker")
 
 _VTS = "https://openapivts.koreainvestment.com:29443"
 _REAL = "https://openapi.koreainvestment.com:9443"
 _TOKEN_CACHE = APP_DIR / ".kis_token.json"
+
+
+def canonical_odno(s) -> str:
+    """KIS 주문번호(ODNO) 비교용 정규화 — 단일 출처(M2).
+
+    발주응답 ODNO·일별체결 odno는 zero-padded-10("0001569157")으로 오지만 WS
+    실시간 ODER_NO의 패딩은 KIS spec에 보장돼 있지 않다. 선행 0를 제거한 형태로
+    통일해 체결 인지 3경로(WS·국내 REST·해외 REST)가 같은 기준으로 매칭하게 한다.
+    pending 키·취소·조회는 KIS가 준 raw 형태를 그대로 쓰고, 이 함수는 *비교 시점*
+    에서만 호출한다(라운드트립 raw 보존).
+    """
+    return str(s).strip().lstrip("0") if s is not None else ""
 
 
 class _Throttle:
@@ -110,13 +122,14 @@ class KisBroker:
                            timeout=10)
         r.raise_for_status()
         d = r.json()
-        _TOKEN_CACHE.write_text(json.dumps({
+        # 토큰 파일은 같은 PC의 다른 사용자·프로세스가 읽으면 안 되는 자격증명.
+        # state_store 위임 (R5): owner-only ACL + 원자적 저장. 이전엔 plain write_text라
+        # 쓰는 중 종료 시 파일이 깨져 다음 _token() json.loads(104행)가 크래시할 수 있었다.
+        save_json(_TOKEN_CACHE, {
             "access_token": d["access_token"],
             "expires_at": (datetime.now()
                            + timedelta(seconds=int(d.get("expires_in", 86400)))).isoformat(),
-        }), encoding="utf-8")
-        # 토큰 파일은 같은 PC의 다른 사용자·프로세스가 읽으면 안 되는 자격증명.
-        restrict_to_owner(_TOKEN_CACHE)
+        })
         return d["access_token"]
 
     def _headers(self, tr_id: str) -> dict:
@@ -341,11 +354,10 @@ class KisBroker:
         from . import market_index
         tr = "VTTS3007R" if self.virtual else "TTTS3007R"
         excd = market_index.exchange_of(symbol) or "NAS"
-        excd_map = {"NAS": "NASD", "NYS": "NYSE", "AMS": "AMEX"}
         d = self._get_retry(
             "/uapi/overseas-stock/v1/trading/inquire-psamount", tr, {
                 "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_cd,
-                "OVRS_EXCG_CD": excd_map.get(excd, "NASD"),
+                "OVRS_EXCG_CD": self._OVERSEAS_EXCD.get(excd, "NASD"),
                 "OVRS_ORD_UNPR": f"{ref_price:.2f}",
                 "ITEM_CD": market_index.kis_ticker_of(symbol)})
         o = d.get("output", {}) or {}
@@ -436,9 +448,9 @@ class KisBroker:
         prev_close fallback으로 처리 (PR-1 정당: KIS API 진짜 한계 대비).
         """
         from . import market_index
-        excd_map = {"NAS": "NAS", "NYS": "NYS", "AMS": "AMS",
-                     "TSE": "TSE", "HKS": "HKS"}
-        excd = excd_map.get(market, "NAS")
+        # 시세(quote) endpoint는 short EXCD(NAS/NYS/AMS)를 그대로 사용. 지원 시장
+        # 집합은 _OVERSEAS_EXCD 단일 출처로 검증(주문용 NASD-form과 키 동일).
+        excd = market if market in self._OVERSEAS_EXCD else "NAS"
         body = self._get_retry(
             "/uapi/overseas-price/v1/quotations/price-detail",
             "HHDFS76200200",
@@ -456,9 +468,7 @@ class KisBroker:
         # KIS overseas 시장 코드: NAS/NYS/AMS = 실시간(NASD/NYSE/AMEX) 또는 지연(NAS/NYS/AMS).
         # 우선 지연 시세(별도 신청 불필요) 사용.
         from . import market_index
-        excd_map = {"NAS": "NAS", "NYS": "NYS", "AMS": "AMS",
-                     "TSE": "TSE", "HKS": "HKS"}
-        excd = excd_map.get(market, "NAS")
+        excd = market if market in self._OVERSEAS_EXCD else "NAS"
         body = self._get_retry(
             "/uapi/overseas-price/v1/quotations/price", "HHDFS00000300",
             {"AUTH": "", "EXCD": excd, "SYMB": market_index.kis_ticker_of(symbol)},
@@ -536,6 +546,14 @@ class KisBroker:
         "NAS": "NASD", "NYS": "NYSE", "AMS": "AMEX",
         "TSE": "TKSE", "HKS": "SEHK",
     }
+    # 미국 예약주문 TR — KIS 공식 spec ([해외주식] 예약주문접수, order-resv).
+    # 개장 전(서머타임 10:00~22:20 KST 접수) 발주 → 정규장 개시(22:30)에 자동 전송.
+    # 미국 전용 (아시아는 접수시간·body 규격이 달라 별도 — 현재 미지원).
+    _OVERSEAS_RESV_TR = {
+        # (side, virtual): TR_ID
+        ("buy",  True): "VTTT3014U", ("buy",  False): "TTTT3014U",
+        ("sell", True): "VTTT3016U", ("sell", False): "TTTT3016U",
+    }
 
     def _submit_overseas(self, symbol: str, qty: int, side: str,
                           ord_dvsn: str, unit_price: float, market: str) -> dict:
@@ -580,6 +598,42 @@ class KisBroker:
             "filled_qty": 0,
         }
 
+    def _submit_overseas_resv(self, symbol: str, qty: int, side: str,
+                               ord_dvsn: str, unit_price: float,
+                               market: str) -> dict:
+        """미국 예약주문 — overseas-stock/v1/trading/order-resv endpoint.
+
+        개장 전 접수 → KIS가 정규장 개시(22:30 서머타임)에 자동 전송.
+        매수는 지정가(ORD_DVSN=00, FT_ORD_UNPR3=지정가), 매도는 MOO 장개시
+        시장가(ORD_DVSN=31, FT_ORD_UNPR3=0). KIS는 미국 예약 *매수* 시장가를
+        지원하지 않으므로 매수는 지정가만 가능.
+        """
+        if market not in ("NAS", "NYS", "AMS"):
+            return {"success": False, "message": f"예약주문 미지원 시장: {market}",
+                    "msg_cd": "", "order_no": "", "filled_qty": 0}
+        tr = self._OVERSEAS_RESV_TR[(side, self.virtual)]
+        from . import market_index
+        excd = self._OVERSEAS_EXCD.get(market, "NASD")
+        body = {
+            "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_cd,
+            "OVRS_EXCG_CD": excd,
+            "PDNO": market_index.kis_ticker_of(symbol),   # 슬래시 정규화 (BRK/B)
+            "FT_ORD_QTY": str(qty),
+            # 지정가는 소수 USD($0.01 틱), MOO(31)는 가격 미사용 → "0".
+            "FT_ORD_UNPR3": f"{unit_price:.2f}" if ord_dvsn == "00" else "0",
+            "ORD_SVR_DVSN_CD": "0",
+            "ORD_DVSN": ord_dvsn,       # 00=지정가(매수), 31=MOO 장개시시장가(매도)
+        }
+        d = self._post_retry("/uapi/overseas-stock/v1/trading/order-resv", tr, body)
+        return {
+            "success": d.get("rt_cd") == "0",
+            "message": d.get("msg1", ""),
+            "msg_cd": d.get("msg_cd", ""),
+            "order_no": d.get("output", {}).get("ODNO", ""),
+            "ord_branch": "",
+            "filled_qty": 0,
+        }
+
     def buy(self, symbol: str, qty: int) -> dict:
         return self._submit(symbol, qty, "buy", "01", 0.0)
 
@@ -591,6 +645,19 @@ class KisBroker:
 
     def sell_limit(self, symbol: str, qty: int, limit_price: float) -> dict:
         return self._submit(symbol, qty, "sell", "00", float(limit_price))
+
+    def buy_resv_limit(self, symbol: str, qty: int, limit_price: float) -> dict:
+        """미국 예약 매수 — 지정가. 개장 전 접수 → 시초가 전송."""
+        from . import market_index
+        market = market_index.exchange_of(symbol) or "NAS"
+        return self._submit_overseas_resv(symbol, qty, "buy", "00",
+                                           float(limit_price), market)
+
+    def sell_resv_moo(self, symbol: str, qty: int) -> dict:
+        """미국 예약 매도 — MOO(장개시시장가). 개장 전 접수 → 시초가 시장가 체결."""
+        from . import market_index
+        market = market_index.exchange_of(symbol) or "NAS"
+        return self._submit_overseas_resv(symbol, qty, "sell", "31", 0.0, market)
 
     # ── 주문 취소 / 조회 ──────────────────────────────────────────────────────
 
@@ -675,7 +742,7 @@ class KisBroker:
             return {"order_no": order_no, "status": "unknown",
                     "filled_qty": 0, "remain_qty": 0, "fill_price": 0.0}
         for row in body.get("output1", []) or []:
-            if row.get("odno") == order_no:
+            if canonical_odno(row.get("odno")) == canonical_odno(order_no):
                 ord_qty = int(row.get("ord_qty", 0) or 0)
                 ccld_qty = int(row.get("tot_ccld_qty", 0) or 0)
                 avg_px = float(row.get("avg_prvs", 0) or 0)
@@ -721,7 +788,7 @@ class KisBroker:
             return {"order_no": order_no, "status": "unknown",
                     "filled_qty": 0, "remain_qty": 0, "fill_price": 0.0}
         for row in rows:
-            if (row.get("odno") or "").lstrip("0") != (order_no or "").lstrip("0"):
+            if canonical_odno(row.get("odno")) != canonical_odno(order_no):
                 continue
             ord_qty = int(float(row.get("ft_ord_qty", 0) or 0))
             ccld_qty = int(float(row.get("ft_ccld_qty", 0) or 0))

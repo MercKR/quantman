@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
 
 from quant_core.blocks import Node, const, data  # noqa: E402
 from quant_core.ir_engine import (  # noqa: E402
-    Entry, PositionSpec, Sizing, StrategyIR, Universe, validate_strategy,
+    Entry, Exit, Overlays, PositionSpec, Sizing, StrategyIR, SweepSpec, Universe,
+    validate_strategy,
 )
 
 
@@ -24,6 +25,10 @@ def _cond():
 
 def _score():
     return Node(op="rank", inputs={"signal": data("momentum_12_1m")})
+
+
+def _label():
+    return Node(op="bucket", params={"edges": [0.0]}, inputs={"signal": _score()})
 
 
 def _errs(s):
@@ -92,12 +97,45 @@ def test_on_signal_all_universe_rejected():
 
 
 def test_exit_condition_must_be_condition():
-    from quant_core.ir_engine import Exit
     s = StrategyIR(
         signal=_cond(), universe=Universe(kind="single", symbols=["005930"]),
         position=PositionSpec(entry=Entry(mode="on_signal"),
-                              exit=Exit(mode="on_condition", condition=_score())))
+                              exit=Exit(condition=_score())))
     assert any(i.rule == "S-exit" for i in validate_strategy(s))
+
+
+# ── 루트 경계 타입 계약 (명세 §5.4) ───────────────────────────────────────────
+
+def test_group_label_must_be_label():
+    """그룹 노출 라벨은 label만 — score면 S-overlay 거부."""
+    s = StrategyIR(signal=_score(), universe=Universe(kind="all"),
+                   position=PositionSpec(entry=Entry(mode="scheduled"),
+                                         overlays=Overlays(max_group_pct=30.0, group_label=_score())))
+    assert any(i.rule == "S-overlay" for i in validate_strategy(s))
+
+
+def test_sweep_label_must_be_label():
+    """펼침 분할 라벨은 label만 — score면 S-sweep 거부."""
+    s = StrategyIR(signal=_score(), universe=Universe(kind="all"),
+                   position=PositionSpec(entry=Entry(mode="scheduled")),
+                   sweep=SweepSpec(axis="condition", label=_score()))
+    assert any(i.rule == "S-sweep" for i in validate_strategy(s))
+
+
+def test_screener_filter_must_be_condition():
+    """스크리너 filter는 condition만 — score면 S-univ 거부."""
+    s = StrategyIR(signal=_score(),
+                   universe=Universe(kind="screener", screener={"filter": _score().model_dump()}),
+                   position=PositionSpec(entry=Entry(mode="scheduled")))
+    assert any(i.rule == "S-univ" for i in validate_strategy(s))
+
+
+def test_sweep_event_must_be_condition():
+    """펼침 이벤트는 condition만 — score면 S-event 거부."""
+    s = StrategyIR(signal=_score(), universe=Universe(kind="all"),
+                   position=PositionSpec(entry=Entry(mode="scheduled")),
+                   sweep=SweepSpec(axis="time", event=_score(), windows=[5]))
+    assert any(i.rule == "S-event" for i in validate_strategy(s))
 
 
 def test_roundtrip_serialization():

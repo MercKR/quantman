@@ -34,6 +34,26 @@ def one_sample_test(returns: pd.Series) -> dict:
             "prob_positive": float((arr > 0).mean() * 100)}
 
 
+def summarize_events(endpoints, maes, mfes) -> dict:
+    """이벤트 표본 집계 — 종점수익 유의성 + 경로지표(MAE·MFE).
+
+    endpoints: 윈도 종점 수익(이벤트별). maes/mfes: 보유 중 최대 불리/유리 편차.
+    mean_mae = 평균 최대낙폭(task8 forward-MDD·task9 MAE의 단일 출처),
+    payoff = 종점 승/패 평균비. 모두 백분율.
+    """
+    base = one_sample_test(pd.Series(endpoints, dtype=float))
+    m = _clean(pd.Series(maes, dtype=float)).to_numpy(dtype=float)
+    f = _clean(pd.Series(mfes, dtype=float)).to_numpy(dtype=float)
+    e = _clean(pd.Series(endpoints, dtype=float)).to_numpy(dtype=float)
+    base["mean_mae"] = float(m.mean() * 100) if len(m) else np.nan
+    base["worst_mae"] = float(m.min() * 100) if len(m) else np.nan
+    base["mean_mfe"] = float(f.mean() * 100) if len(f) else np.nan
+    wins, losses = e[e > 0], e[e < 0]
+    base["payoff_ratio"] = (float(wins.mean()) / abs(float(losses.mean()))
+                            if len(wins) and len(losses) and losses.mean() != 0 else np.nan)
+    return base
+
+
 def two_sample_test(a: pd.Series, b: pd.Series) -> dict:
     """Welch 2표본 t-검정 — 두 수익률 분포의 평균이 유의하게 다른가."""
     a, b = _clean(a), _clean(b)

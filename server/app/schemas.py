@@ -73,14 +73,16 @@ class DeviceOut(BaseModel):
 # ── 전략 ──────────────────────────────────────────────────────────────────────
 
 class StrategyIn(BaseModel):
-    definition: dict[str, Any]        # core quant_core.Strategy 형태
+    definition: dict[str, Any]        # ir=StrategyIR 형태 (IR 단일 체제)
     run_mode: str = "draft"           # draft | paper | live
+    engine: str = "ir"                # ir(전략 연구소) 단일 — 레거시 operand 제거됨
 
 
 class StrategyOut(BaseModel):
     id: int
     name: str
     run_mode: str
+    engine: str = "ir"
     definition: dict[str, Any]
     created_at: datetime
     updated_at: datetime
@@ -114,50 +116,6 @@ class StrategyStatsOut(BaseModel):
 
 class StrategyRestoreIn(BaseModel):
     version_no: int
-
-
-# ── 백테스트 / 분석 ────────────────────────────────────────────────────────────
-
-class BacktestIn(BaseModel):
-    strategy: dict[str, Any]          # core Strategy 형태
-    start: Optional[str] = None
-    end: Optional[str] = None
-    initial_capital: float = 10_000_000.0
-    # Phase 59 — 저장된 전략 기준 백테스트. 빌더에서 임시 실행이면 None.
-    # Note: strategy_id가 None이면 BacktestRun 자체를 저장하지 않음 (orphan 즉시 삭제 정책).
-    strategy_id: Optional[int] = None
-    version_no: Optional[int] = None
-
-
-class BacktestRunOut(BaseModel):
-    """백테스트 단일 실행 내역."""
-    id: int
-    name: str
-    initial_capital: float
-    start: Optional[str] = None
-    end: Optional[str] = None
-    created_at: datetime
-    definition: dict[str, Any]
-    result: dict[str, Any]
-
-
-class BacktestRunSummary(BaseModel):
-    """목록용 요약 — definition/trades 제외, 핵심 지표만."""
-    id: int
-    name: str
-    created_at: datetime
-    initial_capital: float
-    metrics: dict[str, Any]
-    success: bool
-
-
-class AnalysisIn(BaseModel):
-    conditions: list[dict[str, Any]]
-    logic: str = "AND"
-    target_symbol: str
-    target_indicator: str
-    forward_days: int = 1
-    lookback_years: Optional[int] = None
 
 
 # ── 동기화 ────────────────────────────────────────────────────────────────────

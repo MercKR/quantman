@@ -225,6 +225,9 @@ def add_fundamentals(df: pd.DataFrame, fund_df: Optional[pd.DataFrame]) -> pd.Da
 
     shares = fund_d.get("shares_outstanding", pd.Series(np.nan, index=df.index))
 
+    # 시가총액 = 종가 × 발행주식수(PIT). 스크리너·사이징 참조 메트릭(추가 소스 0 — shares는 펀더멘털서).
+    df["market_cap"] = df["Close"] * shares.replace(0, np.nan)
+
     # ── FCF Yield = TTM FCF / 시가총액 × 100
     if "ttm_fcf" in fund_d.columns:
         mkt_cap = df["Close"] * shares.replace(0, np.nan)
@@ -336,6 +339,7 @@ INDICATOR_META = {
     "peg":                {"label": "PEG",               "unit": "",   "decimals": 2},
     "fcf_yield":          {"label": "FCF Yield(%)",      "unit": "%",  "decimals": 2},
     "altman_z":           {"label": "Altman Z-Score",    "unit": "",   "decimals": 2},
+    "market_cap":         {"label": "시가총액",           "unit": "",   "decimals": 0},
 }
 
 # 항상 존재하는 가격 기반 지표 (지수/ETF/코인 포함)
@@ -353,7 +357,7 @@ BASE_INDICATOR_COLS = [
 FUND_INDICATOR_COLS = [
     "gross_margin", "gross_margin_trend", "op_margin", "roic", "cash_conversion",
     "net_debt_ebitda", "ev_ebitda", "ev_sales", "trailing_pe", "pb_ratio", "peg",
-    "fcf_yield", "altman_z",
+    "fcf_yield", "altman_z", "market_cap",
 ]
 
 # 지표 소분류 — 조건 빌더 UI에서 드롭다운을 그룹화하기 위한 분류
@@ -428,6 +432,8 @@ COMPARE_GROUP: dict[str, str] = {
     "roic": "pct", "cash_conversion": "pct", "fcf_yield": "pct",
     # 가격 (원) — 절대 가격 레벨
     "price_level": "price",
+    # 시가총액 (절대 통화액) — 자기 그룹(per-share 가격과 비교 무의미)
+    "market_cap": "mktcap",
     # 0-100 무차원 (RSI 류)
     "rsi_14": "rsi",
     # 0-1 무차원 (Bollinger %B)

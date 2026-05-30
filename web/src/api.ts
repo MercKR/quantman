@@ -1,7 +1,7 @@
 import type {
-  AnalysisResult, BacktestResult, BacktestRunDetail, BacktestRunSummary,
-  CommandRow, CommandType, DeviceRow, IrBacktestResult, IrBlockSpec, IrNode,
-  IrStrategyResult,
+  BacktestRunSummary,
+  CommandRow, CommandType, DeviceRow, IrBlockSpec,
+  IrStrategyDef, IrStrategyResult,
   MarketContext, NextDayPreview, PortfolioRisk,
   ScreenerField, ScreenerMatch, ScreenerPreset, ScreenerSpecIO, ScreenerUserPreset,
   StrategyDef, StrategyRow, StrategyStats, StrategyVersionRow,
@@ -72,13 +72,16 @@ export const api = {
 
   listStrategies: () => req<StrategyRow[]>("/strategies"),
   getStrategy: (id: number) => req<StrategyRow>(`/strategies/${id}`),
-  createStrategy: (definition: StrategyDef, run_mode: string) =>
+  // engine — ir(전략 연구소) 단일. 레거시 operand는 신규 생성 경로 제거됨(읽기만 호환).
+  createStrategy: (definition: StrategyDef | IrStrategyDef, run_mode: string,
+                   engine: "operand" | "ir" = "ir") =>
     req<StrategyRow>("/strategies", {
-      method: "POST", body: JSON.stringify({ definition, run_mode }),
+      method: "POST", body: JSON.stringify({ definition, run_mode, engine }),
     }),
-  updateStrategy: (id: number, definition: StrategyDef, run_mode: string) =>
+  updateStrategy: (id: number, definition: StrategyDef | IrStrategyDef, run_mode: string,
+                   engine: "operand" | "ir" = "ir") =>
     req<StrategyRow>(`/strategies/${id}`, {
-      method: "PUT", body: JSON.stringify({ definition, run_mode }),
+      method: "PUT", body: JSON.stringify({ definition, run_mode, engine }),
     }),
   deleteStrategy: (id: number) =>
     req<{ ok: boolean }>(`/strategies/${id}`, { method: "DELETE" }),
@@ -86,8 +89,6 @@ export const api = {
   // Phase 59 — 버전·현황·백테스트 내역
   listStrategyVersions: (id: number) =>
     req<StrategyVersionRow[]>(`/strategies/${id}/versions`),
-  getStrategyVersion: (id: number, versionNo: number) =>
-    req<StrategyVersionRow>(`/strategies/${id}/versions/${versionNo}`),
   restoreStrategyVersion: (id: number, versionNo: number) =>
     req<StrategyRow>(`/strategies/${id}/restore`, {
       method: "POST", body: JSON.stringify({ version_no: versionNo }),
@@ -96,27 +97,6 @@ export const api = {
     req<StrategyStats>(`/strategies/${id}/stats`),
   listStrategyBacktests: (id: number) =>
     req<BacktestRunSummary[]>(`/strategies/${id}/backtests`),
-
-  runBacktest: (strategy: StrategyDef, initial_capital: number,
-                start?: string, end?: string,
-                strategy_id?: number, version_no?: number) =>
-    req<BacktestResult>("/backtest/run", {
-      method: "POST",
-      body: JSON.stringify({
-        strategy, initial_capital, start, end, strategy_id, version_no,
-      }),
-    }),
-  runAnalysis: (body: {
-    conditions: unknown[]; logic: string; target_symbol: string;
-    target_indicator: string; forward_days: number; lookback_years?: number | null;
-  }) => req<AnalysisResult>("/analysis/run", {
-    method: "POST", body: JSON.stringify(body),
-  }),
-
-  listBacktestRuns: () => req<BacktestRunSummary[]>("/backtest/runs"),
-  getBacktestRun: (id: number) => req<BacktestRunDetail>(`/backtest/runs/${id}`),
-  deleteBacktestRun: (id: number) =>
-    req<{ ok: boolean }>(`/backtest/runs/${id}`, { method: "DELETE" }),
 
   devices: () => req<DeviceRow[]>("/auth/devices"),
   revokeDevice: (id: number) =>
@@ -184,23 +164,8 @@ export const api = {
   // 자동매매 타임라인 — [now-24h, now+24h] 이벤트 + heartbeat 상태
   getTradingTimeline: () => req<TradingTimeline>("/trading/timeline"),
 
-  // 블록 IR 노코드 빌더 (P1-7) — 자기서술 카탈로그 + IR 백테스트
+  // 블록 IR 노코드 빌더 (P1-7) — 자기서술 카탈로그
   irCatalog: () => req<{ blocks: IrBlockSpec[] }>("/ir/catalog"),
-  runIrBacktest: (body: {
-    trade_symbol: string;
-    buy: IrNode;
-    sell?: IrNode | null;
-    hold_days?: number | null;
-    take_profit?: number | null;
-    stop_loss?: number | null;
-    trail_atr_mult?: number | null;
-    trail_pct?: number | null;
-    initial_capital?: number;
-    start?: string;
-    end?: string;
-  }) => req<IrBacktestResult>("/ir/backtest", {
-    method: "POST", body: JSON.stringify(body),
-  }),
   // StrategyIR 전체 구조(유니버스·신호·포지션 4부품·시뮬·펼침) 백테스트
   runIrStrategy: (strategy: Record<string, unknown>) =>
     req<IrStrategyResult>("/ir/strategy", {

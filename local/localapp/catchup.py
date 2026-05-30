@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 from quant_core import market_calendar as mc
 
 from .config import APP_DIR, CYCLES_PATH
+from .state_store import save_json
 
 # GUI가 polling으로 읽고 amber 배너 표시하는 결과 파일.
 # 사용자가 [확인] 클릭하면 gui가 unlink.
@@ -426,7 +427,7 @@ def _catchup_stop_loss(market: str, broker, trader,
     """C9 — 보유 종목 현재가 일괄 조회 → IntradayStopManager.on_tick 평가+발주.
 
     IntradayStopManager.on_tick은 이미:
-      - sell_rules로 익절/손절/트레일/ATR trigger 평가
+      - IR position.exit로 익절/손절/트레일/ATR trigger 평가
       - L-04 over-sell 방지 (KIS 실 잔고 클램프)
       - _submit_sell 호출 (intent journal 포함)
       - sold_today 기록 (중복 발주 방지)
@@ -652,8 +653,7 @@ def _save_result(plan: CatchupPlan, results: dict) -> None:
         serializable["results"][k] = out
 
     try:
-        CATCHUP_RESULT_PATH.write_text(
-            json.dumps(serializable, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        # 체결·정합성 결과는 민감 — state_store 위임 (R5, 원자+owner-only ACL).
+        save_json(CATCHUP_RESULT_PATH, serializable)
     except OSError as e:
         log.warning("catch-up 결과 저장 실패: %s", e)

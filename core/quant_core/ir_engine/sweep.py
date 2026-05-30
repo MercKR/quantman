@@ -14,6 +14,7 @@ import pandas as pd
 
 from ..blocks import EvalContext, Node, evaluate, select_symbol
 from .backtest import run_backtest_ir
+from .metrics import perf_from_returns
 
 TRADING_DAYS = 252
 
@@ -24,19 +25,11 @@ def daily_returns(equity: pd.Series) -> pd.Series:
 
 
 def summarize_returns(r: pd.Series) -> dict:
-    """일별 수익률 분포 요약 — 비교·검증층(P1-5)이 쓰는 단위."""
-    r = r.dropna()
-    n = int(len(r))
-    if n == 0:
-        return {"n": 0, "mean": np.nan, "std": np.nan, "sharpe": np.nan,
-                "cum_return": np.nan, "win_rate": np.nan}
-    mean = float(r.mean())
-    std = float(r.std())
-    sharpe = (mean / std * np.sqrt(TRADING_DAYS)) if std and std > 0 else np.nan
-    cum = float((1 + r).prod() - 1)
-    win = float((r > 0).mean() * 100)
-    return {"n": n, "mean": mean * 100, "std": std * 100,
-            "sharpe": sharpe, "cum_return": cum * 100, "win_rate": win}
+    """일별 수익률 요약 — 모든 펼침 버킷의 단일 출처(perf_from_returns 위임).
+
+    MDD·CAGR·Sortino·손익비·VaR/CVaR까지 동질 키로 산출해 버킷 간 비교가 가능하다.
+    """
+    return perf_from_returns(r)
 
 
 def partition_by_label(returns: pd.Series, labels: pd.Series) -> dict:

@@ -58,8 +58,7 @@ def run_backtest_ir(
 ) -> dict:
     """단일 종목 백테스트 — 매수/매도 신호를 블록 IR로 평가.
 
-    buy_node/sell_node는 type:condition Node. 기존 run_backtest 단일 path와
-    동일한 체결·청산·성과 로직을 쓴다.
+    buy_node/sell_node는 type:condition Node. 단일 종목 path의 체결·청산·성과 로직.
     """
     if trade_symbol not in dataset or dataset[trade_symbol].empty:
         return _empty(f"'{trade_symbol}' 데이터 없음")
@@ -87,12 +86,18 @@ def run_backtest_ir(
     closes = trade_df["Close"].to_numpy(dtype=float)
     highs = (trade_df["High"].to_numpy(dtype=float)
              if "High" in trade_df.columns else closes)
+    lows = (trade_df["Low"].to_numpy(dtype=float)
+            if "Low" in trade_df.columns else closes)
     atr_arr = (trade_df["atr_14"].to_numpy(dtype=float)
                if "atr_14" in trade_df.columns else None)
     if trail_atr_mult is not None and atr_arr is None:
         return _empty(f"'{trade_symbol}'에 ATR 지표가 없어 ATR 트레일링을 쓸 수 없습니다.")
     n = len(trade_df)
-    next_open = (fill == "next_open")
+    defer = (fill == "next_open")
+    if fill == "typical" and not {"High", "Low"}.issubset(trade_df.columns):
+        return _empty(f"'{trade_symbol}'에 고가·저가가 없어 typical 체결을 쓸 수 없습니다.")
+    # 당일 체결가: close=종가, typical=(고+저+종)/3(일봉 VWAP 근사). next_open은 익일 시가.
+    same_day_price = ((highs + lows + closes) / 3.0) if fill == "typical" else closes
 
     cash = float(initial_capital)
     shares = 0.0
@@ -178,7 +183,7 @@ def run_backtest_ir(
             executed_rules.clear()
 
     for i in range(n):
-        if next_open:
+        if defer:
             if pending_buy and not position:
                 _open(i, opens[i])
                 pending_buy = False
@@ -192,10 +197,10 @@ def run_backtest_ir(
 
         if not position and not pending_buy:
             if buy_arr[i]:
-                if next_open:
+                if defer:
                     pending_buy = True
                 else:
-                    _open(i, closes[i])
+                    _open(i, same_day_price[i])
         elif position and not pending_sell:
             if highs[i] > peak_high:
                 peak_high = highs[i]
@@ -222,12 +227,12 @@ def run_backtest_ir(
             elif sell_arr is not None and sell_arr[i]:
                 reason = "매도신호"
             if reason:
-                if next_open:
+                if defer:
                     pending_sell = True
                     pending_reason = reason
                 else:
                     sell_pct = _sell_pct_of(reason)
-                    _close(i, closes[i], reason, sell_pct)
+                    _close(i, same_day_price[i], reason, sell_pct)
                     key = _reason_key(reason)
                     if key is not None and position:
                         executed_rules.add(key)
@@ -305,6 +310,10 @@ def run_portfolio_ir(
         for sym, df in symbol_dfs.items():
             if "atr_14" not in df.columns:
                 return _empty(f"'{sym}'에 ATR 지표가 없어 ATR 트레일링을 쓸 수 없습니다.")
+    if fill == "typical":
+        for sym, df in symbol_dfs.items():
+            if not {"High", "Low"}.issubset(df.columns):
+                return _empty(f"'{sym}'에 고가·저가가 없어 typical 체결을 쓸 수 없습니다.")
 
     master_idx = pd.DatetimeIndex(
         sorted(set().union(*(df.index for df in symbol_dfs.values()))))
@@ -323,11 +332,14 @@ def run_portfolio_ir(
     sell_arrs: dict[str, np.ndarray | None] = {}
     for sym in syms:
         df = symbol_dfs[sym].reindex(master_idx)
+        cl = df["Close"].to_numpy(dtype=float)
+        hi = (df["High"].to_numpy(dtype=float) if "High" in df.columns else cl)
+        lo = (df["Low"].to_numpy(dtype=float) if "Low" in df.columns else cl)
         aligned[sym] = {
             "open": df["Open"].to_numpy(dtype=float),
-            "close": df["Close"].to_numpy(dtype=float),
-            "high": (df["High"].to_numpy(dtype=float)
-                     if "High" in df.columns else df["Close"].to_numpy(dtype=float)),
+            "close": cl, "high": hi, "low": lo,
+            # 당일 체결가: typical=(고+저+종)/3, 그 외=종가. next_open은 익일 시가 사용.
+            "exec": ((hi + lo + cl) / 3.0) if fill == "typical" else cl,
             "atr": (df["atr_14"].to_numpy(dtype=float)
                     if "atr_14" in df.columns else None),
             "currency": "KRW" if sym.isdigit() else "USD",
@@ -341,7 +353,7 @@ def run_portfolio_ir(
         else:
             sell_arrs[sym] = None
 
-    next_open = (fill == "next_open")
+    defer = (fill == "next_open")
     cash = float(initial_capital)
     rule_pcts = rule_sell_pcts or {}
     positions: dict[str, _PortPosition] = {}
@@ -418,7 +430,7 @@ def run_portfolio_ir(
 
     for i in range(n):
         closed_this_step: set[str] = set()
-        if next_open:
+        if defer:
             for sym, reason in list(pending_sells.items()):
                 _close(sym, i, aligned[sym]["open"][i], reason, _sell_pct_of(reason))
                 key = _reason_key(reason)
@@ -464,10 +476,10 @@ def run_portfolio_ir(
             elif sym_sell is not None and sym_sell[i]:
                 reason = "매도신호"
             if reason:
-                if next_open:
+                if defer:
                     pending_sells[sym] = reason
                 else:
-                    _close(sym, i, close, reason, _sell_pct_of(reason))
+                    _close(sym, i, aligned[sym]["exec"][i], reason, _sell_pct_of(reason))
                     if sym not in positions:
                         closed_this_step.add(sym)
                     else:
@@ -475,7 +487,7 @@ def run_portfolio_ir(
                         if key is not None:
                             positions[sym].executed_rules.add(key)
 
-        if next_open:
+        if defer:
             for sym in syms:
                 if sym in positions or sym in pending_buys:
                     continue
@@ -490,10 +502,9 @@ def run_portfolio_ir(
                     break
                 if not buy_arrs[sym][i]:
                     continue
-                cl = aligned[sym]["close"][i]
-                if np.isnan(cl):
+                if np.isnan(aligned[sym]["close"][i]):
                     continue
-                _open(sym, i, cl, min(_budget(cash_snapshot), cash))
+                _open(sym, i, aligned[sym]["exec"][i], min(_budget(cash_snapshot), cash))
 
         nav = cash
         for sym, pos in positions.items():

@@ -13,6 +13,7 @@ import pandas as pd
 
 from ..expression_parser import get_symbol_group
 from .catalog import BlockDef, register
+from .context import as_bool_panel
 from .types import ValueType
 
 
@@ -161,17 +162,61 @@ def _ev_ts_halflife(resolved, params, ctx):
 # ── 축1: 달력 라벨링 (요일·월) — 입력 없이 날짜 인덱스에서 파생 ────────────────
 
 def _ev_calendar(resolved, params, ctx):
-    """날짜 인덱스에서 요일/월/월중주차 라벨 패널 생성 (펼침 달력 분할용)."""
+    """날짜 인덱스에서 달력 라벨 패널 생성 (펼침 달력 분할용).
+
+    unit: weekday(0=월)·month·monthweek(월중주차)·dom(월중일)·bday(월내 영업일서수)·
+    turn_of_month(월말 tom_end + 월초 tom_start 영업일=1, 나머지=0).
+    bday/turn_of_month는 거래일(인덱스) 기준 월내 순번을 쓴다 — 휴장일을 건너뛴 실효 영업일.
+    """
     unit = params.get("unit", "weekday")
     idx = ctx.master_idx
     if unit == "month":
         vals = idx.month
     elif unit == "monthweek":
         vals = (idx.day - 1) // 7 + 1
+    elif unit == "dom":
+        vals = idx.day
+    elif unit in ("bday", "turn_of_month"):
+        grp = pd.Series(idx.to_period("M"), index=idx)
+        from_start = grp.groupby(grp).cumcount().to_numpy() + 1            # 월내 1번째 영업일=1
+        size = grp.groupby(grp).transform("size").to_numpy()
+        from_end = size - from_start + 1                                   # 월말 마지막=1
+        if unit == "bday":
+            vals = from_start
+        else:
+            ts, te = int(params.get("tom_start", 3)), int(params.get("tom_end", 1))
+            vals = ((from_start <= ts) | (from_end <= te)).astype(float)
     else:  # weekday (0=월)
         vals = idx.dayofweek
     s = pd.Series(np.asarray(vals, dtype=float), index=idx)
     return pd.DataFrame({sym: s for sym in ctx.symbols}, index=idx)
+
+
+# ── 축4: per-symbol 정적 분류 라벨 + 멤버십 조건 (섹터 필터·슬리브 구분) ────────
+
+def _ev_attribute(resolved, params, ctx):
+    """종목별 정적 분류 라벨 패널 — 섹터/업종(static.classification). 날짜축 불변(브로드캐스트).
+
+    그룹 연산이 내부로만 쓰던 get_symbol_group을 라벨로 노출 → is_in으로 필터(섹터 제외)·
+    select로 슬리브 구분·group_label로 그룹 노출 캡에 쓸 수 있다. 미수급은 '기타'/'Other' 폴백.
+    """
+    attr = params.get("attr", "Industry")
+    vals = {sym: get_symbol_group(sym, attr) for sym in ctx.symbols}
+    return pd.DataFrame({sym: pd.Series(v, index=ctx.master_idx) for sym, v in vals.items()},
+                        index=ctx.master_idx)
+
+
+def _ev_is_in(resolved, params, ctx):
+    """라벨 멤버십 → condition. 라벨이 values 집합에 속하면 참(negate면 반전).
+
+    '금융·지주 제외'(negate)·'특정 버킷만'(bucket 라벨)·슬리브 구분 등 범주 선택의 원자.
+    """
+    x = resolved["signal"]
+    values = list(params.get("values", []))
+    mask = x.isin(values)
+    if params.get("negate", False):
+        mask = ~mask
+    return as_bool_panel(mask)
 
 
 # ── 등록 ──────────────────────────────────────────────────────────────────────
@@ -209,3 +254,10 @@ register(BlockDef("ts_halflife", ValueType.SCORE, _ev_ts_halflife,
 register(BlockDef("calendar", ValueType.LABEL, _ev_calendar,
                   param_defaults={"unit": "weekday"},
                   doc="달력 라벨(요일·월·월중주차)"))
+register(BlockDef("attribute", ValueType.LABEL, _ev_attribute,
+                  param_defaults={"attr": "Industry"},
+                  doc="종목 정적 분류 라벨(섹터·업종)"))
+register(BlockDef("is_in", ValueType.CONDITION, _ev_is_in,
+                  slots={"signal": ValueType.LABEL},
+                  param_defaults={"negate": False},
+                  doc="라벨 멤버십 조건(집합 포함/제외)"))

@@ -21,13 +21,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .config import INTENTS_PATH
+from .state_store import append_jsonl
 
 log = logging.getLogger("localapp.intents")
 
@@ -49,21 +49,14 @@ def new_intent_id() -> str:
 
 
 def _append_fsync(rec: dict, path: Path | None = None) -> None:
-    """한 줄 append + fsync. 디스크 도달까지 보장(전원 끊김 후에도 남음).
+    """한 줄 append + fsync — state_store 단일 경로 위임 (R5, fsync=True).
 
-    POSIX: ext4/APFS에서 fsync는 디스크 도달 강제.
-    Windows(NTFS): os.fsync → FlushFileBuffers. NTFS 저널이 일관성 보장 + 데이터
-    flush. SSD 내부 캐시까지는 OS가 보장 못하지만 OS 수준은 확보.
+    fsync로 디스크 도달까지 보장(전원 끊김 후에도 남아 중복 발주 차단, L-01).
+    이전엔 여기서 직접 os.open/fsync만 하고 ACL이 없었다 — intents.jsonl은 원시
+    주문 의도(종목·수량·가격)라 owner-only가 필요하다. append_jsonl이 최초 생성 시
+    1회 ACL을 적용한다.
     """
-    target = path or INTENTS_PATH
-    target.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(rec, ensure_ascii=False) + "\n"
-    fd = os.open(target, os.O_APPEND | os.O_CREAT | os.O_WRONLY)
-    try:
-        os.write(fd, line.encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    append_jsonl(rec, path or INTENTS_PATH, fsync=True)
 
 
 def begin(date_iso: str, intent_id: str, strategy_id, strategy_name: str,

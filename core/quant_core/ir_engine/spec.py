@@ -38,47 +38,68 @@ class Universe(BaseModel):
 class Sizing(BaseModel):
     """② 크기 — 얼마나."""
     mode: Literal[
-        "equal_weight",         # 동일가중
-        "signal_proportional",  # 신호(score)비례
-        "vol_inverse",          # 변동성 역가중
-        "fixed_risk",           # 고정위험(ATR 기반)
-        "kelly",                # 켈리(승률·손익비)
-        "fixed_amount",         # 종목당 고정 금액
-        "pct_cash",             # 자본 대비 %
+        "equal_weight",         # 동일가중 (횡단)
+        "signal_proportional",  # 신호(score)비례 (횡단)
+        "vol_inverse",          # 변동성 역가중 (횡단)
+        "target_vol",           # 목표변동성(per-name 연변동성 타겟 — 레버리지 동반, 횡단)
+        "fixed_weight",         # 정적 배분(사용자 지정 per-symbol 비중, 횡단)
+        "fixed_amount",         # 종목당 고정 금액 (이벤트 진입 예산)
+        "pct_cash",             # 자본 대비 % (이벤트 진입 예산)
     ] = "equal_weight"
+    # (제거됨: fixed_risk·kelly — IR 엔진 미구현 모드를 enum에 두지 않는다. ATR위험·켈리는
+    #  소비 경로·입력 어휘가 갖춰지고 수요가 생기면 sizer registry에 등록해 부활.)
     amount_pct: float = 10.0           # pct_cash / per-name 기본
     amount_krw: Optional[float] = None  # fixed_amount
-    risk_pct: Optional[float] = None    # fixed_risk: 거래당 자본 risk %
-    atr_mult: Optional[float] = None    # fixed_risk: ATR 배수
-    vol_window: int = 20                # vol_inverse 변동성 창
+    target_vol_pct: Optional[float] = None  # target_vol: 목표 연변동성(%)
+    weights: Optional[dict] = None      # fixed_weight: {symbol: 비중}
+    vol_window: int = 20                # vol_inverse·target_vol 변동성 창
     # 종목당 상한(%) — opt-in. 기본 100=무제한(집중 사이징 보존). 분산 원하면 낮춤.
     max_position_pct: float = 100.0
 
 
 class Entry(BaseModel):
-    """③ 진입 — 언제 들어가나."""
+    """③ 진입 — 언제 들어가나. 주기(캘린더 규칙) ⊕ 이벤트(+지연) — 명세 §7.6."""
     mode: Literal["on_signal", "scheduled", "always"] = "on_signal"
-    rebalance: Literal["daily", "weekly", "monthly", "every_n_days"] = "weekly"
+    rebalance: Literal["daily", "weekly", "monthly", "quarterly", "annual",
+                       "every_n_days"] = "weekly"
     every_n_days: Optional[int] = None
     top_n: Optional[int] = None         # scheduled/팩터: score 상위 N 선택
+    top_pct: Optional[float] = None     # scheduled/팩터: score 상위 X% 선택(top_n 대안)
+    # 임계 선택 — score 신호에서 절대 임계로 집합 선정(횡단 랭킹과 직교한 대안 선택자).
+    # 설정 시 top_n/top_pct 대신 사용: 롱={score>threshold}·숏={score<threshold}.
+    # 시계열 모멘텀(TSMOM: 자기 추세 부호로 독립 롱/숏)처럼 순위가 아닌 부호·수준 기준 선택에 필수.
+    threshold: Optional[float] = None
+    # 중간 청산 후 빈 슬롯 처리 — cash: 현금 유지(다음 리밸런스까지) · replace: 차순위 즉시 충원.
+    refill: Literal["cash", "replace"] = "cash"
 
 
 class Exit(BaseModel):
-    """④ 청산 — 언제 나오나."""
-    mode: Literal["on_condition", "after_n_days", "stop_target", "daily"] = "stop_target"
+    """④ 청산 — 언제 나오나. 설정한 규칙들은 OR로 결합(가장 먼저 충족되는 것이 청산 발동).
+
+    익절(take_profit)·손절(stop_loss)·보유기간(hold_days)·트레일링(trail_pct·trail_atr_mult)·
+    매도조건(condition)을 독립적으로 켠다. 별도 '방식' 선택 없이 채워진 규칙만 활성 —
+    예: 보유기간+손절을 함께 설정하면 N일 경과 또는 손절 중 먼저 닿는 쪽에서 청산.
+    """
     hold_days: Optional[int] = None
     take_profit: Optional[float] = None
     stop_loss: Optional[float] = None
     trail_pct: Optional[float] = None
     trail_atr_mult: Optional[float] = None
-    condition: Optional[Node] = None    # on_condition: 매도 신호(condition Node)
+    condition: Optional[Node] = None    # 매도 신호(condition Node)
 
 
 class Overlays(BaseModel):
     """전역 오버레이."""
     vol_target: Optional[float] = None        # 연율화 변동성 타겟(%)
     turnover_damp: Optional[float] = None      # 가중치 변동 억제 임계(hump)
-    max_drawdown_stop: Optional[float] = None  # 누적 -% 도달 시 청산(kill switch)
+    # 낙폭 제어 — hard: 완전 청산 낙폭(%, kill). soft: 디리스킹 시작 낙폭(%).
+    # soft~hard 구간에서 노출을 선형 축소, hard에서 0. soft 미지정(또는 ≥hard)이면 binary kill.
+    max_drawdown_stop: Optional[float] = None  # = hard
+    max_drawdown_soft: Optional[float] = None  # 부분 디리스킹 시작점(없으면 binary)
+    # 그룹 노출 캡 — group_label(섹터·bucket 등)별 |비중| 합이 max_group_pct 초과 시 해당 그룹 축소.
+    # per-name 캡(sizing.max_position_pct)의 그룹 일반화. 초과분은 현금 버퍼로(재정규화 안 함).
+    max_group_pct: Optional[float] = None
+    group_label: Optional[Node] = None         # 그룹 라벨 블록 — out_type=label (§5.4 루트 경계)
 
 
 class PositionSpec(BaseModel):
@@ -95,12 +116,19 @@ class PositionSpec(BaseModel):
 class SimSpec(BaseModel):
     initial_capital: float = 10_000_000.0
     delay: int = 1                      # 신호→체결 지연(거래일). look-ahead 방지.
-    fill: Literal["next_open", "close"] = "next_open"
+    # next_open=익일 시가, close=당일 종가, typical=당일 (고+저+종)/3 일봉 VWAP 근사.
+    # (진짜 intraday VWAP·N분 평균은 분봉 데이터 필요 — 현재 데이터 범위 밖, 가짜 폴백 안 함.)
+    fill: Literal["next_open", "close", "typical"] = "next_open"
     commission: Optional[float] = None
     slippage: Optional[float] = None
     sell_tax: Optional[float] = None
     currency: str = "KRW"
     leverage: float = 1.0
+    # 연율 비용(%) — 숏 차입(short_borrow_pct)·레버리지 펀딩(funding_cost_pct)·현금 무위험수익(rfr_pct).
+    # 종목별 차입가능 여부는 데이터 부재로 미모델(정직한 한계 — §7.6).
+    short_borrow_pct: Optional[float] = None
+    funding_cost_pct: Optional[float] = None
+    rfr_pct: Optional[float] = None
     start: Optional[str] = None
     end: Optional[str] = None
     period_split: Literal["single", "walk_forward", "oos", "kfold"] = "single"
@@ -108,14 +136,22 @@ class SimSpec(BaseModel):
 
 # ── 펼침 (비전 §4) ────────────────────────────────────────────────────────────
 
+class ParamAxis(BaseModel):
+    """파라미터 격자의 한 축 — 경로 1개 × 값 목록."""
+    path: str                           # "simulation.commission" 등 점경로
+    values: list = Field(default_factory=list)
+
+
 class SweepSpec(BaseModel):
     axis: Literal["none", "condition", "parameter", "asset", "time"] = "none"
     label: Optional[Node] = None        # condition·time축: 라벨 블록(국면 등)
-    param_path: Optional[str] = None    # parameter축: "simulation.commission" 등 경로
-    param_values: list = Field(default_factory=list)  # parameter축: 값 목록
+    # parameter축: 격자. 축 1개=1D 펼침, 2개+=데카르트곱(예: commission×slippage 민감도).
+    param_grid: list[ParamAxis] = Field(default_factory=list)
     assets: list[str] = Field(default_factory=list)   # asset축: 종목/유니버스 목록
     event: Optional[Node] = None        # time축: 이벤트 조건(미지정 시 signal 사용)
     windows: list[int] = Field(default_factory=lambda: [5, 10, 20])  # time축: forward 윈도우(일)
+    # time축 수익 기준: close(종가→종가)·intraday(시가→종가, 당일반등)·excess(시장초과)
+    event_basis: Literal["close", "intraday", "excess"] = "close"
 
 
 # ── 전략 (통합) ───────────────────────────────────────────────────────────────
@@ -142,6 +178,13 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
     st = signal_out_type(s.signal)
     ent, pos, u = s.position.entry, s.position, s.universe
 
+    # 최상위 신호는 매매 가능한 타입이어야 — condition(룰 트리거) 또는 score(팩터 알파).
+    # label(bucket·calendar)·scalar는 그룹라벨·국면 등 보조 역할일 뿐 신호 자체가 될 수 없다.
+    # (엔진은 condition 외 전부를 score로 취급하므로 label 코드가 알파로 오해석되는 silent 결함 차단.)
+    if st is not None and st not in ("condition", "score"):
+        issues.append(Issue("S-signal", SEV_ERROR,
+                            "최상위 신호는 condition(참/거짓) 또는 score(점수) 블록이어야 합니다.", "signal"))
+
     # 신호 타입 × 진입/방향 호환
     if ent.mode == "on_signal" and st != "condition":
         issues.append(Issue("S-entry", SEV_ERROR,
@@ -152,30 +195,49 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
     if pos.sizing.mode == "signal_proportional" and st != "score":
         issues.append(Issue("S-size", SEV_ERROR,
                             "신호비례 사이징은 신호가 score여야 합니다.", "position.sizing"))
+    if ent.threshold is not None and st != "score":
+        issues.append(Issue("S-select", SEV_ERROR,
+                            "임계 선택(threshold)은 신호가 score(점수)여야 합니다 — "
+                            "참/거짓 신호는 그 자체가 임계 선택이므로 condition 신호를 쓰세요.",
+                            "position.entry"))
 
     # 포지션 짝 제약 (비전 §3.3)
-    if pos.sizing.mode == "fixed_risk" and pos.sizing.atr_mult is None:
-        issues.append(Issue("S-pair", SEV_ERROR,
-                            "고정위험 사이징은 atr_mult가 필요합니다.", "position.sizing"))
-    if pos.sizing.mode == "kelly":
+    if ent.mode in ("scheduled", "always") and pos.sizing.mode in ("fixed_amount", "pct_cash"):
         issues.append(Issue("S-pair", SEV_INTEGRITY_WARN,
-                            "켈리 사이징은 현재 동일가중으로 근사됩니다(입력 미지원).", "position.sizing"))
-    if ent.mode == "always" and pos.exit.mode != "daily":
+                            "종목당 예산 사이징(fixed_amount·pct_cash)은 이벤트(on_signal) 진입용 — "
+                            "스케줄·상시 진입에선 동일가중으로 처리됩니다.", "position.sizing"))
+    if ent.mode == "always" and any((pos.exit.hold_days, pos.exit.take_profit, pos.exit.stop_loss,
+                                      pos.exit.trail_pct, pos.exit.trail_atr_mult, pos.exit.condition)):
         issues.append(Issue("S-pair", SEV_INTEGRITY_WARN,
-                            "상시 진입은 매일 리밸런싱이라 청산 규칙이 무시됩니다.", "position.exit"))
+                            "상시 진입은 매일 리밸런싱이라 설정한 청산 규칙이 무시됩니다.", "position.exit"))
 
     # 유니버스
     if u.kind == "single" and len(u.symbols) != 1:
         issues.append(Issue("S-univ", SEV_ERROR, "단일 유니버스는 종목 1개가 필요합니다.", "universe"))
     if u.kind == "list" and not u.symbols:
         issues.append(Issue("S-univ", SEV_ERROR, "리스트 유니버스는 종목이 1개 이상 필요합니다.", "universe"))
-    if ent.mode == "on_signal" and u.kind == "all":
+    if ent.mode == "on_signal" and u.kind in ("all", "screener"):
         issues.append(Issue("S-univ", SEV_ERROR,
-                            "전체 유니버스는 정기리밸런싱(scheduled)·상시(always) 진입과 함께 쓰세요.", "universe"))
-    if u.kind == "screener":
-        issues.append(Issue("S-univ", SEV_ERROR,
-                            "screener 유니버스 동적 해결은 데이터 연동 후 지원됩니다 — 현재는 전체/리스트를 쓰세요.",
+                            "전체·스크리너 유니버스는 정기리밸런싱(scheduled)·상시(always) 진입과 함께 쓰세요.",
                             "universe"))
+    if u.kind == "screener":
+        sc = u.screener or {}
+        f, rk = sc.get("filter"), sc.get("rank")
+        if not f and not rk:
+            issues.append(Issue("S-univ", SEV_ERROR,
+                                "스크리너는 filter(조건) 또는 rank(순위컷) 중 하나 이상이 필요합니다.", "universe"))
+        if f is not None:
+            try:
+                fnode = Node.model_validate(f)
+            except Exception:                       # noqa: BLE001 — 잘못된 트리
+                issues.append(Issue("S-univ", SEV_ERROR, "스크리너 filter가 유효한 블록이 아닙니다.", "universe"))
+            else:
+                issues += list(validate(fnode, valid_refs))
+                if signal_out_type(fnode) != "condition":
+                    issues.append(Issue("S-univ", SEV_ERROR,
+                                        "스크리너 filter는 condition(참/거짓) 블록이어야 합니다.", "universe"))
+        if rk is not None and (not rk.get("ref") or not rk.get("top_n")):
+            issues.append(Issue("S-univ", SEV_ERROR, "스크리너 rank는 ref·top_n이 필요합니다.", "universe"))
 
     # 매도 조건 노드
     if pos.exit.condition is not None:
@@ -183,9 +245,32 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
         if signal_out_type(pos.exit.condition) != "condition":
             issues.append(Issue("S-exit", SEV_ERROR, "매도 조건은 condition 블록이어야 합니다.", "exit.condition"))
 
+    # 오버레이 (그룹 캡·낙폭 제어)
+    ov = pos.overlays
+    if ov.group_label is not None:
+        issues += list(validate(ov.group_label, valid_refs))
+        if signal_out_type(ov.group_label) != "label":
+            issues.append(Issue("S-overlay", SEV_ERROR,
+                                "그룹 노출 라벨(group_label)은 label 블록(구간분할·달력)이어야 합니다.",
+                                "position.overlays"))
+    if ov.max_group_pct is not None and ov.group_label is None:
+        issues.append(Issue("S-overlay", SEV_ERROR,
+                            "그룹 노출 캡(max_group_pct)은 group_label 블록이 필요합니다.", "position.overlays"))
+    if (ov.max_drawdown_soft is not None and ov.max_drawdown_stop is not None
+            and abs(ov.max_drawdown_soft) >= abs(ov.max_drawdown_stop)):
+        issues.append(Issue("S-overlay", SEV_INTEGRITY_WARN,
+                            "낙폭 soft가 hard 이상 — 부분 디리스킹 없이 binary kill로 동작합니다.",
+                            "position.overlays"))
+
     # 펼침
     if s.sweep.axis == "condition" and s.sweep.label is None:
         issues.append(Issue("S-sweep", SEV_ERROR, "조건축 펼침은 라벨 블록이 필요합니다.", "sweep"))
+    if s.sweep.axis == "parameter" and (not s.sweep.param_grid
+                                        or any(not ax.values for ax in s.sweep.param_grid)):
+        issues.append(Issue("S-sweep", SEV_ERROR,
+                            "파라미터축 펼침은 param_grid(경로·값 목록)가 필요합니다.", "sweep"))
+    if s.sweep.axis == "asset" and not s.sweep.assets:
+        issues.append(Issue("S-sweep", SEV_ERROR, "자산축 펼침은 assets(종목 목록)가 필요합니다.", "sweep"))
     if s.sweep.axis == "time":
         ev = s.sweep.event or s.signal
         if signal_out_type(ev) != "condition":
@@ -193,8 +278,16 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
                                 "이벤트 분석은 이벤트 신호가 condition(발생 여부)이어야 합니다.", "sweep.event"))
         if not s.sweep.windows:
             issues.append(Issue("S-event", SEV_ERROR, "이벤트 분석은 forward 윈도우가 필요합니다.", "sweep.windows"))
+        if s.sweep.event_basis == "excess" and u.kind == "single":
+            issues.append(Issue("S-event", SEV_ERROR,
+                                "초과수익(excess) 기준은 시장 지수 생성을 위해 종목이 2개 이상이어야 합니다.",
+                                "sweep.event_basis"))
     if s.sweep.label is not None:
         issues += list(validate(s.sweep.label, valid_refs))
+        if signal_out_type(s.sweep.label) != "label":
+            issues.append(Issue("S-sweep", SEV_ERROR,
+                                "펼침 분할 라벨(sweep.label)은 label 블록(구간분할·국면·달력)이어야 합니다.",
+                                "sweep.label"))
     if s.sweep.event is not None:
         issues += list(validate(s.sweep.event, valid_refs))
 

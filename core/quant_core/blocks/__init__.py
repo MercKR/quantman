@@ -12,18 +12,18 @@ from . import ops_advanced, ops_arith, ops_core, ops_cs, ops_ts  # noqa: F401  (
 from .catalog import catalog_spec  # noqa: F401
 from .context import EvalContext, resolve_data, select_symbol  # noqa: F401
 from .evaluate import evaluate  # noqa: F401
-from .node import Node, const, data  # noqa: F401
+from .node import Node, const, data, referenced_symbols  # noqa: F401
 from .types import Shape, ValueType  # noqa: F401
 from .integrity import (  # noqa: F401
-    DatasetMeta, apply_delay, data_time_issues, integrity_issues, param_time_issues,
+    DatasetMeta, data_time_issues, integrity_issues, param_time_issues,
 )
 from .validate import (  # noqa: F401
     Issue, apply_defaults, available_refs, infer_shape, is_valid, validate,
 )
 
 __all__ = [
-    "Node", "data", "const", "ValueType", "Shape", "catalog_spec",
+    "Node", "data", "const", "referenced_symbols", "ValueType", "Shape", "catalog_spec",
     "EvalContext", "evaluate", "select_symbol", "resolve_data",
     "validate", "is_valid", "apply_defaults", "available_refs", "infer_shape", "Issue",
-    "DatasetMeta", "apply_delay", "integrity_issues", "data_time_issues", "param_time_issues",
+    "DatasetMeta", "integrity_issues", "data_time_issues", "param_time_issues",
 ]

@@ -61,6 +61,8 @@ _NEW_COLS: list[tuple[str, str, str]] = [
     ("usersettings", "daily_trade_count_limit",          "INTEGER DEFAULT 0"),
     # Phase 58+ — heartbeat 영구 저장 (server 재부팅 false alarm 방지)
     ("usersettings", "last_heartbeat_at",                "TIMESTAMP"),
+    # Stage 1 (IR 수렴) — 전략 표현 엔진 판별자(operand|ir). 레거시 row는 default 'operand'.
+    ("strategy",     "engine",                           "VARCHAR DEFAULT 'operand'"),
     # Phase 59 — 전략 버전 이력·현황 컬럼
     ("strategy",     "paper_started_at",                 "TIMESTAMP"),
     ("strategy",     "live_started_at",                  "TIMESTAMP"),

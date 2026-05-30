@@ -28,7 +28,8 @@ class SimBroker:
         return {"success": True, "order_no": odno, "filled_qty": 0, "price": 0}
 
     # ── Broker Protocol ──
-    def account_snapshot(self) -> dict:
+    def account_snapshot(self, overseas: bool = True) -> dict:
+        # overseas — 실 KisBroker는 국내/해외 조회를 가르지만 Sim은 단일 잔고. 인자만 수용.
         return {"balance": dict(self._balance), "positions": list(self._positions)}
 
     def price(self, symbol: str) -> float:

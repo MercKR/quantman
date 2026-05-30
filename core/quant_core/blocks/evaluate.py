@@ -1,7 +1,6 @@
 """평가기 — 블록 트리를 순회하며 타입드 값을 산출.
 
 명세 §4. 매수조건(type:condition)·알파가중치(type:score) 모두 이 한 함수로 평가.
-기존 build_signal_mask·ExpressionParser.evaluate를 대체한다.
 
 블록 구현(eval_fn)은 ops_*.py에 등록되고 여기 walker가 호출한다.
 """

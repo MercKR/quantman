@@ -36,6 +36,8 @@ def _multi():
 @pytest.fixture(autouse=True)
 def _patch(monkeypatch):
     monkeypatch.setattr(ir, "get_dataset", _multi)
+    # 게이트는 test_data_layer에서 검증 — 여기선 실행 경로만 보므로 manifest 생략(None=게이트 skip).
+    monkeypatch.setattr(ir, "get_manifest", lambda: None)
 
 
 def _factor_body(top_n=1, direction="long", sweep=None):
@@ -66,11 +68,24 @@ def test_long_short_strategy():
 
 def test_parameter_sweep():
     body = _factor_body(sweep={"axis": "parameter",
-                               "param_path": "position.entry.top_n",
-                               "param_values": [1, 2]})
+                               "param_grid": [{"path": "position.entry.top_n",
+                                               "values": [1, 2]}]})
     res = ir_strategy(body, user=None)
     assert res["success"] and res["axis"] == "parameter"
-    assert set(res["buckets"].keys()) == {"1", "2"}
+    assert set(res["buckets"].keys()) == {"top_n=1", "top_n=2"}
+    assert "axes" in res
+
+
+def test_parameter_sweep_2d_grid():
+    """비용 민감도 — commission × slippage 데카르트곱 격자."""
+    body = _factor_body(sweep={"axis": "parameter", "param_grid": [
+        {"path": "simulation.commission", "values": [0.0, 0.001]},
+        {"path": "simulation.slippage", "values": [0.0, 0.001]}]})
+    res = ir_strategy(body, user=None)
+    assert res["success"] and res["axis"] == "parameter"
+    assert len(res["buckets"]) == 4
+    for b in res["buckets"].values():
+        assert "mdd" in b and "cagr" in b      # 버킷 풍부지표(갭 A)
 
 
 def test_rejects_on_signal_score():
@@ -83,6 +98,56 @@ def test_rejects_on_signal_score():
     res = ir_strategy(body, user=None)
     assert res["success"] is False
     assert any(i["rule"] == "S-entry" for i in res["issues"])
+
+
+def test_ir_backtest_persisted_to_saved_strategy():
+    """저장된 IR 전략 백테스트(strategy_id 동봉)는 BacktestRun으로 영속 → 백테스트 내역에 표시.
+
+    operand /backtest/run이 하던 영속화를 IR 경로로 이전(내 전략 '백테스트 내역' 탭 데이터).
+    strategy_id 없는 시범 백테스트는 저장 안 됨(orphan 정책)도 함께 확인.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy.pool import StaticPool
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from app.db import get_session
+    from app.models import User
+    from app.routers import ir as ir_router
+    from app.routers import strategies as strat_router
+    from app.security import create_access_token
+
+    eng = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                        poolclass=StaticPool)
+    SQLModel.metadata.create_all(eng)
+    with Session(eng) as s:
+        u = User(email="bt@example.com"); s.add(u); s.commit(); s.refresh(u); uid = u.id
+    app = FastAPI()
+    app.include_router(ir_router.router)
+    app.include_router(strat_router.router)
+
+    def _ov():
+        with Session(eng) as s:
+            yield s
+    app.dependency_overrides[get_session] = _ov
+    c = TestClient(app)
+    H = {"Authorization": f"Bearer {create_access_token(uid)}"}
+
+    sdef = _factor_body()
+    sid = c.post("/strategies", headers=H,
+                 json={"definition": sdef, "run_mode": "draft", "engine": "ir"}).json()["id"]
+
+    # 1) strategy_id 동봉 백테스트 → 영속
+    r = c.post("/ir/strategy", headers=H, json={**sdef, "strategy_id": sid})
+    assert r.status_code == 200 and r.json().get("success"), r.text
+    bts = c.get(f"/strategies/{sid}/backtests", headers=H).json()
+    assert len(bts) == 1, bts
+    assert bts[0]["version_no"] == 1
+    assert "total_return" in (bts[0]["metrics"] or {})
+
+    # 2) strategy_id 없는 시범 백테스트 → 저장 안 됨(내역 그대로 1건)
+    c.post("/ir/strategy", headers=H, json=sdef)
+    assert len(c.get(f"/strategies/{sid}/backtests", headers=H).json()) == 1
 
 
 if __name__ == "__main__":

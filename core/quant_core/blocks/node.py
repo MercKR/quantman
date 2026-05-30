@@ -58,3 +58,20 @@ def data(ref: str) -> Node:
 def const(value: Any) -> Node:
     """상수 잎. value는 숫자 또는 [min, max](between용)."""
     return Node(op=OP_CONST, params={"value": value})
+
+
+def referenced_symbols(node: Node) -> set[str]:
+    """트리에서 명시적으로 참조된 외부 종목("SYM.field")의 집합.
+
+    __SELF__·점 없는 ref(각 종목 자신)는 제외한다. 평가 컨텍스트를 유니버스 달력으로
+    좁힐 때, 함께 보존해야 할 외부 시장/매크로 심볼(예: VIX·S&P500)만 모은다.
+    """
+    out: set[str] = set()
+    ref = node.params.get("ref") if node.op == OP_DATA else None
+    if isinstance(ref, str) and "." in ref:
+        sym = ref.split(".", 1)[0]
+        if sym != "__SELF__":
+            out.add(sym)
+    for child in node.inputs.values():
+        out |= referenced_symbols(child)
+    return out

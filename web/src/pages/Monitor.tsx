@@ -223,8 +223,7 @@ export default function Monitor() {
             <Stat label="평가금액" value={summary.equity_post?.toLocaleString() ?? "—"} />
             <Stat label="매수" value={summary.n_bought ?? 0} />
             <Stat label="매도" value={summary.n_sold ?? 0} />
-            <Stat label="갭 스킵" value={summary.n_skip_gap ?? 0} />
-            <Stat label="신호 미충족" value={summary.n_skip_signal ?? 0} />
+            <Stat label="보유 스킵" value={summary.n_skip_held ?? 0} />
             <Stat label="거부" value={summary.n_rejected ?? 0} />
           </div>
         </div>
@@ -331,7 +330,6 @@ export default function Monitor() {
                 {c.ts.replace("T", " ").slice(0, 19)} —
                 {" "}매수 {c.summary.n_bought ?? 0} ·
                 {" "}매도 {c.summary.n_sold ?? 0} ·
-                {" "}갭 {c.summary.n_skip_gap ?? 0} ·
                 {" "}거부 {c.summary.n_rejected ?? 0}
                 {c.summary.kill_switch ? " · ⚠ KS" : ""}
               </summary>

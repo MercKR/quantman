@@ -121,7 +121,7 @@ export default function Dashboard() {
       msg: mode === "live"
         ? "실전 전략이 없습니다"
         : "모의 전략을 만들어 시작하세요",
-      link: "/backtest",
+      link: "/lab",
     });
   }
 
@@ -304,8 +304,8 @@ export default function Dashboard() {
                   ? "실전 전략이 없습니다"
                   : "모의 전략을 만들어 시작하세요"}
               </div>
-              <Link to="/backtest" className="cta">
-                전략 만들기 →
+              <Link to="/lab" className="cta">
+                전략 연구소 →
               </Link>
             </div>
           ) : (

@@ -65,6 +65,18 @@ def build_bundle() -> dict:
             for p in sorted(base.glob("*.parquet")):
                 tar.add(p, arcname=p.name)
                 n_files += 1
+            # 정적 메타 사이드카(섹터·상장폐지일) — 로컬 get_symbol_group·매니페스트가 소비.
+            for name in ("_classification.json", "_listing.json"):
+                sp = base / name
+                if sp.exists():
+                    tar.add(sp, arcname=sp.name)
+                    n_files += 1
+            # 펀더멘털 parquet 서브디렉터리(SEC US·OpenDART KR) — 로컬 백테스트·조건평가가 소비.
+            fdir = base / "fundamentals"
+            if fdir.exists():
+                for p in sorted(fdir.glob("*.parquet")):
+                    tar.add(p, arcname=f"fundamentals/{p.name}")
+                    n_files += 1
         size_mb = tmp.stat().st_size / 1024 / 1024
         # ETag = md5 of bundle (강력함, 안전한 cache invalidation)
         h = hashlib.md5()

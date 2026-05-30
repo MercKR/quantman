@@ -49,29 +49,39 @@ def _write_sessions_json(path: Path, market: str,
 
 @pytest.fixture
 def isolated_cache(monkeypatch, tmp_path):
-    """USER_CACHE_DIR를 tmp로 격리. _load 캐시도 무효화."""
-    user_dir = tmp_path / "user_cache"
-    monkeypatch.setenv("QUANTMAN_CALENDAR_DIR", str(user_dir))
-    # 모듈 다시 import해서 USER_CACHE_DIR가 환경변수 읽도록
-    import importlib
+    """USER_CACHE_DIR를 tmp로 격리. _load lru_cache도 무효화.
+
+    모듈을 reload하지 않고 USER_CACHE_DIR 속성만 monkeypatch한다. reload는 공유
+    모듈 객체를 전역 변형하는데, USER_CACHE_DIR는 import 시점에 한 번 계산되므로
+    monkeypatch가 거둬가는 env 변수와 달리 teardown 후에도 삭제된 tmp 경로를
+    그대로 가리킨다 — 뒤이어 같은 모듈을 쓰는 다른 테스트 파일을 오염시키는
+    순서 의존 플레이키의 근원. setattr는 teardown 시 원래 값으로 자동 복원된다.
+    """
     from quant_core import market_calendar
-    importlib.reload(market_calendar)
+    user_dir = tmp_path / "user_cache"
+    monkeypatch.setattr(market_calendar, "USER_CACHE_DIR", user_dir)
     market_calendar._load.cache_clear()
     yield user_dir, market_calendar
     market_calendar._load.cache_clear()
 
 
 def test_user_cache_takes_priority(isolated_cache):
-    """사용자 캐시에 파일이 있으면 그것이 로드됨."""
+    """사용자 캐시 커버 구간은 사용자 캐시가 권위(번들 덮어씀), 그 밖은 번들 보존.
+
+    _load는 번들(넓은 과거~2030)과 사용자 캐시를 병합한다: [u_lo,u_hi] 구간은
+    사용자 캐시가 이기고, 그 밖(여기선 미래 2026~2030)은 번들이 채운다.
+    """
     user_dir, mc = isolated_cache
-    # 사용자 캐시에 임의 데이터 (번들의 실제 값과 다른 first/last)
+    # 사용자 캐시: [2024-01-02, 2025-12-31] 구간. 번들에 실재하는 2024-01-02
+    # (반일장 ['10:00','15:30'])을 다른 값으로 덮어쓴다.
     _write_sessions_json(user_dir / "kr_sessions.json", "KR",
-                          "2099-01-01", "2099-12-31")
+                          "2024-01-02", "2025-12-31",
+                          extra_sessions={"2024-01-02": ["11:11", "12:22"]})
     cal = mc._load("KR")
-    assert "2099-01-01" in cal["sessions"]
-    assert "2099-12-31" in cal["sessions"]
-    # 번들 데이터(2024-01-02 등)는 안 보여야 함
-    assert "2024-01-02" not in cal["sessions"]
+    # 겹치는 날은 사용자 캐시가 우선 — 번들의 ['10:00','15:30']이 아니라 사용자 값
+    assert cal["sessions"]["2024-01-02"] == ["11:11", "12:22"]
+    # 사용자 캐시 구간 밖(미래)의 번들 세션은 병합으로 보존됨
+    assert "2030-12-30" in cal["sessions"]
 
 
 def test_bundle_fallback_when_user_cache_missing(isolated_cache):
@@ -112,9 +122,15 @@ def test_check_fresh_returns_true_with_horizon(isolated_cache):
     assert msg == ""
 
 
-def test_check_fresh_returns_false_when_expiring(isolated_cache):
-    """오늘 + 7일 안에 마지막 세션이 없으면 False + 설명 msg."""
+def test_check_fresh_returns_false_when_expiring(isolated_cache, monkeypatch):
+    """오늘 + 7일 안에 마지막 세션이 없으면 False + 설명 msg.
+
+    번들엔 2030년까지 세션이 있어 병합하면 캘린더가 절대 만료되지 않는다. 만료
+    경로를 검증하려면 번들을 비활성화해 짧은 사용자 캐시가 전체 캘린더가 되게 한다.
+    """
     user_dir, mc = isolated_cache
+    monkeypatch.setattr(mc, "_BUNDLE_FILES",
+                        {**mc._BUNDLE_FILES, "KR": mc._BUNDLE_DIR / "__nonexistent__.json"})
     today = date(2026, 5, 23)
     # 마지막 세션이 오늘 + 3일 (lookahead 7일 미충족)
     near = (today + timedelta(days=3)).isoformat()

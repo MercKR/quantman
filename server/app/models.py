@@ -32,6 +32,10 @@ class Strategy(SQLModel, table=True):
     user_id: int = Field(index=True, foreign_key="user.id")
     name: str
     run_mode: str = "draft"          # draft | paper | live
+    # 전략 표현 엔진 — ir(통합 IR "전략 연구소" StrategyIR). 신규 row는 'ir'.
+    # 레거시 operand row가 DB에 남아 있을 수 있어 컬럼 자체는 임의 문자열 허용 —
+    # preview_engine.py/main.py의 getattr(...,"operand") 가드가 그런 row를 skip한다.
+    engine: str = "ir"
     definition: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)

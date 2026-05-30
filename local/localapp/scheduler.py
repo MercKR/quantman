@@ -8,9 +8,10 @@
 
 미국(US) — 동적 야간 플래너:
 - 매일 12:00  오늘 밤 미국 세션을 시장 캘린더로 계산해 one-shot 잡 등록
-  · open−5분  미국 자동매매 사이클 (run_cycle market="US")
+  · open−20분 미국 예약발주 사이클 (run_cycle market="US", reserved=True)
+  · open−10분 미국 장중 손절 loop 시작
+  · open+5분  개장 후 예약체결 reconcile
   · close+5분 미국 장 마감 후 settlement
-  (US 장중 손절 loop start/stop은 P8에서 추가)
 - 미국 개장은 DST로 22:30↔23:30 KST 이동 + 휴장일이 한국과 달라 고정 cron이
   불가능하므로, 매일 캘린더에 물어 그날치 잡을 등록한다(휴장이면 무동작).
 
@@ -30,7 +31,7 @@ from apscheduler.triggers.date import DateTrigger
 from quant_core import market_calendar as mc
 
 from . import intraday_loop
-from .runner import run_cycle, run_post_close_settlement
+from .runner import run_cycle, run_post_close_settlement, run_post_open_reconcile
 
 log = logging.getLogger("localapp.scheduler")
 KST = ZoneInfo("Asia/Seoul")
@@ -60,19 +61,30 @@ def _plan_us_session(sched: BlockingScheduler, now: datetime | None = None) -> N
                  open_kst.strftime("%m-%d %H:%M"))
         return
 
+    # 예약주문 발주는 개장 전 접수창(개장−10분 마감) 안에 끝나야 한다. dataset
+    # 다운로드(~130초)+평가 여유로 개장−20분에 사이클 시작 → 개장−10분 전 발주 완료.
+    cycle_at = open_kst - timedelta(minutes=20)
     loop_start_at = open_kst - timedelta(minutes=10)
-    cycle_at = open_kst - timedelta(minutes=5)
+    reconcile_at = open_kst + timedelta(minutes=5)
     settle_at = close_kst + timedelta(minutes=5)
 
-    # 손절 loop을 사이클보다 먼저 시작 — WebSocket·체결통보 ready 마진 (KRX와 동일 패턴)
+    # 예약주문 발주 사이클 — 개장 전. reserved=True로 매수=지정가 예약·매도=MOO 예약.
+    sched.add_job(
+        run_cycle, DateTrigger(run_date=cycle_at),
+        kwargs={"market": "US", "reserved": True}, id="us_cycle",
+        name="미국 자동매매 사이클(예약발주)",
+        replace_existing=True, misfire_grace_time=600)
+    # 손절 loop을 개장 전 시작 — 개장 체결통보 수신 마진 (KRX와 동일 패턴)
     sched.add_job(
         intraday_loop.start, DateTrigger(run_date=loop_start_at),
         kwargs={"market": "US"}, id="us_loop_start", name="미국 장중 손절 loop 시작",
         replace_existing=True, misfire_grace_time=600)
+    # 개장 직후 예약주문 체결 reconcile — 체결통보 WS 미수신분도 ledger·서버 반영.
     sched.add_job(
-        run_cycle, DateTrigger(run_date=cycle_at),
-        kwargs={"market": "US"}, id="us_cycle", name="미국 자동매매 사이클",
-        replace_existing=True, misfire_grace_time=600)
+        run_post_open_reconcile, DateTrigger(run_date=reconcile_at),
+        kwargs={"market": "US"}, id="us_post_open_reconcile",
+        name="미국 개장 후 예약체결 reconcile",
+        replace_existing=True, misfire_grace_time=900)
     sched.add_job(
         intraday_loop.stop, DateTrigger(run_date=close_kst),
         id="us_loop_stop", name="미국 장중 손절 loop 종료",
@@ -82,9 +94,11 @@ def _plan_us_session(sched: BlockingScheduler, now: datetime | None = None) -> N
         kwargs={"market": "US"}, id="us_settlement", name="미국 장마감 정산",
         replace_existing=True, misfire_grace_time=1800)
 
-    log.info("미국 세션 스케줄 — loop %s · 사이클 %s · loop종료 %s · 정산 %s (KST)",
-             loop_start_at.strftime("%H:%M"), cycle_at.strftime("%H:%M"),
-             close_kst.strftime("%m-%d %H:%M"), settle_at.strftime("%H:%M"))
+    log.info("미국 세션 스케줄 — 사이클(예약) %s · loop %s · 개장후reconcile %s · "
+             "loop종료 %s · 정산 %s (KST)",
+             cycle_at.strftime("%H:%M"), loop_start_at.strftime("%H:%M"),
+             reconcile_at.strftime("%H:%M"), close_kst.strftime("%m-%d %H:%M"),
+             settle_at.strftime("%H:%M"))
 
 
 def register_jobs(sched) -> None:
@@ -194,7 +208,7 @@ def start() -> None:
     print("=" * 52)
     print("  로컬앱 스케줄러 시작 (KST)")
     print("  [KRX] 08:50 loop · 08:55 사이클 · 15:30 loop종료 · 15:35 정산")
-    print("  [US ] 매일 12:00 야간 플래너 → 세션 open−5분 사이클 / close+5분 정산")
+    print("  [US ] 매일 12:00 야간 플래너 → open−20분 예약발주 / open+5분 reconcile / close+5분 정산")
     print("        (DST·휴장 자동 반영, 오늘 밤 세션은 기동 시 즉시 등록)")
     print("  [캘린더] 04:00 시장 캘린더 일일 sync (임시공휴일 반영)")
     print("  브로커: KIS (실전/모의투자)")

@@ -22,10 +22,6 @@ export type ModifierKind = "streak" | "within";
 /** Phase 41 — Operand.symbol에 이 sentinel을 넣으면 "각 매수 대상 종목" placeholder.
  *  평가 엔진이 current_symbol로 치환. 빌더 좌변 종목 드롭다운 첫 옵션. */
 export const SELF_SYMBOL = "__SELF__";
-export const SELF_LABEL = "[각 종목]";
-export function isSelfRef(op?: Operand | null): boolean {
-  return op?.symbol === SELF_SYMBOL;
-}
 
 export interface Operand {
   kind: OperandKind;
@@ -103,25 +99,6 @@ export interface ExecutionPolicy {
   bt_slippage_bps?: number;               // 편도 슬리피지 (bps). 10 = 0.10%
 }
 
-/** 사이징·리스크 default — exec_defaults.py와 동기. UI placeholder 및 신규 전략 default로 사용. */
-export const EXECUTION_DEFAULTS: Required<ExecutionPolicy> = {
-  // Phase 47 — default를 atr_risk → pct_cash로 변경. ATR은 데이터·손절폭 설정
-  // 부담이 있어 신규 사용자 진입 장벽이 컸음. 가장 직관적인 정률을 default로.
-  sizing_mode: "pct_cash",
-  amount_krw: 1_000_000,                  // fixed_amount 전환 시 placeholder (100만원)
-  atr_risk_pct: 1.0,
-  atr_mult: 2.0,
-  max_position_pct: 10.0,
-  max_drawdown_pct: 20.0,
-  use_limit: true,
-  buy_tolerance_pct: 1.0,
-  sell_tolerance_pct: 2.0,
-  // Phase 39
-  bt_commission_bps: 3,                   // 편도 위탁수수료만 (C-01 — 매도세 분리)
-  bt_sell_tax_bps: 23,                    // 매도세 (편도, KOSPI/KOSDAQ 평균)
-  bt_slippage_bps: 10,
-};
-
 export interface StrategyDef {
   name: string;
   trade_symbol: string;
@@ -172,7 +149,9 @@ export interface ScreenerField {
 
 export interface StrategyRow {
   id: number; name: string; run_mode: string;
-  definition: StrategyDef; created_at: string; updated_at: string;
+  // 표현 엔진 — operand(레거시 row) | ir(전략 연구소). engine으로 분기해 좁혀 읽는다.
+  engine?: "operand" | "ir";
+  definition: StrategyDef | IrStrategyDef; created_at: string; updated_at: string;
   // Phase 59 — run_mode 전환 시점 기록
   paper_started_at?: string | null;
   live_started_at?: string | null;
@@ -225,9 +204,11 @@ export type IrValueType =
 
 export interface IrParamSpec {
   name: string;
-  kind: "ref" | "number" | "number_list" | "select";
+  // value_list = 문자열·숫자 혼용 리스트(섹터·버킷 등), bool = 체크박스
+  kind: "ref" | "number" | "number_list" | "select" | "value_list" | "bool";
   label?: string;
   options?: string[];
+  labels?: Record<string, string> | null;   // 문장형 UI — 옵션값→한글 조각
   default?: unknown;
   required?: boolean;
   min?: number;
@@ -244,6 +225,7 @@ export interface IrBlockSpec {
   variadic_type: IrValueType | null;
   params: IrParamSpec[];
   requires_panel: boolean;
+  phrase?: string | null;    // 문장형 UI 템플릿 ({slot}/{param} 토큰; 없으면 generic 렌더)
   doc: string;
 }
 
@@ -251,20 +233,74 @@ export interface IrIssue {
   rule: string; severity: number; message: string; path: string;
 }
 
-export interface IrBacktestResult extends BacktestResult {
-  warnings?: IrIssue[];   // 비차단 무결성 경고 (PIT 미태깅 등)
-  issues?: IrIssue[];     // 차단 사유 (success=false일 때)
+// StrategyIR(통합 IR) 직렬화 형태 — core ir_engine/spec.py StrategyIR과 동기.
+// "전략 연구소" 저장/불러오기 라운드트립의 단일 표현. engine='ir' 전략의 definition.
+export interface IrStrategyDef {
+  name: string;
+  universe: {
+    kind: "single" | "list" | "all" | "screener";
+    symbols?: string[];
+    screener?: {
+      filter?: IrNode | null;
+      rank?: { ref: string; top_n: number; direction: string } | null;
+    } | null;
+    exclude_macro?: boolean;
+  };
+  signal: IrNode;
+  position: {
+    direction: "long" | "short" | "long_short";
+    sizing: {
+      mode: string;
+      amount_pct?: number; amount_krw?: number | null;
+      target_vol_pct?: number | null; weights?: Record<string, number> | null;
+      vol_window?: number; max_position_pct?: number;
+    };
+    entry: {
+      mode: string; rebalance?: string; every_n_days?: number | null;
+      top_n?: number | null; top_pct?: number | null;
+      threshold?: number | null; refill?: string;
+    };
+    exit: {
+      hold_days?: number | null; take_profit?: number | null; stop_loss?: number | null;
+      trail_pct?: number | null; trail_atr_mult?: number | null; condition?: IrNode | null;
+    };
+    overlays: {
+      vol_target?: number | null; turnover_damp?: number | null;
+      max_drawdown_stop?: number | null; max_drawdown_soft?: number | null;
+      max_group_pct?: number | null; group_label?: IrNode | null;
+    };
+  };
+  simulation: {
+    initial_capital?: number; delay?: number; fill?: string;
+    commission?: number | null; slippage?: number | null; sell_tax?: number | null;
+    currency?: string; leverage?: number;
+    short_borrow_pct?: number | null; funding_cost_pct?: number | null; rfr_pct?: number | null;
+    start?: string | null; end?: string | null; period_split?: string;
+  };
+  sweep: {
+    axis: "none" | "condition" | "parameter" | "asset" | "time";
+    label?: IrNode | null;
+    param_grid?: { path: string; values: (number | string)[] }[];
+    assets?: string[];
+    event?: IrNode | null;
+    windows?: number[];
+    event_basis?: string;
+  };
 }
 
+// 모든 펼침 버킷의 단일 지표 어휘 (engine perf_from_returns와 동기) — 갭 A.
 export interface IrSweepBucket {
   n: number;
-  mean?: number; std?: number; sharpe?: number;
-  cum_return?: number; win_rate?: number;
+  mean?: number; std?: number; sharpe?: number; sortino?: number;
+  cum_return?: number; cagr?: number; mdd?: number; win_rate?: number;
+  payoff_ratio?: number; profit_factor?: number; var_95?: number; cvar_95?: number;
   error?: string;
 }
 
+// 이벤트 표본 통계 — 종점 유의성 + 경로지표(MAE/MFE). 갭 C·E.
 export interface IrEventStat {
   n: number; mean?: number; t_stat?: number; p_value?: number; prob_positive?: number;
+  mean_mae?: number; worst_mae?: number; mean_mfe?: number; payoff_ratio?: number;
 }
 export interface IrPairTest {
   p_value?: number; mean_diff?: number; mean_a?: number; mean_b?: number;
@@ -278,11 +314,15 @@ export interface IrStrategyResult extends BacktestResult {
   axis?: "condition" | "parameter" | "asset" | "time" | "period_split";
   buckets?: Record<string, IrSweepBucket>;
   overall?: IrSweepBucket | Record<string, IrEventStat>;
-  param?: string;
+  // parameter축 격자 메타 (다축 Cartesian) — 갭 B
+  axes?: { path: string; values: (number | string)[] }[];
+  // period_split 일관성
+  consistency?: { n_folds: number; positive_folds: number; consistency: number };
   // condition축 유의성 (A1)
   compare?: { pairwise?: Record<string, IrPairTest> };
-  // time축 이벤트 스터디 (A2)
+  // time축 이벤트 스터디 (A2) — basis: close/intraday/excess (갭 C)
   windows?: string[];
+  basis?: "close" | "intraday" | "excess";
   n_events?: number;
   by_regime?: Record<string, {
     by_regime: Record<string, IrEventStat>;
@@ -301,26 +341,6 @@ export interface BacktestRunSummary {
   version_no?: number | null;
   start?: string | null;
   end?: string | null;
-}
-
-export interface BacktestRunDetail {
-  id: number;
-  name: string;
-  initial_capital: number;
-  start?: string | null;
-  end?: string | null;
-  created_at: string;
-  definition: StrategyDef;
-  result: BacktestResult;
-}
-
-export interface AnalysisResult {
-  success: boolean; error?: string;
-  n_samples?: number; prob_positive?: number | null;
-  mean?: number | null; median?: number | null;
-  q25?: number | null; q75?: number | null; std?: number | null;
-  t_stat?: number | null; p_value?: number | null;
-  distribution?: (number | null)[]; condition_dates?: string[];
 }
 
 export interface DeviceRow {
@@ -345,7 +365,7 @@ export interface OrderEvent {
 export interface CycleSummary {
   today?: string; n_strategies?: number;
   n_bought?: number; n_sold?: number;
-  n_skip_gap?: number; n_skip_signal?: number; n_skip_held?: number;
+  n_skip_held?: number;
   n_rejected?: number; n_unfilled?: number; n_errors?: number;
   kill_switch?: boolean;
   equity_pre?: number; equity_post?: number;

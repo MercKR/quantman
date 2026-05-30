@@ -33,7 +33,7 @@ _LOCAL_DIR = Path(__file__).resolve().parent.parent
 if str(_LOCAL_DIR) not in sys.path:
     sys.path.insert(0, str(_LOCAL_DIR))
 
-from localapp import intents
+from localapp import intents, state_store
 
 
 @pytest.fixture
@@ -268,15 +268,19 @@ def test_e2e_crash_between_phases_recovered_by_reconcile(jpath):
 
 
 def test_append_is_fsynced(jpath, monkeypatch):
-    """디스크 도달 보장 — os.fsync 호출됨."""
+    """디스크 도달 보장 — os.fsync 호출됨.
+
+    R5 이후 fsync는 state_store.append_jsonl(fsync=True) 안에서 일어난다.
+    intents.begin → state_store가 fsync하는 위임 경로를 검증한다(L-01 불변).
+    """
     fsync_called = []
-    real_fsync = intents.os.fsync
+    real_fsync = state_store.os.fsync
 
     def _wrapped(fd):
         fsync_called.append(fd)
         return real_fsync(fd)
 
-    monkeypatch.setattr(intents.os, "fsync", _wrapped)
+    monkeypatch.setattr(state_store.os, "fsync", _wrapped)
     intents.begin("2026-05-23", "iid-1", 42, "T", "005930", "buy", 10, 70000,
                   path=jpath)
     assert len(fsync_called) == 1
@@ -306,8 +310,6 @@ def test_trader_submit_buy_writes_intent_on_success(jpath, monkeypatch):
     monkeypatch.setattr("localapp.trader.EQUITY_PATH", trader_dirs[0] / "equity.json")
     monkeypatch.setattr("localapp.trader.PENDING_ORDERS_PATH",
                         trader_dirs[0] / "pending.json")
-    monkeypatch.setattr("localapp.trader.REBALANCE_PATH",
-                        trader_dirs[0] / "rebalance.json")
     monkeypatch.setattr("localapp.trader.TRADES_PATH",
                         trader_dirs[0] / "trades.jsonl")
 
@@ -342,8 +344,6 @@ def test_trader_submit_buy_marks_failed_when_broker_raises(jpath, monkeypatch):
     monkeypatch.setattr("localapp.trader.EQUITY_PATH", jpath.parent / "equity.json")
     monkeypatch.setattr("localapp.trader.PENDING_ORDERS_PATH",
                         jpath.parent / "pending.json")
-    monkeypatch.setattr("localapp.trader.REBALANCE_PATH",
-                        jpath.parent / "rebalance.json")
     monkeypatch.setattr("localapp.trader.TRADES_PATH",
                         jpath.parent / "trades.jsonl")
 

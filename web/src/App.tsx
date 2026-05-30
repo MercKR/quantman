@@ -3,7 +3,6 @@ import { useAuth } from "./auth";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
-import Backtest from "./pages/Backtest";
 import IrBuilder from "./pages/IrBuilder";
 import Strategies from "./pages/Strategies";
 import StrategyDetail from "./pages/StrategyDetail";
@@ -33,7 +32,6 @@ export default function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/backtest" element={<Backtest />} />
         <Route path="/lab" element={<IrBuilder />} />
         <Route path="/strategies" element={<Strategies />} />
         <Route path="/strategies/:id" element={<StrategyDetail />} />

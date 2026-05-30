@@ -4,9 +4,9 @@
   데이터 시점 무결성  — 그 시점에 알 수 있던 데이터만 쓰는가 (delay·PIT·생존편향)
   파라미터 시점 무결성 — 기준값을 미래 정보로 정하지 않았나 (causal 연산만 허용)
 
-Phase 0는 골격: 핵심 look-ahead 가드(apply_delay)는 실동작하고, PIT·생존편향은
-데이터 레이어(Phase 3)가 채울 DatasetMeta 훅으로 검사한다. 무결성 이슈는
-validate의 SEV_INTEGRITY로 최우선 표시된다(편의보다 무결성 우선).
+look-ahead 지연(신호→체결)은 백테스트 엔진이 실집행한다(run.py가 목표가중치를 delay만큼
+shift). 이 모듈은 비-causal 블록·PIT·생존편향 차원을 DatasetMeta 훅으로 검사하고, 무결성
+이슈를 validate의 SEV_INTEGRITY로 최우선 표시한다(편의보다 무결성 우선).
 """
 
 from __future__ import annotations
@@ -31,18 +31,6 @@ class DatasetMeta:
     has_pit: bool = False                  # 펀더멘털·추정치 발표일 기반 PIT 태깅
     has_membership_history: bool = False   # 지수 구성 이력(생존편향 방지)
     delay: int = 1                         # 신호→체결 지연(거래일). 1=익일.
-
-
-# ── look-ahead 가드 (실동작) ──────────────────────────────────────────────────
-
-def apply_delay(value, delay: int):
-    """신호를 delay 거래일 만큼 미뤄 당일 정보로 당일 체결하는 look-ahead를 막는다.
-
-    백테스트가 신호 패널/시리즈를 포지션으로 옮기기 직전에 적용한다.
-    """
-    if delay and delay > 0 and hasattr(value, "shift"):
-        return value.shift(delay)
-    return value
 
 
 # ── 파라미터 시점 무결성 ──────────────────────────────────────────────────────

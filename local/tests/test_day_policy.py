@@ -31,7 +31,6 @@ def _isolated_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
     monkeypatch.setattr(cfg, "TRADES_PATH", tmp_path / "t.jsonl")
     yield tmp_path
 

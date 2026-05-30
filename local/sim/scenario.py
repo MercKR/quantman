@@ -25,6 +25,26 @@ def buy_and_fill(trader, broker, sid: str, symbol: str, qty: int, price: float,
     return r["order_no"]
 
 
+def strategy_buy_and_fill(trader, broker, sid: str, strat_def: dict, symbol: str,
+                          dataset: dict, fill_price: float,
+                          equity: float = 10_000_000.0):
+    """**결정경로** 매수 — `_try_buy_one_symbol`(IR 사이징)을 실제로 구동.
+
+    buy_and_fill은 선정·사이징을 건너뛰고 직접 발주하지만, 이 헬퍼는 사이징까지 production
+    코드로 돌려 IR `event_buy_qty`를 검증한다. 발주되면 전량 WS 체결까지 진행.
+    (order_no, decisions) 반환 — 발주 안 됐으면 order_no=None.
+    """
+    decisions: list[dict] = []
+    n_before = len(broker.submitted)
+    trader._try_buy_one_symbol(sid, sid, strat_def.get("name", ""), strat_def,
+                               symbol, dataset, equity, decisions)
+    if len(broker.submitted) == n_before:
+        return None, decisions
+    last = broker.submitted[-1]
+    inject_ws_fill(trader, broker, last["order_no"], last["qty"], fill_price)
+    return last["order_no"], decisions
+
+
 def run_settlement(trader, broker, today_iso: str) -> None:
     """장 마감 후 정산 경로(실 trader 메서드 구동)."""
     decisions: list[dict] = []

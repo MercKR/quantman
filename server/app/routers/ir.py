@@ -8,14 +8,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlmodel import Session, select
 
 from quant_core.blocks import DatasetMeta, available_refs, catalog_spec
 from quant_core.ir_engine import backtest_from_spec, strategy_from_spec
 
-from ..data_cache import get_dataset
+from ..data_cache import get_dataset, get_manifest
+from ..db import get_session
 from ..deps import get_current_user
-from ..models import User
-from ..serialize import serialize_backtest
+from ..models import BacktestRun, Strategy, StrategyVersion, User
+from ..serialize import clean_json, serialize_backtest
 
 router = APIRouter(prefix="/ir", tags=["ir"])
 
@@ -62,25 +64,58 @@ def ir_backtest(body: IrBacktestIn, user: User = Depends(get_current_user)):
     return payload
 
 
+def _persist_ir_backtest(session: Session, user, body: dict, payload: dict) -> None:
+    """저장된(소유) 전략의 1회 IR 백테스트를 BacktestRun으로 영속화 — 내 전략 "백테스트 내역" 탭.
+
+    body.strategy_id가 있고 그 전략이 user 소유일 때만 저장(없으면 빌더의 시범 실행 →
+    orphan 정책에 따라 미저장). version_no는 그 전략의 최신 버전. operand /backtest/run이
+    하던 영속화를 IR 경로로 동형 이전한 것.
+    """
+    sid = body.get("strategy_id")
+    if not sid or user is None:
+        return
+    strat = session.get(Strategy, sid)
+    if strat is None or strat.user_id != user.id:
+        return
+    vno = session.exec(
+        select(StrategyVersion.version_no)
+        .where(StrategyVersion.strategy_id == sid)
+        .order_by(StrategyVersion.version_no.desc())
+    ).first()
+    sim = body.get("simulation") or {}
+    session.add(BacktestRun(
+        user_id=user.id, strategy_id=int(sid), version_no=vno, name=strat.name,
+        definition=body, result={"metrics": payload.get("metrics") or {}},
+        initial_capital=float(sim.get("initial_capital") or 10_000_000),
+        start=sim.get("start"), end=sim.get("end")))
+    session.commit()
+
+
 @router.post("/strategy")
-def ir_strategy(body: dict, user: User = Depends(get_current_user)):
+def ir_strategy(body: dict, user: User = Depends(get_current_user),
+                session: Session = Depends(get_session)):
     """완전한 StrategyIR(유니버스·신호·포지션 4부품·시뮬·펼침) 백테스트.
 
     sweep.axis != none이면 펼침 resultset(버킷), 아니면 1회 백테스트 결과.
+    저장된 전략(body.strategy_id) 백테스트면 BacktestRun으로 내역 저장.
     """
     dataset = get_dataset()
+    # 무결성 4액션 게이트 가동 — manifest(실측) vs DataSpec(요구). meta는 manifest에서 도출.
+    # strict=true(body)면 편향형 경고를 거부로 승격(실전 자금 투입 前 게이트).
     res = strategy_from_spec(
-        body, dataset, valid_refs=available_refs(dataset), meta=DatasetMeta())
+        body, dataset, valid_refs=available_refs(dataset),
+        manifest=get_manifest(), strict=bool(body.get("strict", False)))
     if not res.get("success"):
         return {"success": False, "error": res.get("error"),
                 "issues": res.get("issues", [])}
     if res.get("axis"):   # 펼침 resultset (equity Series는 JSON 비호환이라 제외)
         out = {"success": True, "axis": res["axis"], "warnings": res.get("warnings", [])}
-        for k in ("buckets", "overall", "param", "metrics", "compare",
-                  "windows", "by_regime", "n_events"):
+        for k in ("buckets", "overall", "axes", "metrics", "compare", "consistency",
+                  "windows", "by_regime", "n_events", "basis"):
             if k in res and res[k] is not None:
                 out[k] = res[k]
-        return out
+        return clean_json(out)   # NaN/inf→None (allow_nan=False JSONResponse 호환)
     payload = serialize_backtest(res)          # 1회 백테스트
     payload["warnings"] = res.get("warnings", [])
+    _persist_ir_backtest(session, user, body, payload)
     return payload

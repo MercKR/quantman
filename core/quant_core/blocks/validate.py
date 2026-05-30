@@ -32,7 +32,7 @@ SEV_INFO = 10             # 규칙5 완결성 — 자동 보정
 _REQUIRED_PARAMS = {
     OP_DATA: ["ref"], OP_CONST: ["value"], "compare": ["op"],
     "binary": ["op"], "unary": ["func"], "cross": ["direction"],
-    "bucket": ["edges"],
+    "bucket": ["edges"], "is_in": ["values"],
 }
 
 

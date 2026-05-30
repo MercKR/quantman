@@ -1,8 +1,8 @@
 """장중 stop loss — KIS WebSocket tick 기반 즉각 매도 발동.
 
-Phase 32: 매도/청산이 일원화된 sell_rules의 가격 기반 트리거(익절/손절/트레일링/
-ATR 트레일링)를 장중 실시간으로 평가한다. tick이 들어올 때마다 다음 우선순위로
-평가하고 트리거 발생 시 즉시 KIS 매도 발주:
+IR position.exit의 가격 기반 트리거(익절/손절/트레일링/ATR 트레일링)를 장중
+실시간으로 평가한다. tick이 들어올 때마다 다음 우선순위로 평가하고 트리거
+발생 시 즉시 KIS 매도 발주:
 
   1. 익절 (cur ≥ entry × (1 + tp%))
   2. 손절 (cur ≤ entry × (1 + sl%))   sl은 음수
@@ -19,35 +19,11 @@ import threading
 import time
 from typing import Callable
 
-import quant_core as qc
 from quant_core.exec_defaults import merged_execution
+from quant_core.ir_engine import StrategyIR
+from quant_core.ir_engine import live as ir_live
 
 log = logging.getLogger("localapp.intraday_stop")
-
-
-def evaluate_price_trigger(sr: "qc.SellRules", cur_price: float,
-                            entry_price: float, peak_price: float,
-                            atr_14: float | None = None) -> str | None:
-    """tick 가격에 대해 매도 트리거 평가. 사유 문자열 또는 None.
-
-    가격 기반 4개 규칙만 — 보유 기간·매도 조건은 EOD 사이클이 담당.
-    """
-    if entry_price <= 0 or cur_price <= 0:
-        return None
-    cur_ret = (cur_price - entry_price) / entry_price * 100
-
-    if sr.take_profit is not None and cur_ret >= sr.take_profit:
-        return "익절(intraday)"
-    if sr.stop_loss is not None and cur_ret <= sr.stop_loss:
-        return "손절(intraday)"
-    if (sr.trail_pct is not None and peak_price > 0
-            and cur_price <= peak_price * (1 - sr.trail_pct / 100)):
-        return "트레일링스톱(intraday)"
-    if (sr.trail_atr_mult is not None and peak_price > 0
-            and atr_14 is not None and atr_14 > 0
-            and cur_price <= peak_price - atr_14 * sr.trail_atr_mult):
-        return "ATR트레일링(intraday)"
-    return None
 
 
 class IntradayStopManager:
@@ -58,20 +34,17 @@ class IntradayStopManager:
     """
 
     def __init__(self, broker, get_ledger: Callable[[], dict],
-                 get_strat_def: Callable[[str], dict | None],
                  submit_sell_fn: Callable[..., None],
                  dataset: dict | None = None):
         """
         Args:
             broker: KIS broker (price/sell_limit/account_snapshot)
-            get_ledger: ledger dict {ledger_key: {symbol, qty, entry_price, peak_price, ...}} 반환
-            get_strat_def: strategy_id로 strat_def dict 조회
+            get_ledger: ledger dict {ledger_key: {symbol, qty, entry_price, peak_price, definition, ...}} 반환
             submit_sell_fn: 매도 발주 함수 — signature (ledger_key, strat_name, symbol, qty, ref_price, policy, reason, decisions)
             dataset: ATR 트레일링용 (atr_14 lookup)
         """
         self.broker = broker
         self._get_ledger = get_ledger
-        self._get_strat_def = get_strat_def
         self._submit_sell = submit_sell_fn
         self.dataset = dataset or {}
         self._sold_today: set[str] = set()
@@ -140,8 +113,11 @@ class IntradayStopManager:
                 if ledger_key in self._sold_today:
                     continue
 
-                strat_def = self._get_strat_def(pos.get("strategy_id", ""))
-                if strat_def is None:
+                # 전략 정의는 원장 엔트리에 자기완결로 저장됨(_apply_fill) — EOD 청산
+                # 경로(_cycle_body)와 동일하게 pos["definition"]을 직접 쓴다. strategy_id
+                # 재조회는 엔트리에 그 키가 없어 빈값으로 실패하던 취약 경로였음.
+                strat_def = pos.get("definition")
+                if not strat_def:
                     continue
 
                 # peak_price 갱신 (트레일링용)
@@ -149,16 +125,17 @@ class IntradayStopManager:
                            price)
                 pos["peak_price"] = peak
 
-                # sell_rules 추출 — qc.Strategy로 변환해 _migrate_legacy 거치게
+                # 청산 사유 — IR(전략 연구소) position.exit의 가격기반 4규칙을
+                # 엔진 임계 공식(intraday_exit_reason)으로 평가한다.
+                entry_price = float(pos.get("entry_price") or 0)
                 try:
-                    strat = qc.Strategy(**strat_def)
-                    sr = strat.sell_rules
+                    ir = StrategyIR.model_validate(strat_def)
                 except Exception as e:
-                    log.warning("strat 파싱 실패 [%s]: %s", ledger_key, e)
+                    log.warning("IR strat 파싱 실패 [%s]: %s", ledger_key, e)
                     continue
-
-                reason = evaluate_price_trigger(
-                    sr, price, float(pos.get("entry_price") or 0), peak, atr_val)
+                reason = ir_live.intraday_exit_reason(
+                    ir, cur_price=price, entry_price=entry_price,
+                    peak_price=peak, atr_v=atr_val)
                 if reason is None:
                     continue
 
@@ -188,10 +165,8 @@ class IntradayStopManager:
                              symbol, qty, bqty)
                     qty = bqty
 
-                # Phase 56 — 매도 룰별 sell_pct (intraday tp/sl/trail/atr).
-                sell_pct = qc.sell_pct_for_reason(sr, reason)
-                sell_qty = max(1, int(qty * sell_pct / 100.0))
-                sell_qty = min(sell_qty, qty)
+                # IR position.exit은 per-rule 매도 비중이 없으므로 전량(100%) 청산.
+                sell_qty = qty
 
                 strat_name = pos.get("strategy_name", "")
                 try:

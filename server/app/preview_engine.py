@@ -16,7 +16,6 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-import quant_core as qc
 from quant_core import market_calendar as _mc
 from sqlmodel import Session, select
 
@@ -139,248 +138,157 @@ def _data_freshness_ok(dataset: dict, symbol: str,
     return True, ""
 
 
-def _atr14(dataset: dict, symbol: str) -> float | None:
-    df = dataset.get(symbol)
-    if df is None or "atr_14" not in df.columns:
-        return None
-    try:
-        v = float(df["atr_14"].iloc[-1] or 0.0)
-        return v if v > 0 else None
-    except Exception:
-        return None
 
+def _evaluate_ir_strategy(strat_def: dict, dataset: dict, cash: float,
+                          held_keys: set[str], master_by_code: dict) -> dict:
+    """engine='ir' 전략의 다음날 매수 후보 — ir_engine 마지막 바 신호·선택 재사용.
 
-def _size_and_append_candidate(symbol: str, prev_close: float, dataset: dict,
-                                cash: float, exec_pol: dict, amount_pct: float,
-                                master_by_code: dict, buy_tolerance_pct: float,
-                                source: str, out: dict) -> bool:
-    """수량 사이징 후 out["candidates"]에 append. 성공 시 True.
+    수렴의 본질: run_unified/_run_scheduled와 **동일한** _select·_target_weights를 써
+    backtest와 live의 신호 선택을 일치시킨다. 사이징은 preview 추정치 — 실제 사이징·발주는
+    로컬앱(Stage 3)이 소유한다. 미국 종목은 USD 사이징 불가로 qty=None(표시만, 보안 원칙).
 
-    수동/자동 선택 공통 — 매수 후보 종목 1개에 대한 사이징·예상 발주가 계산.
-    source는 후보 origin 표시용 ('manual' | 'screener').
-
-    미국 종목 (Phase 60+):
-      server는 사용자의 USD 주문가능액·실시간 환율을 정확히 모름 (보안 원칙 —
-      KIS 자격증명은 로컬앱 전용). cash(KRW)를 prev_close(USD)로 나누면 통화
-      불일치로 비정상 qty 발생. 따라서 미국 종목은 qty·est_total을 null로 두고
-      "발주 시점에 trader가 USD 잔고로 사이징" 표시. 신호 통과 사실은 그대로
-      보이도록 candidates에 append하되 사이징 정보는 비움.
+    out 형태는 _evaluate_strategy와 동일(프론트 PreviewByStrategy 공유).
     """
-    is_us = not _is_kr_symbol(symbol)
-    sizing_mode = exec_pol.get("sizing_mode", "atr_risk")
-    meta = master_by_code.get(symbol, {})
+    import numpy as np
+    import pandas as pd
 
-    if is_us:
-        # 미국 종목 — 사이징 skip, 표시만.
-        out["candidates"].append({
-            "symbol": symbol,
-            "name": meta.get("name", ""),
-            "qty": None,
-            "prev_close": round(prev_close, 2),
-            "est_limit_price": None,
-            "est_total": None,
-            "sizing_mode": sizing_mode,
-            "data_as_of": _last_date(dataset, symbol),
-            "source": source,
-            "currency": "USD",
-            "note": "미국 종목 — 발주 시점 USD 잔고로 사이징 (preview 미지원)",
-        })
-        return True
-
-    # 한국 종목 — cash(KRW)로 정확한 사이징
-    if sizing_mode == "atr_risk":
-        atr_val = _atr14(dataset, symbol)
-        if atr_val is None:
-            out["skipped"].append({
-                "symbol": symbol,
-                "reason": "ATR 데이터 없음 — atr_risk 모드 진입 불가"})
-            return False
-        atr_risk_pct = float(exec_pol.get("atr_risk_pct") or 1.0)
-        atr_mult = float(exec_pol.get("atr_mult") or 2.0)
-        max_position_pct = float(exec_pol.get("max_position_pct") or 10.0)
-        risk = cash * atr_risk_pct / 100.0
-        risk_per_share = atr_val * atr_mult
-        qty = int(risk // risk_per_share) if risk_per_share > 0 else 0
-        cap_qty = int((cash * max_position_pct / 100.0) // prev_close)
-        qty = min(qty, cap_qty, int(cash // prev_close))
-    else:
-        qty = int(cash * amount_pct / 100.0 // prev_close)
-
-    if qty <= 0:
-        out["skipped"].append({
-            "symbol": symbol,
-            "reason": f"수량 부족 (현금 {cash:,.0f} / 전일종가 {prev_close:,.0f})"})
-        return False
-
-    est_price = int(prev_close * (1 + buy_tolerance_pct / 100.0))
-    out["candidates"].append({
-        "symbol": symbol,
-        "name": meta.get("name", ""),
-        "qty": qty,
-        "prev_close": round(prev_close, 2),
-        "est_limit_price": est_price,
-        "est_total": est_price * qty,
-        "sizing_mode": sizing_mode,
-        "data_as_of": _last_date(dataset, symbol),
-        "source": source,
-        "currency": "KRW",
-    })
-    return True
-
-
-def _evaluate_strategy(strat_def: dict, dataset: dict, cash: float,
-                        held_keys: set[str], master_by_code: dict) -> dict:
-    """전략 하나에 대한 preview 결과 — 매수 후보 빌드.
-
-    Phase 41 — 자동 선택 / 수동 다중 모두 동일한 평가 흐름:
-      1) 평가 대상 종목 리스트 결정 (수동 = trade_symbol 토큰 / 자동 = preset 매칭)
-      2) 공통 조건은 한 번 평가, 종목별 조건([이 종목] placeholder)은 각 종목에서 평가
-      3) AND/OR 결합 후 통과한 종목만 사이징해서 후보로 등록 (screener_limit 한도)
-
-    KIS 호출 없음. dataset(OHLC/지표) + krx_cache(스크리너 메트릭) + 마스터만 사용.
-    """
     out = {
         "strategy_name": strat_def.get("name", ""),
-        "trade_symbol": strat_def.get("trade_symbol", ""),
+        "trade_symbol": "",
         "signal_passed": False,
-        "candidates": [],
-        "skipped": [],
-        "signal_details": [],
-        "signal_summary": "",
-        "per_symbol_details": {},
-        # 리밸런싱용 — 자동 선택 상위 N 멤버십(매수신호 무관). 탈락 보유분 매도 판정에 사용.
-        "screener_members": [],
+        "candidates": [], "skipped": [],
+        "signal_details": [], "signal_summary": "",
+        "per_symbol_details": {}, "screener_members": [],
     }
+    from quant_core.ir_engine import StrategyIR
+    from quant_core.ir_engine import live as ir_live
+    from quant_core.ir_engine.engine import (
+        _scoped, _screener_mask, _select, _target_weights, _universe_symbols)
+    from quant_core.blocks import EvalContext, Node, evaluate
+    from quant_core.blocks.catalog import get, has
 
-    mode, targets = qc.parse_trade_symbols(strat_def.get("trade_symbol", ""))
-    screener_limit = int(strat_def.get("screener_limit", 1) or 1)
-    amount_pct = float(strat_def.get("amount_pct", 100) or 100)
-    exec_pol = strat_def.get("execution") or {}
-    buy_tolerance_pct = float(exec_pol.get("buy_tolerance_pct") or 1.0)
-
-    # ── 1. 평가 대상 종목 결정 ──────────────────────────────────────────────────
-    match_meta_by_symbol: dict[str, dict] = {}
-    if mode == "screener":
-        preset_key = targets[0] if targets else ""
-        custom_spec = strat_def.get("screener_spec")
-        if not preset_key:
-            out["skipped"].append({"reason": "자동 선택 preset key 없음"})
-            return out
-        try:
-            from . import screener as screener_engine
-            # 커스텀 스펙이 있으면 프리셋 대신 사용 (trade_symbol='screener:custom')
-            if custom_spec:
-                matches = screener_engine.run(screener_engine.parse_spec(custom_spec))
-            else:
-                matches = screener_engine.run_preset(preset_key)
-        except Exception as e:
-            out["skipped"].append({
-                "reason": f"자동 선택 실행 실패 (preset={preset_key}): {e}"})
-            return out
-        out["screener_preset"] = preset_key
-        if not matches:
-            out["skipped"].append({
-                "reason": f"자동 선택 매칭 종목 없음 (preset={preset_key})"})
-            return out
-        eval_symbols = [m["symbol"] for m in matches if m.get("symbol")]
-        match_meta_by_symbol = {m["symbol"]: m for m in matches}
-        source = "screener"
-        slots_left = screener_limit
-        # 리밸런싱 멤버십 — 스크리너 순위 상위 screener_limit 종목.
-        # 보유분이 이 집합에서 탈락하면 (rebalance ON 시) 로컬앱이 매도.
-        out["screener_members"] = eval_symbols[:screener_limit]
-    else:
-        if not targets:
-            out["skipped"].append({"reason": "매수 대상 종목 없음"})
-            return out
-        eval_symbols = list(targets)
-        source = "manual"
-        slots_left = screener_limit if len(targets) > 1 else 1
-
-    # ── 2. 매수 조건 평가 ───────────────────────────────────────────────────────
     try:
-        strat = qc.Strategy(**strat_def)
-    except Exception as e:
-        out["skipped"].append({"reason": f"전략 파싱 실패: {e}"})
+        s = StrategyIR.model_validate(strat_def)
+    except Exception as e:  # noqa: BLE001 — 사용자 정의 파싱 실패는 skip 사유로
+        out["skipped"].append({"reason": f"IR 전략 파싱 실패: {e}"})
         return out
 
-    conditions = [c.model_dump() for c in strat.buy.conditions]
-    logic = strat.buy.logic
+    pos, u = s.position, s.universe
+    out["trade_symbol"] = ("IR:전체" if u.kind in ("all", "screener")
+                           else "IR:" + ",".join(u.symbols))
+    st = get(s.signal.op).out_type.value if has(s.signal.op) else None
+    if st not in ("condition", "score"):
+        out["skipped"].append({"reason": f"최상위 신호가 condition/score가 아닙니다: {st}"})
+        return out
+    is_condition = (st == "condition")
+    if pos.direction in ("short", "long_short") and is_condition:
+        out["skipped"].append({"reason": "숏·롱숏 방향은 score(점수) 신호가 필요합니다."})
+        return out
 
-    if conditions:
+    syms = _universe_symbols(s, dataset)
+    if not syms:
+        out["skipped"].append({"reason": "유니버스에 종목이 없습니다."})
+        return out
+    screener = u.screener or {}
+    filt = (Node.model_validate(screener["filter"])
+            if u.kind == "screener" and screener.get("filter") else None)
+    ds = _scoped(dataset, syms, s.signal, filt, pos.overlays.group_label)
+    ctx = EvalContext.from_dataset(ds)
+    try:
+        alpha = evaluate(s.signal, ctx)
+    except Exception as e:  # noqa: BLE001
+        out["skipped"].append({"reason": f"신호 평가 오류: {e}"})
+        return out
+    if not isinstance(alpha, pd.DataFrame) or alpha.empty:
+        out["skipped"].append({"reason": "신호가 패널(종목×날짜)을 산출하지 않습니다."})
+        return out
+    if is_condition:
+        b = alpha.astype(bool)
+        alpha = b.astype(float).where(b, np.nan)
+    cols = [c for c in syms if c in alpha.columns]
+    if not cols:
+        out["skipped"].append({"reason": "신호가 유니버스 종목을 포함하지 않습니다."})
+        return out
+    alpha = alpha[cols]
+    if u.kind == "screener":
         try:
-            expl = qc.explain_buy_signal_per_symbol(
-                dataset, conditions, logic, eval_symbols)
-        except Exception as e:
-            out["skipped"].append({"reason": f"신호 평가 오류: {e}"})
+            elig = _screener_mask(screener, ctx, cols)
+            alpha = alpha.where(elig.reindex(index=alpha.index, columns=cols).fillna(False))
+        except Exception as e:  # noqa: BLE001
+            out["skipped"].append({"reason": f"스크리너 평가 오류: {e}"})
             return out
 
-        # 공통 조건 결과는 별도 노출 (UI 패널에서 한 번만 표시)
-        common_ex = expl.get("common")
-        if common_ex is not None:
-            out["signal_details"] = common_ex["details"]
-            out["signal_summary"] = common_ex["summary"]
-            # AND 결합 + 공통 미통과면 전체 보류 (게이트 의미)
-            if logic == "AND" and not common_ex["passed"]:
-                out["signal_passed"] = False
-                out["skipped"].append({
-                    "reason": f"공통 매수 조건 미통과 — {common_ex['summary']}"
-                })
-                out["per_symbol_details"] = expl.get("per_symbol", {})
-                return out
-
-        out["per_symbol_details"] = expl.get("per_symbol", {})
-        passed_symbols = list(expl.get("passed_symbols") or [])
-        out["signal_passed"] = bool(passed_symbols)
-
-        if not passed_symbols:
-            # 어느 종목도 통과하지 않음 — 사유 한 줄로 요약
-            sample = next(iter(expl["per_symbol"].values()), None)
-            reason_tail = f" (예: {sample['summary']})" if sample else ""
-            out["skipped"].append({
-                "reason": "매수 조건 충족 종목 없음" + reason_tail
-            })
-            return out
-    else:
-        # 매수 조건 비어있음 — 안전한 기본값으로 매수 보류 (Phase 38.11과 동일)
-        out["signal_passed"] = False
-        out["skipped"].append({"reason": "매수 조건 없음 — 매수 보류"})
+    d = alpha.index[-1]
+    out["signal_summary"] = f"마지막 신호일 {str(d)[:10]} 기준"
+    longs, _shorts = _select(alpha.loc[d], pos, is_condition)
+    if not longs:
+        out["skipped"].append({"reason": "다음날 진입 신호(롱) 종목 없음"})
         return out
+    out["signal_passed"] = True
 
-    # ── 3. 통과 종목 사이징 (screener_limit 한도) ──────────────────────────────
-    bought = 0
+    # ── 사이징 (preview 추정 — 로컬앱이 실제 발주 사이징 소유) ──
+    # 이벤트(on_signal) 진입은 엔진 _budget과 동일하게 항상 per-name 예산:
+    #   amount_krw(fixed_amount) 또는 cash×amount_pct% (단일 종목 유니버스는 100% 전액).
+    #   횡단 사이저(equal/vol/target_vol/fixed_weight)는 스케줄·상시 진입에서만 적용.
+    sz = pos.sizing
+    weights = None
+    event_budget = (pos.entry.mode == "on_signal")
+    if not event_budget:
+        vol_row = None
+        if sz.mode in ("vol_inverse", "target_vol"):
+            closep = pd.DataFrame({
+                c: dataset[c]["Close"].reindex(alpha.index).ffill()
+                for c in longs if c in dataset and "Close" in dataset[c].columns})
+            vol = closep.pct_change().rolling(sz.vol_window).std()
+            vol_row = vol.loc[d] if d in vol.index else None
+        w = _target_weights(longs, [], alpha.loc[d], vol_row, sz)
+        cap = sz.max_position_pct / 100.0
+        w = w.clip(lower=-cap, upper=cap)
+        tot = float(w.abs().sum())
+        if sz.mode != "target_vol" and tot > 0:
+            w = w / tot
+        weights = w
+
     now_kst = datetime.now(_KST)
     today_kst = now_kst.date()
-    for symbol in eval_symbols:
-        if bought >= slots_left:
-            break
-        if symbol not in passed_symbols:
-            continue
-        # S-05 — dataset이 시장 직전 거래일과 어긋나면 매수 후보로 노출하지
-        # 않는다. 거래정지·상폐·데이터 누락 종목이 자동매수 대상이 되는 사고
-        # 차단. 캘린더 만료 등으로 판정 불가 시엔 통과(fail-open).
-        # now_kst — 미국 KST 05:00 cutoff 정확 적용 (KST 자정~05시 false stale 방지).
-        fresh, freshness_msg = _data_freshness_ok(dataset, symbol, today_kst,
-                                                    now_kst=now_kst)
+    for sym in longs:
+        fresh, freshness_msg = _data_freshness_ok(dataset, sym, today_kst, now_kst=now_kst)
         if not fresh:
-            out["skipped"].append({"symbol": symbol, "reason": freshness_msg})
+            out["skipped"].append({"symbol": sym, "reason": freshness_msg})
             continue
-        prev_close = _prev_close(dataset, symbol)
-        if prev_close is None and symbol in match_meta_by_symbol:
-            # 자동 선택 — KRX 캐시 fallback (해외 ETF 등 dataset 누락 종목)
-            prev_close = float(match_meta_by_symbol[symbol].get("close") or 0)
-            if prev_close <= 0:
-                prev_close = None
+        prev_close = _prev_close(dataset, sym)
         if prev_close is None:
-            out["skipped"].append({
-                "symbol": symbol,
-                "reason": "전일 종가 없음 (dataset · KRX 캐시 모두 누락)"})
+            out["skipped"].append({"symbol": sym, "reason": "전일 종가 없음"})
             continue
-        if _size_and_append_candidate(
-                symbol, prev_close, dataset, cash, exec_pol, amount_pct,
-                master_by_code, buy_tolerance_pct, source, out):
-            bought += 1
-
+        meta = master_by_code.get(sym, {})
+        if not _is_kr_symbol(sym):
+            out["candidates"].append({
+                "symbol": sym, "name": meta.get("name", ""), "qty": None,
+                "prev_close": round(prev_close, 2), "est_limit_price": None,
+                "est_total": None, "sizing_mode": sz.mode,
+                "data_as_of": _last_date(dataset, sym), "source": "ir",
+                "currency": "USD",
+                "note": "미국 종목 — 발주 시점 USD 잔고로 사이징 (preview 미지원)"})
+            continue
+        if event_budget:
+            qty = ir_live.event_buy_qty(s, cash=cash, prev_close=prev_close)
+        else:
+            budget = (float(weights[sym]) * cash
+                      if weights is not None and sym in weights.index
+                      else cash / len(longs))
+            qty = int(budget // prev_close) if prev_close > 0 else 0
+        if qty <= 0:
+            out["skipped"].append({
+                "symbol": sym,
+                "reason": f"수량 부족 (전일종가 {prev_close:,.0f} 대비 예산 부족)"})
+            continue
+        est_price = int(prev_close)
+        out["candidates"].append({
+            "symbol": sym, "name": meta.get("name", ""), "qty": qty,
+            "prev_close": round(prev_close, 2), "est_limit_price": est_price,
+            "est_total": est_price * qty, "sizing_mode": sz.mode,
+            "data_as_of": _last_date(dataset, sym), "source": "ir",
+            "currency": "KRW"})
     return out
 
 
@@ -460,9 +368,12 @@ def build_user_preview(session: Session, user_id: int,
     n_buy_candidates = 0
 
     for s in strats:
+        # IR 단일 체제 — operand 전략은 더 이상 생성 불가. 혹시 남은 레거시 행은 skip.
+        if getattr(s, "engine", "operand") != "ir":
+            continue
         strat_def = dict(s.definition or {})
         strat_def["_id"] = s.id
-        result = _evaluate_strategy(strat_def, dataset, cash, held_symbols, master_by_code)
+        result = _evaluate_ir_strategy(strat_def, dataset, cash, held_symbols, master_by_code)
         result["strategy_id"] = s.id
         result["run_mode"] = s.run_mode
         by_strategy.append(result)

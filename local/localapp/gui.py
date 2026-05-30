@@ -384,8 +384,7 @@ class SettingsApp:
                   ).pack(anchor="w", padx=12, pady=(8, 0))
         self.tv_cycles = self._make_tree(f, [
             ("time", "시각", 140), ("bought", "매수", 50),
-            ("sold", "매도", 50), ("gap", "갭스킵", 55),
-            ("signal", "신호X", 55), ("rejected", "거부", 55),
+            ("sold", "매도", 50), ("rejected", "거부", 55),
             ("ks", "killswitch", 90), ("equity", "평가금액", 120),
         ])
         # 선택 시 상세 표시
@@ -834,7 +833,6 @@ class SettingsApp:
             self.tv_cycles.insert("", "end", values=(
                 self._fmt_ts(c.get("ts", "")),
                 s.get("n_bought", 0), s.get("n_sold", 0),
-                s.get("n_skip_gap", 0), s.get("n_skip_signal", 0),
                 s.get("n_rejected", 0),
                 "ON" if s.get("kill_switch") else "OFF",
                 f"{s.get('equity_post', 0):,.0f}",

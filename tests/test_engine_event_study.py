@@ -105,6 +105,49 @@ def test_event_study_regime_split_significance():
         assert "p_value" in v and "mean_diff" in v
 
 
+# ── C+E: 경로지표(MAE/MFE) + basis(close/intraday/excess) ─────────────────────
+
+def test_event_study_path_metrics_present():
+    """모든 윈도 요약에 forward 낙폭(MAE)·상승(MFE) 경로지표 포함 — task8·task9."""
+    res = run_sweep(_event_strategy(with_regime=False), _wti())
+    for w in ("5", "10", "20"):
+        o = res["overall"][w]
+        for k in ("mean_mae", "worst_mae", "mean_mfe", "payoff_ratio"):
+            assert k in o, f"{k} 누락"
+        assert o["mean_mae"] <= o["mean_mfe"]      # 불리편차 ≤ 유리편차
+
+
+def test_event_study_intraday_basis():
+    """basis=intraday — 당일 시가→종가 반등(task13). w=0 포함 경로."""
+    s = _event_strategy(with_regime=False)
+    s.sweep.event_basis = "intraday"
+    s.sweep.windows = [0, 1, 3]
+    res = run_sweep(s, _wti())
+    assert res["success"] and res["basis"] == "intraday"
+    assert res["overall"]["0"]["n"] > 0            # 당일(w=0)도 측정
+
+
+def test_event_study_excess_basis_multi():
+    """basis=excess — 다종목 시장초과 forward(task2). 단일종목이면 검증 거부."""
+    cross = Node(op="compare", params={"op": "<"},
+                 inputs={"left": data("__SELF__.Close"), "right": const(1e12)})
+    s = StrategyIR(
+        signal=cross, universe=Universe(kind="list", symbols=["AAA", "BBB", "CCC"]),
+        position=PositionSpec(entry=Entry(mode="on_signal")),
+        simulation=SimSpec(initial_capital=1e7),
+        sweep=SweepSpec(axis="time", windows=[5, 10], event_basis="excess"))
+    res = run_sweep(s, _multi())
+    assert res["success"] and res["basis"] == "excess"
+    assert res["n_events"] > 0
+
+
+def test_event_study_excess_single_rejected():
+    from quant_core.ir_engine import validate_strategy
+    s = _event_strategy(with_regime=False)
+    s.sweep.event_basis = "excess"                 # 단일종목 — 시장 지수 불가
+    assert any(i.rule == "S-event" and i.is_error for i in validate_strategy(s))
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

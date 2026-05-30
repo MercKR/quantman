@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .config import KILLSWITCH_PATH
+from .state_store import save_json
 
 log = logging.getLogger("localapp.killswitch")
 
@@ -30,8 +31,13 @@ def load() -> dict:
 
 
 def save(state: dict) -> None:
-    KILLSWITCH_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2),
-                                encoding="utf-8")
+    """원자적 저장 + owner-only ACL — state_store 단일 경로 위임 (R5).
+
+    이전엔 plain write_text라 원자성·ACL 둘 다 없었다 (A-1 보안 갭): 손실한도·
+    day_start_equity는 같은 PC 타 사용자에게 노출되면 안 되고, 쓰는 중 종료 시
+    파일이 깨지면 killswitch 상태를 잃어 손실 한도 차단이 무력화될 수 있었다.
+    """
+    save_json(KILLSWITCH_PATH, state)
 
 
 def activate(reason: str) -> dict:

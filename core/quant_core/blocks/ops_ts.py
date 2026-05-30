@@ -14,12 +14,32 @@ from .catalog import BlockDef, register
 from .types import ValueType
 
 
+_TF_RULE = {"D": None, "W": "W", "WEEKLY": "W", "M": "ME", "MONTH": "ME", "MONTHLY": "ME"}
+
+
+def _coarsen(panel, fn, window: int, tf: str):
+    """timeframe!='D'면 거친 봉으로 resample(완료봉 last)→fn(window)→일봉 ffill(causal).
+
+    window는 timeframe 단위(W면 N주, M이면 N개월). resample 라벨은 기간 끝이라, 진행중
+    기간 라벨은 미래 → 일봉 ffill이 닿지 않아 각 날짜는 직전 '완료' 기간 값만 본다(미래참조 0).
+    """
+    rule = _TF_RULE.get(tf)
+    if rule is None:                      # 일봉(기본)
+        return fn(panel, window)
+    coarse = fn(panel.resample(rule).last(), window)
+    return coarse.reindex(panel.index, method="ffill")
+
+
 def _ts(op: str, fn, doc: str) -> None:
-    """(panel, window) 시그니처 시계열 함수를 블록으로 등록. window 기본 20(규칙5)."""
+    """(panel, window) 시그니처 시계열 함수를 블록으로 등록. window 기본 20(규칙5).
+
+    timeframe(D/W/M) 파라미터로 거친 봉에서도 계산 가능(예: 주봉 10주 MA = 주봉 추세 필터).
+    """
     def ev(resolved, params, ctx):
-        return fn(resolved["signal"], int(params.get("window", 20)))
+        return _coarsen(resolved["signal"], fn, int(params.get("window", 20)),
+                        str(params.get("timeframe", "D")).upper())
     register(BlockDef(op, ValueType.SCORE, ev, slots={"signal": ValueType.SCORE},
-                      param_defaults={"window": 20}, doc=doc))
+                      param_defaults={"window": 20, "timeframe": "D"}, doc=doc))
 
 
 _ts("ts_mean", ts_mean, "최근 N일 평균")

@@ -14,17 +14,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
-import { BuildTab } from "./Backtest";
-import { HELD_DAYS_KEY } from "../components/ConditionBuilder";
 import type {
-  AnalysisResult, BacktestResult, BacktestRunSummary, ConditionGroup,
-  ConditionNode, ExecutionPolicy, RebalanceIO, ScreenerSpecIO,
-  StrategyDef, StrategyRow, StrategyStats, StrategyVersionRow, SymbolInfo,
+  BacktestRunSummary, IrStrategyDef,
+  StrategyRow, StrategyStats, StrategyVersionRow,
 } from "../types";
-import { EXECUTION_DEFAULTS } from "../types";
-
-type SizingMode = "fixed_amount" | "pct_cash" | "equal_weight" | "atr_risk";
-type RuleKey = "tp" | "sl" | "trail" | "atr";
 
 type TabKey = "config" | "versions" | "stats" | "backtests";
 
@@ -129,13 +122,11 @@ export default function StrategyDetail() {
         ))}
       </nav>
 
-      {tab === "config" && (
-        <ConfigEditTab
-          strategy={strategy}
-          onSaved={loadAll}
-          onRemove={remove}
-        />
-      )}
+      {tab === "config" && (strategy.engine === "ir" ? (
+        <IrConfigTab strategy={strategy} onRemove={remove} />
+      ) : (
+        <LegacyConfigTab onRemove={remove} />
+      ))}
       {tab === "versions" && (
         <VersionsTab versions={versions} onRestore={restoreVersion} />
       )}
@@ -145,267 +136,123 @@ export default function StrategyDetail() {
   );
 }
 
-// ── 탭 1: 설정값 (인라인 수정 — BuildTab 직접 사용) ─────────────────────────
+// ── 탭 1 (IR): 설정값 조회 + 전략 연구소에서 편집 ─────────────────────────────
 
-function ConfigEditTab({ strategy, onSaved, onRemove }: {
-  strategy: StrategyRow;
-  onSaved: () => void;
-  onRemove: () => void;
-}) {
-  // 빌더와 동일한 모든 useState를 strategy.definition에서 초기화.
-  // 매번 strategy가 변하면 (저장 후 refresh) 모든 state 재초기화 — key로 강제.
-  // 부모(StrategyDetail)에서 strategy 객체 새로 받으면 이 컴포넌트가 unmount/remount.
-  return (
-    <ConfigEditInner key={strategy.id + "-" + strategy.updated_at}
-                     strategy={strategy} onSaved={onSaved} onRemove={onRemove} />
-  );
+const IR_SIZING_LABEL: Record<string, string> = {
+  equal_weight: "동일가중", signal_proportional: "신호비례", vol_inverse: "변동성 역가중",
+  target_vol: "목표변동성", fixed_weight: "정적 비중", fixed_amount: "종목당 고정금액",
+  pct_cash: "자본대비 %",
+};
+const IR_ENTRY_LABEL: Record<string, string> = {
+  on_signal: "이벤트 (신호 참인 날)", scheduled: "정기 리밸런싱", always: "상시 (매일)",
+};
+const IR_DIR_LABEL: Record<string, string> = {
+  long: "롱", short: "숏", long_short: "롱숏중립",
+};
+const IR_REBALANCE_LABEL: Record<string, string> = {
+  daily: "매일", weekly: "매주", monthly: "매월", quarterly: "분기", annual: "매년",
+  every_n_days: "N일마다",
+};
+
+function summarizeIrUniverse(def: IrStrategyDef): string {
+  const u = def.universe ?? { kind: "single" };
+  if (u.kind === "screener") return "스크리너 선별 (자격 필터 + 순위컷)";
+  if (u.kind === "all") return "전체 종목";
+  const syms = u.symbols ?? [];
+  if (syms.length === 0) return "(없음)";
+  if (syms.length === 1) return syms[0];
+  return syms.join(", ");
 }
 
-function ConfigEditInner({ strategy, onSaved, onRemove }: {
+/** IR 전략의 활성 청산 규칙을 한 줄로. */
+function summarizeIrExit(ex: IrStrategyDef["position"]["exit"]): string {
+  const parts: string[] = [];
+  if (ex?.hold_days != null) parts.push(`보유 ${ex.hold_days}일`);
+  if (ex?.take_profit != null) parts.push(`익절 ${ex.take_profit}%`);
+  if (ex?.stop_loss != null) parts.push(`손절 ${ex.stop_loss}%`);
+  if (ex?.trail_pct != null) parts.push(`트레일링 ${ex.trail_pct}%`);
+  if (ex?.trail_atr_mult != null) parts.push(`ATR 트레일링 ×${ex.trail_atr_mult}`);
+  if (ex?.condition) parts.push("매도 조건");
+  return parts.length ? parts.join(" · ") : "없음 (정기 리밸런싱 교체 또는 무청산)";
+}
+
+function IrConfigTab({ strategy, onRemove }: {
   strategy: StrategyRow;
-  onSaved: () => void;
   onRemove: () => void;
 }) {
-  const d = strategy.definition;
-  const sr = d.sell_rules ?? {};
-  const e = d.execution ?? {};
-
-  // 모든 빌더 state — strategy.definition에서 초기화
-  const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
-  const [hasMaster, setHasMaster] = useState<boolean>(true);
-  const [name, setName] = useState(d.name ?? strategy.name);
-  const [tradeSymbol, setTradeSymbol] = useState(d.trade_symbol ?? "");
-  const [buy, setBuy] = useState<ConditionGroup>(
-    d.buy ?? { conditions: [], logic: "AND" });
-  // 매도 conditions에 hold_days를 다시 inject (UI에서 보이도록)
-  const sellConditions = (sr.conditions ?? []).slice();
-  if (sr.hold_days != null && sr.hold_days > 0) {
-    sellConditions.unshift({
-      left: { kind: "indicator", symbol: "_self", indicator: HELD_DAYS_KEY },
-      op: ">=", right: { kind: "constant", value: sr.hold_days },
-      modifier: null,
-    });
-  }
-  const [sell, setSell] = useState<ConditionGroup>({
-    conditions: sellConditions, logic: sr.logic ?? "AND",
-  });
-  const [exits, setExits] = useState<Record<RuleKey, { on: boolean; v: number; sell_pct: number }>>({
-    tp:    { on: sr.take_profit != null, v: sr.take_profit ?? 10,
-             sell_pct: sr.rule_sell_pcts?.tp ?? 100 },
-    sl:    { on: sr.stop_loss != null, v: sr.stop_loss ?? -5,
-             sell_pct: sr.rule_sell_pcts?.sl ?? 100 },
-    trail: { on: sr.trail_pct != null, v: sr.trail_pct ?? 8,
-             sell_pct: sr.rule_sell_pcts?.trail ?? 100 },
-    atr:   { on: sr.trail_atr_mult != null, v: sr.trail_atr_mult ?? 3,
-             sell_pct: sr.rule_sell_pcts?.atr ?? 100 },
-  });
-  const [sellRealtimeEnabled, setSellRealtimeEnabled] = useState(false);
-  const [sellEodEnabled, setSellEodEnabled] = useState(false);
-  const [buyAmountPct, setBuyAmountPct] = useState(d.amount_pct ?? 10);
-  const [sellAmountPct, setSellAmountPct] = useState(sr.sell_amount_pct ?? 100);
-  const [screenerLimit, setScreenerLimit] = useState(d.screener_limit ?? 5);
-  const [screenerSpec, setScreenerSpec] = useState<ScreenerSpecIO | null>(
-    d.screener_spec ?? null);
-  const [rebalance, setRebalance] = useState<RebalanceIO>(
-    d.rebalance ?? { mode: "off", period: "weekly" });
-  const [sizingMode, setSizingMode] = useState<SizingMode>(
-    (e.sizing_mode ?? EXECUTION_DEFAULTS.sizing_mode) as SizingMode);
-  const [amountKrw, setAmountKrw] = useState(e.amount_krw ?? EXECUTION_DEFAULTS.amount_krw);
-  const [atrRiskPct, setAtrRiskPct] = useState(e.atr_risk_pct ?? EXECUTION_DEFAULTS.atr_risk_pct);
-  const [atrMult, setAtrMult] = useState(e.atr_mult ?? EXECUTION_DEFAULTS.atr_mult);
-  const [maxPositionPct, setMaxPositionPct] = useState(e.max_position_pct ?? 10);
-  const [maxPositionEnabled, setMaxPositionEnabled] = useState<boolean>(e.max_position_pct != null);
-  const [maxDrawdownPct, setMaxDrawdownPct] = useState(e.max_drawdown_pct ?? 20);
-  const [maxDrawdownEnabled, setMaxDrawdownEnabled] = useState<boolean>(e.max_drawdown_pct != null);
-  const [useLimit, setUseLimit] = useState<boolean>(e.use_limit ?? EXECUTION_DEFAULTS.use_limit);
-  const [buyTolerancePct, setBuyTolerancePct] = useState(e.buy_tolerance_pct ?? EXECUTION_DEFAULTS.buy_tolerance_pct);
-  const [sellTolerancePct, setSellTolerancePct] = useState(e.sell_tolerance_pct ?? EXECUTION_DEFAULTS.sell_tolerance_pct);
-  const [btCommissionBps, setBtCommissionBps] = useState(e.bt_commission_bps ?? EXECUTION_DEFAULTS.bt_commission_bps);
-  const [btSellTaxBps, setBtSellTaxBps] = useState(e.bt_sell_tax_bps ?? EXECUTION_DEFAULTS.bt_sell_tax_bps);
-  const [btSlippageBps, setBtSlippageBps] = useState(e.bt_slippage_bps ?? EXECUTION_DEFAULTS.bt_slippage_bps);
-  const [capital, setCapital] = useState(10_000_000);
-  const [forwardDays, setForwardDays] = useState(1);
-
-  // 백테스트 기간 (옵션) — 빈 문자열이면 데이터셋 전체 기간 사용
-  const [backtestStart, setBacktestStart] = useState<string>("");
-  const [backtestEnd, setBacktestEnd] = useState<string>("");
-
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [backtest, setBacktest] = useState<BacktestResult | null>(null);
-  const [busy, setBusy] = useState<"" | "analysis" | "backtest" | "save">("");
-  const [err, setErr] = useState("");
-  const [saveMsg, setSaveMsg] = useState("");
-
-  function setRule(key: RuleKey, patch: Partial<{ on: boolean; v: number; sell_pct: number }>) {
-    setExits((e) => ({ ...e, [key]: { ...e[key], ...patch } }));
-  }
-
-  useEffect(() => {
-    api.symbols().then((r) => {
-      setSymbols(r.symbols);
-      setHasMaster(r.has_master);
-    }).catch((e) => setErr((e as Error).message));
-  }, []);
-
-  function buildDef(): StrategyDef {
-    const execution: ExecutionPolicy = {
-      sizing_mode: sizingMode, amount_krw: amountKrw,
-      atr_risk_pct: atrRiskPct, atr_mult: atrMult,
-      max_position_pct: maxPositionEnabled ? maxPositionPct : null,
-      max_drawdown_pct: maxDrawdownEnabled ? maxDrawdownPct : null,
-      use_limit: useLimit,
-      buy_tolerance_pct: buyTolerancePct,
-      sell_tolerance_pct: sellTolerancePct,
-      bt_commission_bps: btCommissionBps,
-      bt_sell_tax_bps: btSellTaxBps,
-      bt_slippage_bps: btSlippageBps,
-    };
-    const ruleSellPcts: Record<string, number> = {};
-    for (const [k, v] of Object.entries(exits)) {
-      if (v.on) ruleSellPcts[k] = v.sell_pct;
-    }
-    let holdDaysFromCond: number | null = null;
-    const cleanedConditions = (sell.conditions || []).filter((node: ConditionNode) => {
-      if ("left" in node && node.left?.indicator === HELD_DAYS_KEY) {
-        const v = node.right && "value" in node.right ? Number(node.right.value) : NaN;
-        if (Number.isFinite(v) && v > 0) holdDaysFromCond = Math.floor(v);
-        return false;
-      }
-      return true;
-    });
-    return {
-      name, trade_symbol: tradeSymbol, buy,
-      sell_rules: {
-        take_profit:    exits.tp.on    ? exits.tp.v    : null,
-        stop_loss:      exits.sl.on    ? exits.sl.v    : null,
-        trail_pct:      exits.trail.on ? exits.trail.v : null,
-        trail_atr_mult: exits.atr.on   ? exits.atr.v   : null,
-        hold_days:      holdDaysFromCond,
-        conditions:     cleanedConditions,
-        logic:          sell.logic,
-        sell_amount_pct: sellAmountPct,
-        rule_sell_pcts: ruleSellPcts,
-      },
-      amount_pct: buyAmountPct,
-      screener_limit: screenerLimit,
-      screener_spec: tradeSymbol === "screener:custom" ? screenerSpec : null,
-      rebalance: tradeSymbol.startsWith("screener:") ? rebalance : undefined,
-      execution,
-    };
-  }
-
-  async function saveChanges() {
-    setErr(""); setSaveMsg("");
-    setBusy("save");
-    try {
-      await api.updateStrategy(strategy.id, buildDef(), strategy.run_mode);
-      setSaveMsg("저장됨 — 변경 전 정의는 자동으로 새 버전으로 보존됐습니다.");
-      onSaved();
-    } catch (e) { setErr((e as Error).message); }
-    finally { setBusy(""); }
-  }
-
-  async function runBacktest() {
-    setErr("");
-    setBusy("backtest"); setBacktest(null);
-    try {
-      const r = await api.runBacktest(buildDef(), capital, undefined, undefined,
-                                       strategy.id);
-      setBacktest(r);
-    } catch (e) { setErr((e as Error).message); }
-    finally { setBusy(""); }
-  }
-
-  async function runAnalysis() {
-    setErr("");
-    setBusy("analysis"); setAnalysis(null);
-    try {
-      const r = await api.runAnalysis({
-        conditions: buy.conditions, logic: buy.logic,
-        target_symbol: tradeSymbol,
-        target_indicator: symbols.find((s) => s.symbol === tradeSymbol)
-          ?.indicators.find((i) => i.key.includes("pct_change"))?.key ?? "",
-        forward_days: forwardDays,
-      });
-      setAnalysis(r);
-    } catch (e) { setErr((e as Error).message); }
-    finally { setBusy(""); }
-  }
-
-  function discardChanges() {
-    if (!window.confirm("변경사항을 취소하고 마지막 저장 상태로 되돌릴까요?")) return;
-    onSaved();   // 부모가 strategy 다시 fetch → key 변경 → 이 컴포넌트 remount
-  }
+  const navigate = useNavigate();
+  const def = strategy.definition as IrStrategyDef;
+  const p = def.position ?? ({} as IrStrategyDef["position"]);
+  const sim = def.simulation ?? {};
+  const entry = p.entry ?? ({} as IrStrategyDef["position"]["entry"]);
+  const sizing = p.sizing ?? ({} as IrStrategyDef["position"]["sizing"]);
 
   return (
     <div className="strategy-detail-body">
-      {err && <div className="error">{err}</div>}
-      {saveMsg && <div className="ok">{saveMsg}</div>}
+      <p className="muted small">
+        전략 연구소(IR)에서 만든 전략입니다. 전체 설정을 조회하고, 연구소에서 신호·진입·청산을 수정하세요.
+      </p>
 
-      <BuildTab
-        symbols={symbols} hasMaster={hasMaster}
-        name={name} setName={setName}
-        tradeSymbol={tradeSymbol} setTradeSymbol={setTradeSymbol}
-        buy={buy} setBuy={setBuy}
-        sell={sell} setSell={setSell}
-        exits={exits} setRule={setRule}
-        sellRealtimeEnabled={sellRealtimeEnabled} setSellRealtimeEnabled={setSellRealtimeEnabled}
-        sellEodEnabled={sellEodEnabled} setSellEodEnabled={setSellEodEnabled}
-        buyAmountPct={buyAmountPct} setBuyAmountPct={setBuyAmountPct}
-        sellAmountPct={sellAmountPct} setSellAmountPct={setSellAmountPct}
-        screenerLimit={screenerLimit} setScreenerLimit={setScreenerLimit}
-        screenerSpec={screenerSpec} setScreenerSpec={setScreenerSpec}
-        rebalance={rebalance} setRebalance={setRebalance}
-        sizingMode={sizingMode} setSizingMode={setSizingMode}
-        amountKrw={amountKrw} setAmountKrw={setAmountKrw}
-        atrRiskPct={atrRiskPct} setAtrRiskPct={setAtrRiskPct}
-        atrMult={atrMult} setAtrMult={setAtrMult}
-        maxPositionPct={maxPositionPct} setMaxPositionPct={setMaxPositionPct}
-        maxPositionEnabled={maxPositionEnabled} setMaxPositionEnabled={setMaxPositionEnabled}
-        maxDrawdownPct={maxDrawdownPct} setMaxDrawdownPct={setMaxDrawdownPct}
-        maxDrawdownEnabled={maxDrawdownEnabled} setMaxDrawdownEnabled={setMaxDrawdownEnabled}
-        useLimit={useLimit} setUseLimit={setUseLimit}
-        buyTolerancePct={buyTolerancePct} setBuyTolerancePct={setBuyTolerancePct}
-        sellTolerancePct={sellTolerancePct} setSellTolerancePct={setSellTolerancePct}
-        btCommissionBps={btCommissionBps} setBtCommissionBps={setBtCommissionBps}
-        btSellTaxBps={btSellTaxBps} setBtSellTaxBps={setBtSellTaxBps}
-        btSlippageBps={btSlippageBps} setBtSlippageBps={setBtSlippageBps}
-        capital={capital} setCapital={setCapital}
-        forwardDays={forwardDays} setForwardDays={setForwardDays}
-        backtestStart={backtestStart} setBacktestStart={setBacktestStart}
-        backtestEnd={backtestEnd} setBacktestEnd={setBacktestEnd}
-        busy={busy} runAnalysis={runAnalysis} runBacktest={runBacktest}
-        analysis={analysis}
-        resetStrategy={discardChanges}
-      />
+      <section className="panel">
+        <h4>유니버스</h4>
+        <Rule label="대상" v={summarizeIrUniverse(def)} />
+      </section>
 
-      {backtest && backtest.success && (
-        <div className="panel" style={{ marginTop: 12 }}>
-          <h4>방금 실행한 백테스트 결과</h4>
-          <p className="muted small">
-            이 결과는 전략의 "백테스트 내역" 탭에 자동 저장됩니다.
-          </p>
-          {backtest.metrics && (
-            <div className="rule-row">
-              <span className="rule-label">총수익률</span>
-              <span className="rule-val">
-                {(backtest.metrics.total_return as number | null)?.toFixed(2) ?? "—"}%
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-      {backtest && !backtest.success && (
-        <div className="error">{backtest.error}</div>
-      )}
+      <section className="panel" style={{ marginTop: 12 }}>
+        <h4>진입 · 포지션</h4>
+        <Rule label="진입 트리거" v={IR_ENTRY_LABEL[entry.mode ?? "on_signal"] ?? "이벤트"} />
+        {entry.mode === "scheduled" && (
+          <Rule label="리밸런싱" v={IR_REBALANCE_LABEL[entry.rebalance ?? "monthly"] ?? "매월"} />
+        )}
+        <Rule label="방향" v={IR_DIR_LABEL[p.direction ?? "long"] ?? "롱"} />
+        <Rule label="사이징" v={IR_SIZING_LABEL[sizing.mode ?? "equal_weight"] ?? "동일가중"} />
+        {entry.mode !== "on_signal" && entry.top_n != null && (
+          <Rule label="상위 N" v={`${entry.top_n}종목`} />
+        )}
+        {entry.mode !== "on_signal" && entry.top_pct != null && (
+          <Rule label="상위 %" v={`${entry.top_pct}%`} />
+        )}
+      </section>
+
+      <section className="panel" style={{ marginTop: 12 }}>
+        <h4>청산</h4>
+        <Rule label="규칙" v={summarizeIrExit(p.exit)} />
+      </section>
+
+      <section className="panel" style={{ marginTop: 12 }}>
+        <h4>시뮬레이션</h4>
+        <Rule label="기간" v={`${sim.start || "전체"} ~ ${sim.end || "전체"}`} />
+        <Rule label="초기자본" v={`${(sim.initial_capital ?? 10_000_000).toLocaleString()}원`} />
+        <Rule label="체결" v={`지연 ${sim.delay ?? 1}일 · ${sim.fill === "close" ? "당일 종가"
+          : sim.fill === "typical" ? "당일 (고+저+종)/3" : "익일 시가"}`} />
+        {sim.period_split && sim.period_split !== "single" && (
+          <Rule label="기간분할" v={sim.period_split} />
+        )}
+      </section>
 
       <div className="strategy-save-bar">
-        <button className="apply-btn" disabled={!!busy} onClick={saveChanges}>
-          {busy === "save" ? "저장 중…" : "✓ 변경사항 저장 (새 버전)"}
+        <button className="apply-btn"
+                onClick={() => navigate(`/lab?edit=${strategy.id}`)}>
+          전략 연구소에서 편집 →
         </button>
-        <button className="ghost" disabled={!!busy} onClick={discardChanges}>
-          변경 취소
-        </button>
+        <span style={{ flex: 1 }} />
+        <button className="danger-btn" onClick={onRemove}>전략 삭제</button>
+      </div>
+    </div>
+  );
+}
+
+// ── 탭 1 (레거시 operand): 안내만 — 편집·백테스트는 전략 연구소(IR) 전용 ───────
+
+function LegacyConfigTab({ onRemove }: { onRemove: () => void }) {
+  return (
+    <div className="strategy-detail-body">
+      <section className="panel">
+        <p className="muted">
+          구버전 형식 전략입니다. 전략 연구소에서 새로 만들어 백테스트·자동매매를 진행해 주세요.
+        </p>
+      </section>
+      <div className="strategy-save-bar">
         <span style={{ flex: 1 }} />
         <button className="danger-btn" onClick={onRemove}>전략 삭제</button>
       </div>
@@ -529,7 +376,7 @@ function BacktestsTab({ backtests }: {
     return (
       <div className="strategy-detail-body">
         <p className="muted">이 전략으로 실행된 백테스트가 없습니다.</p>
-        <Link to="/backtest" className="cta sm">빌더에서 백테스트 실행 →</Link>
+        <Link to="/lab" className="cta sm">전략 연구소에서 백테스트 →</Link>
       </div>
     );
   }

@@ -56,28 +56,40 @@ def _parse(path: Path) -> dict:
 
 @lru_cache(maxsize=4)
 def _load(market: str) -> dict:
-    """시장 세션 JSON을 로드(메모이즈). 사용자 캐시 우선, 번들 fallback.
+    """시장 세션을 로드(메모이즈) — 번들(넓은 과거 범위)에 사용자 캐시(서버 pull, 최신 임시공휴일)를
+    병합한다. 사용자 캐시는 자기 커버 구간[u_lo,u_hi]을 권위로 덮어쓰고(공휴일 추가·삭제 반영),
+    그 밖(주로 과거)은 번들이 채운다 — 사용자 캐시가 forward-only여도 과거 세션 공백이 안 생긴다.
 
+    과거 세션은 불변이라 번들로 채워도 안전하고, 임시공휴일 등 최신성은 사용자 캐시 구간에서 보존된다.
     캐시 무효화는 calendar_sync가 _load.cache_clear()를 호출 (pull 직후).
     """
     if market not in _BUNDLE_FILES:
         raise CalendarError(f"지원하지 않는 시장: {market}")
-    # 1순위: 사용자 캐시 (서버 pull)
+    bundle_path = _BUNDLE_FILES[market]
+    bundle = _parse(bundle_path) if bundle_path.exists() else None
     user_path = USER_CACHE_DIR / f"{market.lower()}_sessions.json"
+    user = None
     if user_path.exists():
         try:
-            return _parse(user_path)
+            user = _parse(user_path)
         except Exception:
-            # 손상 시 번들로 fallback (조용히 무시하지 않고 명시적 폴백)
+            # 손상 시 조용히 무시하지 않고 명시적 경고 후 번들만 사용.
             import logging as _logging
             _logging.getLogger("quant_core.market_calendar").warning(
-                "사용자 캘린더 캐시 손상 [%s] — 번들 fallback", user_path)
-    # 2순위: 번들 (PyInstaller 포함)
-    bundle_path = _BUNDLE_FILES[market]
-    if not bundle_path.exists():
-        raise CalendarError(
-            f"세션 데이터 없음 (사용자 캐시·번들 모두 부재): {bundle_path}")
-    return _parse(bundle_path)
+                "사용자 캘린더 캐시 손상 [%s] — 번들만 사용", user_path)
+    if bundle is None and user is None:
+        raise CalendarError(f"세션 데이터 없음 (사용자 캐시·번들 모두 부재): {bundle_path}")
+    if user is None:
+        return bundle
+    if bundle is None or not user["sorted_days"]:
+        return user if bundle is None else bundle
+    # 병합 — 사용자 캐시 커버 구간은 사용자 캐시가 권위(삭제 포함), 그 밖 과거는 번들로 보강.
+    u_lo, u_hi = user["sorted_days"][0], user["sorted_days"][-1]
+    merged = {d: s for d, s in bundle["sessions"].items() if d < u_lo or d > u_hi}
+    merged.update(user["sessions"])
+    days = sorted(merged.keys())
+    return {"tz_local": user["tz_local"], "sessions": merged,
+            "sorted_days": days, "range": [days[0], days[-1]] if days else []}
 
 
 def _to_kst(day: date, hhmm: str, tz_local: ZoneInfo) -> datetime:

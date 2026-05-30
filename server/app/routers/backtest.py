@@ -1,23 +1,21 @@
-"""백테스트 · 데이터분석 라우터 (서버에서 core 엔진 실행)."""
+"""종목 목록 라우터 — 전략 빌더(IR 연구소)용 종목 union 제공.
+
+(레거시 operand /backtest/run·/analysis/run·/backtest/runs 엔드포인트는 IR 단일 체제
+전환으로 제거됨. IR 백테스트는 /ir/* 라우터가 담당.)
+"""
 
 from __future__ import annotations
 
 import quant_core as qc
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import ValidationError
-from sqlmodel import Session, select
 
 from .. import data_cache, kis_master_cache
 from ..data_cache import get_dataset
-from ..db import get_session
 from ..deps import get_current_user
-from ..models import BacktestRun, User
-from ..schemas import (AnalysisIn, BacktestIn, BacktestRunOut,
-                       BacktestRunSummary)
-from ..serialize import serialize_analysis, serialize_backtest
+from ..models import User
 
-router = APIRouter(tags=["backtest"])
+router = APIRouter(tags=["symbols"])
 
 
 # /symbols 응답 캐시 — (dataset 버전, 마스터 갱신시각) 키로 1회 빌드·직렬화 후 재사용.
@@ -133,119 +131,3 @@ def list_symbols(request: Request, user: User = Depends(get_current_user)):
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)
-
-
-@router.post("/backtest/run")
-def run_backtest(body: BacktestIn,
-                 user: User = Depends(get_current_user),
-                 session: Session = Depends(get_session)):
-    try:
-        strategy = qc.Strategy(**body.strategy)
-    except ValidationError as e:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            f"전략 정의 오류: {e.errors()[0]['msg']}")
-    # Phase 57-B — screener:preset_key 자동선택은 PRESETS의 spec으로 resolve.
-    # "screener:custom"이면 strategy.screener_spec(사용자 입력) 그대로 사용.
-    ts = strategy.trade_symbol or ""
-    if ts.startswith("screener:") and not strategy.screener_spec:
-        key = ts[len("screener:"):]
-        from ..screener import PRESETS
-        preset = PRESETS.get(key)
-        if preset and isinstance(preset.get("spec"), dict):
-            strategy = strategy.model_copy(update={"screener_spec": preset["spec"]})
-        elif key != "custom":
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                f"알 수 없는 screener preset: '{key}'")
-    result = qc.run_strategy_backtest(
-        strategy, get_dataset(),
-        initial_capital=body.initial_capital,
-        start=body.start, end=body.end,
-    )
-    payload = serialize_backtest(result)
-
-    # Phase 59 — strategy_id가 있을 때만 저장 (orphan 백테스트 즉시 삭제 정책).
-    # 빌더에서 임시 실행은 응답만 반환, DB row 안 만듦.
-    if body.strategy_id is not None:
-        # 사용자 본인 소유 검증
-        from ..models import Strategy as _Strategy
-        s = session.get(_Strategy, body.strategy_id)
-        if s is None or s.user_id != user.id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND,
-                                "지정한 전략을 찾을 수 없습니다.")
-        run = BacktestRun(
-            user_id=user.id,
-            strategy_id=body.strategy_id,
-            version_no=body.version_no,
-            name=strategy.name,
-            definition=body.strategy,
-            result=payload,
-            initial_capital=body.initial_capital,
-            start=body.start,
-            end=body.end,
-        )
-        session.add(run)
-        session.commit()
-        session.refresh(run)
-        payload["run_id"] = run.id
-        payload["run_created_at"] = run.created_at.isoformat()
-    return payload
-
-
-@router.get("/backtest/runs", response_model=list[BacktestRunSummary])
-def list_backtest_runs(
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-    # S-08 — 하드코딩 limit=50 제거. 기본은 호환 유지(50), 클라이언트가
-    # limit/offset으로 페이지네이션 가능. 최대 200으로 캡(서버 보호).
-    limit: int = Query(50, ge=1, le=200, description="페이지당 최대 항목 수"),
-    offset: int = Query(0, ge=0, description="건너뛸 항목 수(페이지네이션)"),
-):
-    rows = session.exec(
-        select(BacktestRun)
-        .where(BacktestRun.user_id == user.id)
-        .order_by(BacktestRun.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    ).all()
-    return [BacktestRunSummary(
-        id=r.id, name=r.name, created_at=r.created_at,
-        initial_capital=r.initial_capital,
-        metrics=r.result.get("metrics", {}) if isinstance(r.result, dict) else {},
-        success=bool(r.result.get("success", False)) if isinstance(r.result, dict) else False,
-    ) for r in rows]
-
-
-@router.get("/backtest/runs/{run_id}", response_model=BacktestRunOut)
-def get_backtest_run(run_id: int,
-                     user: User = Depends(get_current_user),
-                     session: Session = Depends(get_session)):
-    row = session.get(BacktestRun, run_id)
-    if row is None or row.user_id != user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "실행 내역을 찾을 수 없습니다.")
-    return BacktestRunOut(
-        id=row.id, name=row.name, initial_capital=row.initial_capital,
-        start=row.start, end=row.end, created_at=row.created_at,
-        definition=row.definition, result=row.result,
-    )
-
-
-@router.delete("/backtest/runs/{run_id}")
-def delete_backtest_run(run_id: int,
-                        user: User = Depends(get_current_user),
-                        session: Session = Depends(get_session)):
-    row = session.get(BacktestRun, run_id)
-    if row is None or row.user_id != user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "실행 내역을 찾을 수 없습니다.")
-    session.delete(row)
-    session.commit()
-    return {"ok": True}
-
-
-@router.post("/analysis/run")
-def run_analysis(body: AnalysisIn, user: User = Depends(get_current_user)):
-    result = qc.run_analysis(
-        get_dataset(), body.conditions, body.logic,
-        body.target_symbol, body.target_indicator,
-        forward_days=body.forward_days, lookback_years=body.lookback_years,
-    )
-    return serialize_analysis(result)

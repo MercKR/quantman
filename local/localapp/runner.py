@@ -20,7 +20,7 @@ import quant_core as qc
 
 from .broker import Broker
 from .config import PENDING_PATH
-from .file_security import restrict_to_owner
+from .state_store import save_json
 from .logging_setup import setup_logging
 from .secrets_store import load_kis
 from .sync_client import (pull_krx_status, pull_preview, pull_risk_limits,
@@ -93,7 +93,8 @@ def _wait_for_order_ws() -> None:
                  "시초가 체결 통보는 REST 폴링으로 반영됨 (push 지연 가능)")
 
 
-def run_cycle(market: str = "KRX", catchup: bool = False) -> dict:
+def run_cycle(market: str = "KRX", catchup: bool = False,
+              reserved: bool = False) -> dict:
     """1회 자동매매 사이클을 실행하고 동기화 스냅샷을 반환한다.
 
     market: 이번 사이클이 다룰 시장 그룹('KRX' 또는 'US'). 스케줄러가 각 시장의
@@ -102,6 +103,10 @@ def run_cycle(market: str = "KRX", catchup: bool = False) -> dict:
     catchup: PC가 꺼져 있어 missed된 cycle을 기동 시 뒤늦게 실행하는 경우 True.
     catchup.run_catchup_on_startup이 호출하며, trader가 시장가 매수를 시초가
     limit으로 자동 변환 (백테스트 alignment + selection bias 없음).
+
+    reserved: 미국 개장 전 entry cycle(스케줄러 us_cycle)에서만 True. trader가
+    매수=지정가 예약·매도=MOO 예약으로 라우팅(개장 시 자동전송). 장중 손절/킬
+    스위치 청산은 즉시 시장주문이어야 하므로 항상 False.
     """
     setup_logging()
     _flush_pending()
@@ -190,7 +195,7 @@ def run_cycle(market: str = "KRX", catchup: bool = False) -> dict:
             # B1 — dataset을 실제 사용 종목만 로드 (전체 4468 지표 계산 5분+ → 수초).
             # broker·preview 이후로 옮긴 이유: 보유(ledger)·후보가 있어야 needed
             # 집합을 계산할 수 있기 때문. 매수는 신호 재평가 안 하고(매수후보=preview),
-            # 매도는 build_signal_mask가 조건 참조 종목을 보므로 dataset_scope가
+            # 매도는 IR position.exit.condition이 조건 참조 종목을 보므로 dataset_scope가
             # macro ∪ 타겟/후보 ∪ 보유 ∪ 조건참조를 모두 포함.
             from . import dataset_scope
             needed = dataset_scope.needed_symbols(
@@ -204,7 +209,8 @@ def run_cycle(market: str = "KRX", catchup: bool = False) -> dict:
             krx_status = pull_krx_status()
             payload = trader.cycle(strategies, dataset, buy_candidates=buy_candidates,
                                      risk_limits=risk_limits, market=market,
-                                     krx_status=krx_status, catchup=catchup)
+                                     krx_status=krx_status, catchup=catchup,
+                                     reserved=reserved)
             if preview_missing:
                 payload.setdefault("cycle_summary", {})["preview_missing"] = True
             cycle_err = None
@@ -236,10 +242,8 @@ def run_cycle(market: str = "KRX", catchup: bool = False) -> dict:
         push_snapshot(payload)
         log.info("동기화 완료 — 평가금액 %s원", f"{payload['balance']['total_eval']:,}")
     except Exception as e:
-        PENDING_PATH.write_text(json.dumps(payload, ensure_ascii=False),
-                                encoding="utf-8")
-        # 잔고·포지션·체결 정보는 같은 PC의 다른 사용자가 읽으면 안 됨.
-        restrict_to_owner(PENDING_PATH)
+        # 잔고·포지션·체결 정보는 같은 PC의 다른 사용자가 읽으면 안 됨 (R5: 원자+ACL).
+        save_json(PENDING_PATH, payload)
         log.warning("동기화 실패 — 보류 큐 저장 (다음 사이클 재전송): %s", e)
 
     return payload
@@ -260,13 +264,30 @@ def run_post_close_settlement(market: str = "KRX") -> dict:
     Q5(AL-4): trader._CYCLE_LOCK으로 cycle·장중 ks 트리거와 직렬화. 장 마감
     직전에 ks 트리거가 cycle을 돌리는 중이라면 settlement는 잠시 대기 후 진입.
     """
-    from .trader import kst_today, _CYCLE_LOCK
+    from .trader import _CYCLE_LOCK
     setup_logging()
     with _CYCLE_LOCK:
-        return _run_post_close_settlement_locked(market)
+        return _run_settlement_locked(market, kind="post_close_settlement",
+                                       label="장 마감 후 settlement")
 
 
-def _run_post_close_settlement_locked(market: str) -> dict:
+def run_post_open_reconcile(market: str = "US") -> dict:
+    """미국 개장 직후(open+5분) 예약주문 체결 reconcile + 스냅샷 push.
+
+    예약 지정가 매수·MOO 매도가 개장(22:30/23:30)에 전송·체결된 직후 ledger·
+    서버를 동기화한다. 미체결 working 매수는 취소하지 않는다(_resolve_pending은
+    상태 조회만 — 장중 자연 체결 허용). MOO 매도는 개장에 완결되고 working 매수는
+    체결분만 ledger에 들어오므로 reconcile_with_kis가 in-flight drift로 오작동하지
+    않는다. settlement와 동일 본문 — kind만 다르다.
+    """
+    from .trader import _CYCLE_LOCK
+    setup_logging()
+    with _CYCLE_LOCK:
+        return _run_settlement_locked(market, kind="post_open_reconcile",
+                                       label="개장 후 reconcile")
+
+
+def _run_settlement_locked(market: str, kind: str, label: str) -> dict:
     from .trader import kst_today
     _flush_pending()
 
@@ -279,7 +300,7 @@ def _run_post_close_settlement_locked(market: str) -> dict:
             return {"status": "skipped_holiday", "market": "KRX",
                     "today": today_d.isoformat()}
     today = today_d.isoformat()
-    log.info("장 마감 후 settlement 시작 (market=%s)", market)
+    log.info("%s 시작 (market=%s)", label, market)
     broker = make_broker()
     trader = Trader(broker)
 
@@ -307,7 +328,7 @@ def _run_post_close_settlement_locked(market: str) -> dict:
         "cycle_summary": {
             "today": today,
             "market": market,                     # Phase 7 catch-up — 시장 식별
-            "kind": "post_close_settlement",
+            "kind": kind,
             "reconcile_drift": reconcile_result.get("has_drift", False),
             "reconcile_applied": len(reconcile_result.get("applied") or []),
         },
@@ -326,9 +347,7 @@ def _run_post_close_settlement_locked(market: str) -> dict:
         log.info("settlement 동기화 완료 — 미체결 정리 %d건",
                   sum(1 for d in decisions if d.get("action") == "timeout"))
     except Exception as e:
-        PENDING_PATH.write_text(
-            json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        restrict_to_owner(PENDING_PATH)
+        save_json(PENDING_PATH, payload)
         log.warning("settlement 동기화 실패 — 보류 큐 저장: %s", e)
 
     return payload

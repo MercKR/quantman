@@ -98,10 +98,14 @@ def strategy_from_spec(
     *,
     valid_refs: set[str] | None = None,
     meta: DatasetMeta | None = None,
+    manifest=None,
+    strict: bool = False,
 ) -> dict:
     """완전한 StrategyIR(dict)을 검증·실행. 단일/팩터/포트폴리오/펼침 모두 처리.
 
     sweep.axis != none이면 펼침(resultset), 아니면 1회 백테스트.
+    manifest 제공 시 데이터 무결성 4액션 게이트(생존편향·조정·PIT·가용성·캘린더)를 함께 적용.
+    strict=True면 편향형 경고를 거부로 승격(실전 자금 투입 前 게이트).
     """
     try:
         s = StrategyIR.model_validate(spec)
@@ -110,7 +114,14 @@ def strategy_from_spec(
 
     if valid_refs is None:
         valid_refs = available_refs(dataset)
-    issues = validate_strategy(s, valid_refs, meta)
+    # manifest 제공 시 그 무결성 플래그로 meta 도출(PIT는 게이트가 strict-인지로 소유 → has_pit=True 위임차단)
+    if manifest is not None and meta is None:
+        meta = DatasetMeta(delay=manifest.delay, has_pit=True,
+                           has_membership_history=manifest.has_membership_history)
+    issues = list(validate_strategy(s, valid_refs, meta))
+    if manifest is not None:
+        from ..data import evaluate_data_soundness  # 지연 import — 선택적 데이터 계층 의존
+        issues = prioritize(issues + list(evaluate_data_soundness(s, manifest, strict=strict)))
     errors = [i for i in issues if i.is_error]
     if errors:
         return {"success": False, "error": errors[0].message,

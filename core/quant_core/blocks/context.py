@@ -7,8 +7,8 @@
   - "__SELF__.X"              → "X"와 동일 (각 종목 자신). UI [이 종목] 라벨용.
   - "SYM.X"        (SYM∈데이터) → SYM의 X를 전 종목에 브로드캐스트 (예: "S&P500.pct_change_1d")
 
-이 의미론이 기존 build_signal_mask의 current_symbol 치환과 일치한다:
-한 종목 마스크가 필요하면 패널을 평가한 뒤 그 종목 컬럼을 select_symbol로 뽑는다.
+한 종목 마스크가 필요하면 패널을 평가한 뒤 그 종목 컬럼을 select_symbol로 뽑는다
+(current_symbol 치환 의미론).
 """
 
 from __future__ import annotations
@@ -69,7 +69,9 @@ def resolve_data(ref: str, ctx: EvalContext) -> pd.DataFrame:
         if sym in ctx.data:
             df = ctx.data[sym]
             col = _col(df, indic) if (df is not None and not df.empty) else None
-            series = (df[col].reindex(ctx.master_idx) if col is not None
+            # 브로드캐스트(외부 시장/매크로)는 ffill — 종목 달력과 휴장일이 달라도
+            # 마지막 관측값을 이어 붙인다(PIT 일관). 자기 데이터(_matrix)는 ffill 안 함.
+            series = (df[col].reindex(ctx.master_idx).ffill() if col is not None
                       else pd.Series(np.nan, index=ctx.master_idx))
             return pd.DataFrame({s: series for s in ctx.symbols}, index=ctx.master_idx)
     return _matrix(ref, ctx)

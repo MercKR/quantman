@@ -58,7 +58,6 @@ def test_evaluate_below_threshold_no_trigger(isolated_ks, monkeypatch, tmp_path)
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
 
     broker = _mock_broker({"total_eval": 9_800_000, "foreign_eval_krw": 0,
                             "cash_usd": 0, "fx_usdkrw": 0})
@@ -75,7 +74,6 @@ def test_evaluate_above_threshold_triggers(isolated_ks, monkeypatch, tmp_path):
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
 
     broker = _mock_broker({"total_eval": 9_600_000, "foreign_eval_krw": 0,
                             "cash_usd": 0, "fx_usdkrw": 0})
@@ -95,7 +93,6 @@ def test_evaluate_already_active_no_double_trigger(isolated_ks, monkeypatch, tmp
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
 
     isolated_ks.activate("기존 발동")
     broker = _mock_broker({"total_eval": 9_500_000, "foreign_eval_krw": 0,
@@ -115,7 +112,6 @@ def test_cancel_all_pending_calls_broker_cancel(monkeypatch, tmp_path):
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
 
     broker = MagicMock()
     trader = Trader(broker)
@@ -139,7 +135,6 @@ def test_cancel_all_pending_continues_on_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
 
     broker = MagicMock()
     broker.cancel.side_effect = [Exception("KIS down"), None]
@@ -167,7 +162,6 @@ def test_monitor_evaluate_once_fires_on_trigger(isolated_ks):
                             "cash_usd": 0, "fx_usdkrw": 0})
     mgr = IntradayStopManager(
         broker=broker, get_ledger=lambda: {},
-        get_strat_def=lambda sid: None,
         submit_sell_fn=MagicMock())
     triggered = []
     fired = mgr._ks_evaluate_once(3.0, lambda: triggered.append("fired"))
@@ -185,7 +179,6 @@ def test_monitor_skips_when_already_active(isolated_ks):
                             "cash_usd": 0, "fx_usdkrw": 0})
     mgr = IntradayStopManager(
         broker=broker, get_ledger=lambda: {},
-        get_strat_def=lambda sid: None,
         submit_sell_fn=MagicMock())
     triggered = []
     fired = mgr._ks_evaluate_once(3.0, lambda: triggered.append("fired"))
@@ -201,7 +194,6 @@ def test_monitor_start_stop_lifecycle(isolated_ks):
                             "cash_usd": 0, "fx_usdkrw": 0})
     mgr = IntradayStopManager(
         broker=broker, get_ledger=lambda: {},
-        get_strat_def=lambda sid: None,
         submit_sell_fn=MagicMock())
     triggered = []
     mgr.start_monitor(3.0, lambda: triggered.append("fired"), period_sec=0.2)
@@ -222,7 +214,6 @@ def test_apply_fill_triggers_ks_hook(isolated_ks, monkeypatch, tmp_path):
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
     monkeypatch.setattr(cfg, "TRADES_PATH", tmp_path / "t.jsonl")
 
     broker = _mock_broker({"total_eval": 9_600_000, "foreign_eval_krw": 0,
@@ -254,7 +245,6 @@ def test_apply_fill_skips_trigger_when_in_cycle(isolated_ks, monkeypatch, tmp_pa
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
     monkeypatch.setattr(cfg, "TRADES_PATH", tmp_path / "t.jsonl")
 
     broker = _mock_broker({"total_eval": 9_600_000, "foreign_eval_krw": 0,
@@ -305,7 +295,6 @@ def test_apply_fill_no_trigger_when_limit_unset(monkeypatch, tmp_path):
     monkeypatch.setattr(cfg, "LEDGER_PATH", tmp_path / "l.json")
     monkeypatch.setattr(cfg, "EQUITY_PATH", tmp_path / "e.json")
     monkeypatch.setattr(cfg, "PENDING_ORDERS_PATH", tmp_path / "p.json")
-    monkeypatch.setattr(cfg, "REBALANCE_PATH", tmp_path / "r.json")
     monkeypatch.setattr(cfg, "TRADES_PATH", tmp_path / "t.jsonl")
 
     broker = _mock_broker({"total_eval": 9_000_000, "foreign_eval_krw": 0,
@@ -325,18 +314,36 @@ def test_apply_fill_no_trigger_when_limit_unset(monkeypatch, tmp_path):
 
 
 def test_cycle_lock_is_module_level():
-    """_CYCLE_LOCK이 module-level이고 threading.Lock 인스턴스."""
+    """_CYCLE_LOCK이 module-level이고 재진입 가능한 RLock (M3).
+
+    M3에서 cycle이 락을 쥔 채 _resolve_pending→_apply_fill로 재진입하므로 Lock→
+    RLock으로 바뀌었다. (이전엔 비재진입 Lock을 가정했다.)
+    """
     from localapp import trader as trader_mod
-    assert isinstance(trader_mod._CYCLE_LOCK, type(threading.Lock()))
+    assert isinstance(trader_mod._CYCLE_LOCK, type(threading.RLock()))
 
 
-def test_cycle_lock_serializes_concurrent_acquires():
-    """동시 acquire 시도 — 한 번에 1개만 acquire."""
+def test_cycle_lock_reentrant_but_serializes_across_threads():
+    """M3 락 계약: 같은 thread는 재진입 가능, 다른 thread는 점유 중 차단(직렬화)."""
     from localapp.trader import _CYCLE_LOCK
     assert _CYCLE_LOCK.acquire(blocking=False) is True
     try:
-        # 첫 acquire 점유 중 → 두 번째는 즉시 실패
-        assert _CYCLE_LOCK.acquire(blocking=False) is False
+        # 같은 thread 재진입 — RLock이므로 성공 (cycle→_apply_fill 중첩 모사)
+        assert _CYCLE_LOCK.acquire(blocking=False) is True
+        _CYCLE_LOCK.release()
+        # 다른 thread는 점유 중 acquire 실패 — 크로스스레드 직렬화 보장
+        result: dict = {}
+
+        def _other():
+            got = _CYCLE_LOCK.acquire(blocking=False)
+            result["got"] = got
+            if got:
+                _CYCLE_LOCK.release()
+
+        t = threading.Thread(target=_other)
+        t.start()
+        t.join(timeout=2)
+        assert result.get("got") is False, "다른 thread가 점유 중 lock 획득(직렬화 실패)"
     finally:
         _CYCLE_LOCK.release()
     # 해제 후 다시 acquire 가능

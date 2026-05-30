@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from .config import CYCLES_PATH, ORDERS_PATH, SLIPPAGE_PATH
+from .state_store import append_jsonl, save_json
 
 log = logging.getLogger("localapp.orderlog")
 
@@ -31,9 +32,14 @@ def _now() -> str:
 
 
 def _append(path, obj: dict) -> None:
+    """orders/cycles 한 줄 append — state_store 위임 (R5, 최초 생성 시 owner-only ACL).
+
+    원시 주문 이벤트(종목·수량·체결가)는 같은 PC 타 사용자에게 노출되면 안 된다.
+    로그 기록은 best-effort — 실패해도 매매 사이클을 중단시키지 않는다(체결 진실은
+    intents.jsonl·KIS 주문조회이고 이건 보조 로그). fsync 불필요(L-01 대상 아님).
+    """
     try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        append_jsonl(obj, path)
     except Exception as e:
         log.warning("로그 기록 실패 [%s]: %s", path.name, e)
 
@@ -123,7 +129,7 @@ def _load_slip() -> dict:
 
 
 def _save_slip(d: dict) -> None:
-    SLIPPAGE_PATH.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    save_json(SLIPPAGE_PATH, d)
 
 
 def record_slippage(side: str, symbol: str, intended: float, fill: float) -> None:

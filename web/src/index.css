@@ -275,7 +275,8 @@ button {
   border-radius: 8px; background: var(--ink); color: #fff; cursor: pointer;
   transition: background 0.12s ease;
 }
-button:hover { background: var(--accent); }
+/* 호버는 --accent-hover(흰 위 4.2:1) — 기존 --accent(#d97757)는 흰 글자 대비 ~3:1로 가독성 낮음 */
+button:hover { background: var(--accent-hover); }
 button:active { background: var(--accent-strong); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 button:disabled:hover { background: var(--ink); }
@@ -291,7 +292,7 @@ button.sm { padding: 5px 10px; font-size: 13px; }
   border-radius: 8px; background: var(--ink); color: #fff;
   transition: background 0.12s ease;
 }
-.download-link:hover { background: var(--accent); text-decoration: none; color: #fff; }
+.download-link:hover { background: var(--accent-hover); text-decoration: none; color: #fff; }
 
 /* 문장형 조건 빌더 — 제품의 핵심 차별점. row는 균일 카드, 적용 상태는 sentence.draft opacity로 표현. */
 .sentence {
@@ -1665,7 +1666,7 @@ thead th { color: var(--muted); font-weight: 600; }
   font-size: 14px; font-weight: 700; cursor: pointer;
   transition: background 0.12s ease;
 }
-.promote-btn:hover { background: var(--accent); }
+.promote-btn:hover { background: var(--accent-hover); }
 
 .live-active {
   display: flex; align-items: center; gap: 10px;
@@ -2142,6 +2143,47 @@ thead th { color: var(--muted); font-weight: 600; }
 .const-input { width: 140px; }
 
 .slot-picker { border-style: dashed; color: var(--muted); background: var(--bg); }
+
+/* 문장형 빈칸 에디터 (SentenceTree) — IR을 읽히는 문장으로 */
+.st { line-height: 2.2; font-size: 15px; color: var(--text); }
+.st-block, .st-phrase, .st-variadic, .st-slot, .st-leaf { display: inline; }
+.st-block[data-out="score"] > .st-phrase { box-shadow: inset 0 -1px 0 var(--accent-soft); }
+.st-of { color: var(--muted); margin: 0 1px; }
+/* 인라인 빈칸 컨트롤 — 작은 밑줄형 칩 */
+.st-param {
+  font: inherit; font-size: 14px; font-weight: 600; padding: 2px 6px; margin: 0 2px;
+  border: none; border-bottom: 1.5px solid var(--accent); border-radius: 4px;
+  background: var(--accent-soft); color: var(--accent-strong);
+  vertical-align: baseline; cursor: pointer;
+}
+.st-param:hover { background: #fff; }
+.st-param:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.st-num { width: 62px; text-align: center; }
+.st-list { width: 132px; }
+.st-toggle { border-bottom-style: dashed; }
+/* 그리고/또는 연결어 — 클릭으로 AND/OR 전환 */
+.st-conn {
+  font: inherit; font-size: 12px; font-weight: 700; padding: 1px 9px; margin: 0 5px;
+  border: 1px solid var(--border); border-radius: 11px; background: var(--bg);
+  color: var(--muted); cursor: pointer; vertical-align: middle;
+}
+.st-conn:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
+/* 삭제 ✕ — 기본 숨김(문장 가독성), 블록 호버 시 옅게, 직접 호버 시 빨강 */
+.st-x {
+  font-size: 11px; padding: 0 3px; margin-left: 1px; background: transparent;
+  border: none; color: var(--muted); cursor: pointer; vertical-align: middle; font-weight: 400;
+  opacity: 0; transition: opacity .1s;
+}
+.st-block:hover > .st-x, .st-leaf:hover > .st-x { opacity: .45; }
+.st-x:hover { background: transparent; color: var(--red); opacity: 1; }
+/* 빈칸 — 점선 picker */
+.st-blank {
+  font: inherit; font-size: 13px; font-weight: 600; padding: 2px 8px; margin: 0 2px;
+  border: 1.5px dashed var(--accent); border-radius: 6px;
+  background: transparent; color: var(--accent-strong); cursor: pointer; vertical-align: baseline;
+}
+.st-blank:hover { background: var(--accent-soft); }
+.st-unknown { color: var(--red); }
 
 .stat-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
 .stat-grid .stat { flex: 1; min-width: 110px; }

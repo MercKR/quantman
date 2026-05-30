@@ -242,9 +242,12 @@ def pull_strategies(
             Strategy.run_mode.in_(["paper", "live"]),
         )
     ).all()
-    return [StrategyOut(id=s.id, name=s.name, run_mode=s.run_mode,
-                        definition=s.definition, created_at=s.created_at,
-                        updated_at=s.updated_at) for s in rows]
+    # engine을 definition에도 주입 — 로컬앱(trader·intraday_stop)은 definition.get("engine")
+    # 으로 IR/operand를 디스패치한다. StrategyIR.model_dump엔 engine 필드가 없어 stored
+    # definition엔 빠져 있으므로, 자기완결 spec이 되도록 serve 시점에 column 값을 합친다.
+    return [StrategyOut(id=s.id, name=s.name, run_mode=s.run_mode, engine=s.engine,
+                        definition={**(s.definition or {}), "engine": s.engine},
+                        created_at=s.created_at, updated_at=s.updated_at) for s in rows]
 
 
 @router.get("/risk_limits")

@@ -13,27 +13,16 @@ from typing import Any, Callable
 # ── 그룹 융합 헬퍼 ────────────────────────────────────────────────────────────
 
 def get_symbol_group(sym: str, group_type: str = "Industry") -> str:
-    """티커 심볼에 해당하는 그룹(산업군/섹터)명을 반환한다."""
-    clean_sym = sym.split(".")[0]
-    if clean_sym.isdigit():
-        # 한국 대표 종목 휴리스틱 매핑
-        kor_groups = {
-            "005930": "IT", "000660": "IT", "035420": "IT", "035720": "IT",
-            "005380": "Auto", "000270": "Auto",
-            "068270": "Bio", "207940": "Bio",
-            "051910": "Chem", "006400": "Energy", "373220": "Energy",
-            "005490": "Steel", "010140": "Steel",
-            "055550": "Finance", "105560": "Finance", "086790": "Finance",
-        }
-        return kor_groups.get(clean_sym, "기타제조")
-    
-    # 미국 대표 종목 휴리스틱 매핑
-    us_groups = {
-        "AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech", "GOOG": "Tech",
-        "META": "Tech", "NVDA": "Tech", "AMZN": "Consumer", "TSLA": "Consumer",
-        "JPM": "Finance", "BAC": "Finance", "JNJ": "Healthcare", "LLY": "Healthcare",
-    }
-    return us_groups.get(sym.upper(), "Other")
+    """티커 심볼의 그룹(업종/섹터)명. static.classification 사이드카(FDR KRX-DESC) 조회.
+
+    미수급 종목(US 또는 사이드카 미적재)은 폴백 — KR은 '기타', 그 외 'Other'.
+    폴백은 빈 그룹을 안 만들도록 일관된 값을 준다(그룹 연산 안전).
+    """
+    from .data.feeds.classification import symbol_group
+    g = symbol_group(sym, group_type)
+    if g:
+        return g
+    return "기타" if sym.split(".")[0].isdigit() else "Other"
 
 
 # ── 시계열 및 횡단면 연산 함수군 ───────────────────────────────────────────────

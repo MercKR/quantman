@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import quant_core as qc
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
+from quant_core.ir_engine import StrategyIR
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -18,23 +18,32 @@ from ..schemas import (StrategyIn, StrategyOut, StrategyRestoreIn,
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 _VALID_MODES = {"draft", "paper", "live"}
+_VALID_ENGINES = {"ir"}   # IR 단일 체제 — 레거시 operand 제거됨
 
 # Phase 59 — 자동 스냅샷 회전 정책
 _VERSION_MAX_KEEP = 50         # strategy당 최대 보관 버전 수
 _VERSION_MAX_AGE_DAYS = 30     # 30일 이전 버전 자동 삭제
 
 
-def _validate(definition: dict) -> qc.Strategy:
-    """definition이 core Strategy 스키마에 맞는지 검증."""
+def _validate(engine: str, definition: dict) -> tuple[str, dict]:
+    """definition을 StrategyIR 스키마로 검증하고 (정규화 이름, 정규화 정의) 반환.
+
+    IR 단일 체제 — engine은 'ir'만. 구조 검증만 (데이터 가용성·무결성은 백테스트 실행이 소유).
+    잘못된 정의는 422.
+    """
+    if engine != "ir":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "전략 엔진은 'ir'만 지원합니다 (레거시 operand 제거됨).")
     try:
-        return qc.Strategy(**definition)
+        s = StrategyIR.model_validate(definition)
+        return s.name, s.model_dump()
     except ValidationError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"전략 정의가 올바르지 않습니다: {e.errors()[0]['msg']}")
 
 
 def _out(s: Strategy) -> StrategyOut:
-    return StrategyOut(id=s.id, name=s.name, run_mode=s.run_mode,
+    return StrategyOut(id=s.id, name=s.name, run_mode=s.run_mode, engine=s.engine,
                        definition=s.definition, created_at=s.created_at,
                        updated_at=s.updated_at,
                        paper_started_at=s.paper_started_at,
@@ -103,10 +112,12 @@ def create_strategy(
 ):
     if body.run_mode not in _VALID_MODES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "run_mode가 올바르지 않습니다.")
-    strat = _validate(body.definition)
+    if body.engine not in _VALID_ENGINES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "engine이 올바르지 않습니다.")
+    name, definition = _validate(body.engine, body.definition)
     now = datetime.now(timezone.utc)
-    row = Strategy(user_id=user.id, name=strat.name, run_mode=body.run_mode,
-                   definition=strat.model_dump(),
+    row = Strategy(user_id=user.id, name=name, run_mode=body.run_mode,
+                   engine=body.engine, definition=definition,
                    paper_started_at=now if body.run_mode == "paper" else None,
                    live_started_at=now if body.run_mode == "live" else None)
     session.add(row)
@@ -140,7 +151,9 @@ def update_strategy(
     row = _own_or_404(session, strategy_id, user.id)
     if body.run_mode not in _VALID_MODES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "run_mode가 올바르지 않습니다.")
-    strat = _validate(body.definition)
+    if body.engine not in _VALID_ENGINES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "engine이 올바르지 않습니다.")
+    name, definition = _validate(body.engine, body.definition)
 
     # Phase 59 — 변경 전 정의를 버전으로 스냅샷 (사용자 선택: 매 PUT마다)
     _snapshot_version(session, row, reason="manual_edit")
@@ -152,9 +165,10 @@ def update_strategy(
     if body.run_mode == "live" and row.run_mode != "live":
         row.live_started_at = now
 
-    row.name = strat.name
+    row.name = name
     row.run_mode = body.run_mode
-    row.definition = strat.model_dump()
+    row.engine = body.engine
+    row.definition = definition
     row.updated_at = now
     session.add(row)
     session.commit()

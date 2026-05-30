@@ -1,7 +1,4 @@
-"""B1 — referenced_symbols 추출 + load_dataset_for 회귀 테스트.
-
-referenced_symbols는 fund-safety 경로: 누락 시 build_signal_mask가 빈 mask →
-매도 신호가 조용히 미발동. 그래서 추출 완전성을 회귀로 고정한다.
+"""B1 — load_dataset_for 회귀 테스트.
 
     cd platform && pytest tests/test_dataset_scope.py -v
 """
@@ -15,60 +12,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
 
 import quant_core as qc  # noqa: E402
-
-
-# ── referenced_symbols ────────────────────────────────────────────────────
-
-def test_self_and_macro_reference():
-    """[이 종목] >= S&P500.pct_change_1d — SELF 제외, S&P500만 추출."""
-    conds = [{
-        "left": {"kind": "indicator", "symbol": "__SELF__", "indicator": "pct_change_1d"},
-        "op": ">=",
-        "right": {"kind": "indicator", "symbol": "S&P500", "indicator": "pct_change_1d"},
-    }]
-    assert qc.referenced_symbols(conds) == {"S&P500"}
-
-
-def test_constant_excluded():
-    """[이 종목].RSI_14 < 70 — constant 우변·SELF 좌변 → 외부 참조 없음."""
-    conds = [{
-        "left": {"kind": "indicator", "symbol": "__SELF__", "indicator": "RSI_14"},
-        "op": "<",
-        "right": {"kind": "constant", "value": 70},
-    }]
-    assert qc.referenced_symbols(conds) == set()
-
-
-def test_nested_group_multi_symbol():
-    """중첩 그룹 + 복수 외부 종목 참조 — 재귀로 전부 추출."""
-    conds = [{
-        "logic": "OR",
-        "conditions": [
-            {"left": {"kind": "indicator", "symbol": "005930", "indicator": "Close"},
-             "op": ">",
-             "right": {"kind": "indicator", "symbol": "000660", "indicator": "Close"}},
-            {"left": {"kind": "indicator", "symbol": "__SELF__", "indicator": "MA20"},
-             "op": ">",
-             "right": {"kind": "indicator", "symbol": "KOSPI", "indicator": "Close"}},
-        ],
-    }]
-    assert qc.referenced_symbols(conds) == {"005930", "000660", "KOSPI"}
-
-
-def test_empty_and_none():
-    assert qc.referenced_symbols([]) == set()
-    assert qc.referenced_symbols(None) == set()
-
-
-def test_history_operand_symbol():
-    """kind=history 피연산자의 symbol도 추출 (constant만 제외)."""
-    conds = [{
-        "left": {"kind": "indicator", "symbol": "__SELF__", "indicator": "Close"},
-        "op": ">",
-        "right": {"kind": "history", "symbol": "달러지수", "indicator": "Close",
-                  "stat": "mean", "window": 20},
-    }]
-    assert qc.referenced_symbols(conds) == {"달러지수"}
 
 
 # ── load_dataset_for ──────────────────────────────────────────────────────

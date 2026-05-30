@@ -144,6 +144,40 @@ def _refresh_technical() -> None:
     _trigger_preview("technical")
 
 
+def _refresh_static_meta() -> None:
+    """static.classification(섹터·업종)+static.listing(상장·폐지일) 사이드카 갱신 (FDR KRX-DESC/DELISTING).
+
+    KR dataset 갱신(18:15) 직전 실행 → 그 invalidate가 새 사이드카로 매니페스트를 재빌드하고,
+    bundle(18:30)이 사이드카를 로컬로 전파한다. 변동이 느려 일 1회로 충분.
+    """
+    from quant_core.data.feeds import classification, listing
+    c = classification.fetch()
+    ls = listing.fetch()
+    _log.info("정적 메타 갱신: classification %d종목 · listing %d종목", len(c), len(ls))
+
+
+def _refresh_us_fundamentals() -> None:
+    """US 펀더멘털(SEC Company Facts) — S&P500 + 등록 해외종목. filing-date PIT. 주1회로 충분(분기 변동)."""
+    from quant_core import data_fetcher
+    from quant_core.data.feeds import fundamental_us
+    tickers = sorted({t for t in (data_fetcher.sp500_yf_codes()
+                                  + [s.get("code", "") for s in data_fetcher.load_managed_overseas()]) if t})
+    res = fundamental_us.fetch(tickers)
+    _log.info("US 펀더멘털(SEC) %d종목: %s", len(tickers), res)
+    data_cache.invalidate()                      # 다음 로드 시 펀더멘털 attach
+
+
+def _refresh_kr_fundamentals() -> None:
+    """KR 펀더멘털(OpenDART 분기) — 증분 백필(10k콜/일 예산). dataset_kr(18:15) 직전 → 그 invalidate가 반영."""
+    from datetime import datetime
+    from quant_core import data_fetcher
+    from quant_core.data.feeds import fundamental_kr
+    codes = data_fetcher.load_managed_kr_codes()
+    yr = datetime.now().year
+    res = fundamental_kr.fetch(codes, list(range(yr - 7, yr + 1)), budget_calls=9000)
+    _log.info("KR 펀더멘털(OpenDART) %d종목 대상: %s", len(codes), res)
+
+
 # ── 시작 시 1회 초기 fetch (실패해도 다음 정시 cron이 재시도) ─────────────────
 
 def _initial_krx_refresh():
@@ -174,6 +208,16 @@ def _initial_technical_refresh():
         _refresh_technical()
     except Exception:
         _log.exception("기술적 지표 초기 fetch 중 예외 — 정시 cron 재시도")
+
+
+def _initial_static_meta_refresh():
+    import time
+    try:
+        time.sleep(150)
+        _log.info("정적 메타 초기 fetch 시작 (섹터·상장폐지일)")
+        _refresh_static_meta()
+    except Exception:
+        _log.exception("정적 메타 초기 fetch 예외 — 18:10 cron 재시도")
 
 
 def _refresh_dataset_all() -> None:
@@ -244,7 +288,7 @@ def _refresh_kr_dataset() -> None:
     (`[이 종목]` placeholder)가 dataset 안에서 그대로 가능해진다. load_dataset()이
     종목별 RSI/MA/ATR 등을 compute_all로 계산해 dict로 반환.
     """
-    from quant_core import data_fetcher, parse_trade_symbols
+    from quant_core import data_fetcher
     from sqlmodel import Session, select
     from .db import engine
     from .models import Strategy
@@ -264,10 +308,10 @@ def _refresh_kr_dataset() -> None:
     with Session(engine) as session:
         rows = session.exec(select(Strategy)).all()
         for s in rows:
-            tsym = (s.definition or {}).get("trade_symbol", "")
-            mode, syms = parse_trade_symbols(tsym)
-            if mode == "screener":
+            # IR 단일 체제 — 매매 타겟은 universe.symbols. 레거시 operand 행은 skip.
+            if s.engine != "ir":
                 continue
+            syms = ((s.definition or {}).get("universe") or {}).get("symbols") or []
             for code in syms:
                 meta = by_code.get(code)
                 if meta is None or meta.get("market") in ("KOSPI", "KOSDAQ"):
@@ -349,6 +393,8 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_initial_naver_refresh, daemon=True).start()
     _log.info("기술적 지표 초기 fetch thread 시작")
     threading.Thread(target=_initial_technical_refresh, daemon=True).start()
+    _log.info("정적 메타 초기 fetch thread 시작 (섹터·상장폐지일)")
+    threading.Thread(target=_initial_static_meta_refresh, daemon=True).start()
     _log.info("dataset 초기 갱신 thread 시작")
     threading.Thread(target=_initial_dataset_refresh, daemon=True).start()
     # Phase 58-C — dataset 초기 갱신 후 bundle 한 번 packaging (사용자가 다음
@@ -406,6 +452,13 @@ async def lifespan(app: FastAPI):
         CronTrigger(hour=17, minute=15),
         id="technical", replace_existing=True)
 
+    # 18:10 — 정적 메타(섹터·상장폐지일) 사이드카. dataset_kr(18:15) invalidate 직전 →
+    # 매니페스트가 새 사이드카로 재빌드, bundle(18:30)이 로컬 전파. FDR KRX-DESC/DELISTING.
+    scheduler.add_job(
+        lambda: _run_with_retry("static_meta", _refresh_static_meta, scheduler),
+        CronTrigger(hour=18, minute=10),
+        id="static_meta", replace_existing=True)
+
     # 18:15 — 한국 dataset 갱신 (정규장 종가 + KRX 정정 반영, parquet 영구 저장)
     # 주: KRX 2차 cron은 제거됨. krx_cache.refresh()가 in-memory metrics를 통째
     # 교체해서 17:00 NAVER + 17:15 technical로 채워진 PER/PBR/RSI/MA 필드를
@@ -431,11 +484,23 @@ async def lifespan(app: FastAPI):
         CronTrigger(hour=18, minute=30),
         id="bundle_evening", replace_existing=True)
 
+    # 17:30 — KR 펀더멘털(OpenDART 분기, 증분 백필). dataset_kr(18:15) invalidate 직전 → 매니페스트 반영.
+    scheduler.add_job(
+        lambda: _run_with_retry("kr_fundamentals", _refresh_kr_fundamentals, scheduler),
+        CronTrigger(hour=17, minute=30),
+        id="kr_fundamentals", replace_existing=True)
+
     # 일요일 08:00 — 미국 S&P500 시가총액 (fast_info). 분기 변동 낮아 주1회.
     scheduler.add_job(
         lambda: _run_with_retry("us_market_caps", _refresh_us_market_caps, scheduler),
         CronTrigger(day_of_week="sun", hour=8, minute=0),
         id="us_market_caps", replace_existing=True)
+
+    # 일요일 09:00 — US 펀더멘털(SEC Company Facts). 분기 변동 낮아 주1회. 자체 invalidate.
+    scheduler.add_job(
+        lambda: _run_with_retry("us_fundamentals", _refresh_us_fundamentals, scheduler),
+        CronTrigger(day_of_week="sun", hour=9, minute=0),
+        id="us_fundamentals", replace_existing=True)
 
     # 03:00 — KR/US 시장 캘린더 일일 재빌드 (Q2+Q8).
     # exchange_calendars 패치(임시공휴일 추가)를 매일 받아서 stale 캘린더 방지.

@@ -18,6 +18,7 @@ import quant_core as qc
 
 from .broker import Broker
 from .config import PENDING_PATH
+from .kis_broker import canonical_odno
 from .intraday_stop import IntradayStopManager
 from .kis_order_websocket import KisOrderWebSocket
 from .kis_websocket import KisWebSocket
@@ -52,6 +53,22 @@ _lock = threading.Lock()
 _US_REALTIME_GRACE_SEC = 120
 
 
+def _match_pending_key(pending: dict, order_no: str) -> str | None:
+    """ODER_NO를 canonical 비교로 pending의 raw 키에 매칭(M2).
+
+    pending 키는 발주응답 ODNO(raw)지만 WS ODER_NO의 패딩이 다를 수 있어 정확일치
+    lookup이 빗나간다. 선행 0를 제거한 형태로 비교해 매칭된 raw 키를 돌려준다.
+    KIS ODNO는 당일 유일·연번이라 canonical 충돌이 없다. 미매칭 시 None.
+    """
+    target = canonical_odno(order_no)
+    if not target:
+        return None
+    for k in pending:
+        if canonical_odno(k) == target:
+            return k
+    return None
+
+
 def _on_exec_event(trader: Trader, broker: Broker, evt: dict) -> None:
     """KIS 체결 통보 수신 시 호출 — ledger 즉시 갱신 + 서버 push.
 
@@ -78,9 +95,14 @@ def _on_exec_event(trader: Trader, broker: Broker, evt: dict) -> None:
         log.info("[order-ws] 접수 통보: ODER_NO=%s symbol=%s", order_no, symbol)
         return
 
-    # 체결 통보 → pending에서 매칭 → _apply_fill
+    # 체결 통보 → pending에서 매칭 → _apply_fill.
+    # M2: pending 키는 발주응답 ODNO(raw, zero-padded-10)지만 WS ODER_NO의 패딩은
+    # 미보장 — canonical 비교로 매칭한다(정확일치였다면 unpadded ODER_NO를 전부
+    # 놓쳤다). 매칭된 raw 키로 p 조회·del·_apply_fill을 수행해 라운드트립 형태를
+    # 보존한다.
     pending = trader.pending
-    if order_no not in pending:
+    key = _match_pending_key(pending, order_no)
+    if key is None:
         log.info("[order-ws] 미매칭 체결: ODER_NO=%s (pending에 없음)", order_no)
         return
 
@@ -95,7 +117,8 @@ def _on_exec_event(trader: Trader, broker: Broker, evt: dict) -> None:
     if filled_qty <= 0 or fill_price <= 0:
         return
 
-    p = pending[order_no]
+    p = pending[key]
+    raw_odno = p.get("order_no", key)
 
     # L-09 — 체결 통보 중복 dedup. KIS가 같은 H0STCNI0 이벤트를 두 번
     # 보내면 ledger qty가 이중 가산되어 over-position이 된다. KIS spec엔
@@ -117,12 +140,12 @@ def _on_exec_event(trader: Trader, broker: Broker, evt: dict) -> None:
 
     if filled_qty + already >= int(p.get("qty", 0)):
         # 전량 체결
-        trader._apply_fill(order_no, p, filled_qty, fill_price, decisions,
+        trader._apply_fill(raw_odno, p, filled_qty, fill_price, decisions,
                             partial=False)
-        del pending[order_no]
+        del pending[key]
     else:
         # 부분 체결
-        trader._apply_fill(order_no, p, filled_qty, fill_price, decisions,
+        trader._apply_fill(raw_odno, p, filled_qty, fill_price, decisions,
                             partial=True)
         p["filled_so_far"] = already + filled_qty
 
@@ -142,12 +165,6 @@ def _on_exec_event(trader: Trader, broker: Broker, evt: dict) -> None:
                   symbol, filled_qty, fill_price)
     except Exception as e:
         log.warning("[order-ws] push 실패: %s", e)
-
-
-def _get_strat_def_lookup(strategies: list[dict]):
-    """strategy_id → strat_def dict 매핑."""
-    by_id = {str(s.get("id", "")): s.get("definition", {}) for s in strategies}
-    return lambda sid: by_id.get(str(sid))
 
 
 def _push_after_sell(broker: Broker, decisions: list[dict]) -> None:
@@ -312,7 +329,7 @@ def _check_us_realtime(broker: Broker, manager) -> None:
             "decisions": [],
             "cycle_summary": {
                 "today": kst_today().isoformat(),
-                "kind": "us_tick_unavailable",
+                "kind": "us_realtime_unavailable",
                 "us_realtime_unavailable": True,
                 "message": message,
             },
@@ -371,7 +388,6 @@ def start(market: str = "KRX") -> dict:
         manager = IntradayStopManager(
             broker=broker,
             get_ledger=lambda: trader.ledger,
-            get_strat_def=_get_strat_def_lookup(strategies),
             submit_sell_fn=trader._submit_sell,
             dataset=dataset,
         )

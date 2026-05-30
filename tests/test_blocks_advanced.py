@@ -13,11 +13,26 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
 
+import pytest  # noqa: E402
+
 from quant_core.blocks import EvalContext, Node, data, evaluate  # noqa: E402
 
 
 def _ctx(data_dict):
     return EvalContext.from_dataset(data_dict)
+
+
+@pytest.fixture
+def _kr_groups(monkeypatch):
+    """그룹 테스트용 — get_symbol_group이 읽는 classification 사이드카를 고정 매핑으로 대체.
+
+    실제 KRX 업종은 수시로 바뀌어 테스트에 박으면 안 되므로, 그룹 *로직*(그룹 내 순위·집계)만
+    검증하도록 작은 fixture를 주입한다.
+    """
+    groups = {"005930": {"Industry": "IT"}, "000660": {"Industry": "IT"},
+              "005380": {"Industry": "Auto"}, "000270": {"Industry": "Auto"}}
+    import quant_core.data.feeds.classification as cls
+    monkeypatch.setattr(cls, "load", lambda: groups)
 
 
 def _two_corr_data(rho_sign=1):
@@ -99,14 +114,14 @@ def test_orthogonalize_residual_uncorrelated():
 # ── group_rank / group_aggregate ──────────────────────────────────────────────
 
 def _group_data():
-    # 005930/000660 → IT, 005380/000270 → Auto (get_symbol_group 휴리스틱)
+    # 005930/000660 → IT, 005380/000270 → Auto (_kr_groups fixture)
     idx = pd.date_range("2021-01-01", periods=10, freq="B")
     r = np.random.default_rng(6)
     return {s: pd.DataFrame({"momentum_12_1m": r.uniform(-10, 10, 10)}, index=idx)
             for s in ["005930", "000660", "005380", "000270"]}
 
 
-def test_group_rank_within_group():
+def test_group_rank_within_group(_kr_groups):
     d = _group_data()
     node = Node(op="group_rank", inputs={"signal": data("momentum_12_1m")})
     out = evaluate(node, _ctx(d))
@@ -116,7 +131,7 @@ def test_group_rank_within_group():
     assert it_ranks == [0.5, 1.0]
 
 
-def test_group_aggregate_mean():
+def test_group_aggregate_mean(_kr_groups):
     d = _group_data()
     node = Node(op="group_aggregate", params={"stat": "mean"},
                 inputs={"signal": data("momentum_12_1m")})

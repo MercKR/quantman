@@ -63,7 +63,7 @@ def catalog_spec() -> list[dict]:
     자기서술적: 슬롯(타입)·파라미터 스키마·카테고리·라벨을 포함해 프론트가 블록
     지식을 하드코딩하지 않게 한다(NL 컴파일러도 같은 계약을 타겟).
     """
-    from .param_specs import meta_for, params_for
+    from .param_specs import meta_for, params_for, phrase_for
 
     out = []
     for op, b in sorted(CATALOG.items()):
@@ -78,6 +78,7 @@ def catalog_spec() -> list[dict]:
             "variadic_type": b.variadic_type.value if b.variadic_type else None,
             "params": params_for(op),
             "requires_panel": b.requires_panel,
+            "phrase": phrase_for(op),    # 문장형 UI 템플릿({slot}/{param} 토큰; 없으면 None)
             "doc": b.doc,
         })
     return out

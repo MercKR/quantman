@@ -9,10 +9,35 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
-import type { StrategyRow, SyncSnapshot } from "../types";
+import type { IrStrategyDef, StrategyDef, StrategyRow, SyncSnapshot } from "../types";
 import { parseScreenerKey, parseTradeSymbols } from "../types";
+
+// IR 전략 카드 표시용 한글 라벨 (operand-free, 표시 전용).
+const IR_SIZING_LABEL: Record<string, string> = {
+  equal_weight: "동일가중", signal_proportional: "신호비례", vol_inverse: "변동성 역가중",
+  target_vol: "목표변동성", fixed_weight: "정적 비중", fixed_amount: "종목당 고정금액",
+  pct_cash: "자본대비 %",
+};
+const IR_ENTRY_LABEL: Record<string, string> = {
+  on_signal: "이벤트", scheduled: "정기 리밸런싱", always: "상시",
+};
+const IR_DIR_LABEL: Record<string, string> = {
+  long: "롱", short: "숏", long_short: "롱숏중립",
+};
+
+/** IR 유니버스를 한 줄로 요약. */
+function summarizeIrUniverse(def: IrStrategyDef): string {
+  const u = def.universe ?? { kind: "single" };
+  if (u.kind === "screener") return "스크리너 선별";
+  if (u.kind === "all") return "전체 종목";
+  const syms = u.symbols ?? [];
+  if (syms.length === 0) return "(없음)";
+  if (syms.length === 1) return syms[0];
+  return `${syms[0]} 외 ${syms.length - 1}종목`;
+}
 
 /** "005930 외 2종목" 형태로 다중 종목 축약. 단일이면 코드 그대로. */
 function summarizeTargets(tradeSymbol: string): string {
@@ -86,10 +111,10 @@ export default function Strategies() {
         <div className="panel empty-state">
           <div className="empty-title">아직 저장된 전략이 없습니다</div>
           <p className="muted">
-            전략 만들기에서 매수·매도 조건을 짜고 백테스트로 검증한 뒤 저장하세요.
+            전략 연구소에서 블록을 조립해 신호·진입·청산을 만들고 백테스트로 검증한 뒤 저장하세요.
             저장한 전략을 모의로 두면 로컬앱이 매일 09:00 자동 실행합니다.
           </p>
-          <Link to="/backtest"><button>전략 만들기로 이동</button></Link>
+          <Link to="/lab"><button>전략 연구소로 이동</button></Link>
         </div>
       )}
 
@@ -145,15 +170,38 @@ function StrategyCard({
   positionCount: number;
   onClick: () => void;
 }) {
-  const buyN = s.definition.buy?.conditions?.length ?? 0;
-  // Phase 32 — sell_rules 우선, legacy sell fallback
-  const sellExtraN = s.definition.sell_rules?.conditions?.length
-    ?? s.definition.sell?.conditions?.length ?? 0;
-  const sr = s.definition.sell_rules ?? {};
-  const sellRuleCount = [sr.take_profit, sr.stop_loss, sr.trail_pct,
-                          sr.trail_atr_mult, sr.hold_days]
-    .filter((v) => v != null).length + sellExtraN;
-  const screenerKey = parseScreenerKey(s.definition.trade_symbol);
+  const isIr = s.engine === "ir";
+
+  // 카드 본문(대상·요약)을 engine별로 산출. IR row는 operand 필드가 없으므로 분리.
+  let target: ReactNode;
+  let meta: ReactNode;
+  if (isIr) {
+    const def = s.definition as IrStrategyDef;
+    const p = def.position ?? ({} as IrStrategyDef["position"]);
+    target = <>{summarizeIrUniverse(def)}</>;
+    meta = (
+      <>
+        {IR_ENTRY_LABEL[p.entry?.mode ?? ""] ?? "이벤트"}
+        {" · "}{IR_DIR_LABEL[p.direction ?? "long"] ?? "롱"}
+        {" · "}{IR_SIZING_LABEL[p.sizing?.mode ?? ""] ?? "동일가중"}
+      </>
+    );
+  } else {
+    const od = s.definition as StrategyDef;   // 레거시 operand row
+    const buyN = od.buy?.conditions?.length ?? 0;
+    // Phase 32 — sell_rules 우선, legacy sell fallback
+    const sellExtraN = od.sell_rules?.conditions?.length
+      ?? od.sell?.conditions?.length ?? 0;
+    const sr = od.sell_rules ?? {};
+    const sellRuleCount = [sr.take_profit, sr.stop_loss, sr.trail_pct,
+                            sr.trail_atr_mult, sr.hold_days]
+      .filter((v) => v != null).length + sellExtraN;
+    const screenerKey = parseScreenerKey(od.trade_symbol);
+    target = screenerKey
+      ? <>자동 선택: <code>{screenerKey}</code></>
+      : <>{summarizeTargets(od.trade_symbol)}</>;
+    meta = <>매수 {buyN} · 매도 {sellRuleCount} 규칙 · 자본 {od.amount_pct}%</>;
+  }
 
   return (
     <button className="strategy-card" onClick={onClick}>
@@ -165,14 +213,8 @@ function StrategyCard({
             : "초안"}
         </span>
       </div>
-      <div className="sc-target">
-        {screenerKey
-          ? <>자동 선택: <code>{screenerKey}</code></>
-          : <>{summarizeTargets(s.definition.trade_symbol)}</>}
-      </div>
-      <div className="sc-meta">
-        매수 {buyN} · 매도 {sellRuleCount} 규칙 · 자본 {s.definition.amount_pct}%
-      </div>
+      <div className="sc-target">{target}</div>
+      <div className="sc-meta">{meta}</div>
       <div className="sc-stats">
         <div className="sc-stat">
           <span className="sc-stat-label">누적 P&L</span>

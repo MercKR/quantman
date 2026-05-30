@@ -1,6 +1,6 @@
 """P0-6 — 무결성 게이트 회귀 (delay·PIT·causal).
 
-명세 §6. look-ahead 가드(apply_delay)의 실동작과 PIT/causal 검출을 고정한다.
+명세 §6. PIT/causal 검출과 delay 무결성 게이트를 고정한다(지연 실집행은 run.py).
 
     cd platform && pytest tests/test_blocks_integrity.py -v
 """
@@ -14,23 +14,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
 
 from quant_core.blocks import (  # noqa: E402
-    DatasetMeta, Node, apply_delay, data, integrity_issues,
+    DatasetMeta, Node, data, integrity_issues,
 )
-
-
-# ── look-ahead 가드 ───────────────────────────────────────────────────────────
-
-def test_apply_delay_shifts():
-    idx = pd.date_range("2021-01-01", periods=5, freq="B")
-    panel = pd.DataFrame({"AAA": [1, 2, 3, 4, 5]}, index=idx, dtype=float)
-    out = apply_delay(panel, 1)
-    pd.testing.assert_frame_equal(out, panel.shift(1))
-
-
-def test_apply_delay_zero_noop():
-    idx = pd.date_range("2021-01-01", periods=3, freq="B")
-    panel = pd.DataFrame({"AAA": [1.0, 2.0, 3.0]}, index=idx)
-    pd.testing.assert_frame_equal(apply_delay(panel, 0), panel)
 
 
 # ── 데이터 시점: delay ────────────────────────────────────────────────────────

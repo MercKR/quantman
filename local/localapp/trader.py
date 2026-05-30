@@ -17,7 +17,7 @@ import logging
 import os
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -26,17 +26,22 @@ from quant_core.exec_defaults import merged_execution
 
 from .broker import Broker
 from .config import (EQUITY_PATH, LEDGER_PATH, PENDING_ORDERS_PATH,
-                     REBALANCE_PATH, TRADES_PATH)
-from . import analytics, intents, killswitch, order_log
+                     TRADES_PATH)
+from . import analytics, intents, killswitch, order_log, state_store
 
 log = logging.getLogger("localapp.trader")
 
-# Q5(AL-4): cycle ↔ settlement ↔ 장중 kill switch trigger의 직렬화 락.
+# Q5(AL-4)/M3: 트레이더 공유 상태(ledger·pending·equity) 변경의 단일 직렬화 락.
 # 모듈 레벨로 두는 이유: trader 인스턴스가 cycle/settlement에서 매번 새로
 # 만들어지므로 인스턴스 lock으로는 직렬화가 안 된다. 같은 PC 단일 프로세스
-# 가정이라 모듈 락이 안전. 모든 진입(trader.cycle, run_post_close_settlement,
-# intraday monitor의 trigger 핸들러)이 이 락을 acquire 후 진입한다.
-_CYCLE_LOCK = threading.Lock()
+# 가정이라 모듈 락이 안전. cycle/settlement뿐 아니라 _apply_fill·_after_submit·
+# cancel_all_pending·reconcile_with_kis 등 모든 변경 진입점이 이 락 안에서만
+# ledger/pending을 만진다 — WS 체결 thread·60초 monitor·스케줄러 cycle이 같은
+# dict를 동시 변경하는 race를 차단한다.
+# RLock인 이유: cycle이 락을 쥔 채 _resolve_pending→_apply_fill로 재진입하므로
+# 같은 thread 재획득이 필요하다(일반 Lock이면 self-deadlock). 데드락의 다른
+# 경로(_apply_fill→ks hook→cycle)는 hook을 임계구역 밖에서 호출해 회피한다.
+_CYCLE_LOCK = threading.RLock()
 
 
 def _load_json(path: Path, default):
@@ -49,16 +54,12 @@ def _load_json(path: Path, default):
 
 
 def _save_json(path: Path, obj) -> None:
-    """원자적 저장: tmp에 쓰고 os.replace로 교체 (L-02 수정).
+    """민감 상태 원자적 저장 + owner-only ACL — state_store 단일 경로 위임 (R5).
 
-    write_text는 truncate-then-write라 도중에 크래시하면 파일이 깨진 채 남고
-    다음 boot에서 _load_json이 default={}로 폴백 → 보유 원장 소실 위험.
-    tmp 파일에 완전히 쓴 뒤 os.replace로 원자 교체하면, 어떤 시점에 종료돼도
-    파일은 항상 이전 완전본 또는 새 완전본 중 하나만 보인다.
+    원장·equity·pending 등은 잔고·손익을 담은 민감정보다. 원자성(L-02 크래시 시
+    부분기록 손상 방지)과 ACL(같은 PC 타 사용자 차단)을 항상 함께 보장한다.
     """
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    state_store.save_json(path, obj)
 
 
 def kst_today() -> date:
@@ -109,83 +110,20 @@ def _gap_pct(prev_close: float, cur_price: float) -> float:
     return (cur_price - prev_close) / prev_close * 100
 
 
-def _evaluate_exit(strat: qc.Strategy, held_days: int,
-                   dataset: dict, symbol: str) -> str | None:
-    """EOD 매도 평가 — 신호·시간 기반만. 가격 기반(익절/손절/트레일)은
-    intraday_loop가 장중 tick으로 전담 (Phase 38.2).
+def _exit_reason_for(defn: dict, held_days: int,
+                     dataset: dict, symbol: str) -> tuple[str | None, object | None]:
+    """청산 사유를 IR 엔진(전략 연구소)으로 평가. (reason, None) 튜플 반환.
 
-    매도 발주는 어제 종가 기준 지정가로 나가므로, 갭 발생 시 EOD 가격
-    트리거를 다시 평가해도 미체결 — 09:00 정규장 시작 후 intraday가 즉시
-    같은 평가로 처리하는 게 정상 경로. 여기선 신호/시간 기반만 평가해
-    KIS 현재가 호출과 이중 발주 제거.
-
-    Phase 41 — 매도 조건의 [이 종목] placeholder는 symbol(현재 보유 종목)로
-    치환되어 평가된다. 좌변 종목이 명시되어 있으면 그대로 (legacy 호환).
+    ir_engine.live.cycle_exit_reason이 보유기간+매도조건 Node를 백테스트와 동일한
+    IR exit 스펙으로 평가한다. 두 번째 원소는 항상 None — 호출자는 None이면
+    리밸런스·sell_rules(operand) 경로를 건너뛰고 전량(100%) 청산한다.
+    파싱 실패는 예외 전파(호출자가 잡아 skip).
     """
-    sr = strat.sell_rules
-    if sr.hold_days is not None and held_days >= sr.hold_days:
-        return "보유기간"
-    if sr.conditions:
-        mask = qc.build_signal_mask(
-            dataset, [c.model_dump() for c in sr.conditions], sr.logic,
-            current_symbol=symbol)
-        if not mask.empty and bool(mask.iloc[-1]):
-            return "매도조건"
-    return None
-
-
-def _business_days_between(start: date, end: date) -> int:
-    """start 다음날부터 end까지의 영업일(월~금) 수. end ≤ start면 0."""
-    if end <= start:
-        return 0
-    n = 0
-    d = start
-    while d < end:
-        d = d + timedelta(days=1)
-        if d.weekday() < 5:               # 0=월 … 4=금
-            n += 1
-    return n
-
-
-def _rebalance_due(period: str, last_iso: str | None, today: date,
-                   every_n_days: int | None = None) -> bool:
-    """리밸런싱 주기 게이팅 — 마지막 실행 일자 기준으로 오늘 회전할지 판정.
-
-    last_iso=None(첫 실행)이면 항상 True. daily=날짜 바뀌면, weekly=ISO주 바뀌면,
-    monthly=월 바뀌면, every_n_days=마지막 실행 후 영업일 ≥ N이면 True.
-    같은 날 중복 실행은 항상 막는다.
-    """
-    if last_iso is None:
-        return True
-    try:
-        last = date.fromisoformat(last_iso)
-    except (TypeError, ValueError):
-        return True
-    if today <= last:
-        return False                      # 같은 날(또는 과거) — 중복 방지
-    if period == "weekly":
-        return today.isocalendar()[:2] != last.isocalendar()[:2]
-    if period == "monthly":
-        return (today.year, today.month) != (last.year, last.month)
-    if period == "every_n_days":
-        n = every_n_days if (every_n_days and every_n_days > 0) else 1
-        return _business_days_between(last, today) >= n
-    return True                           # daily (기본) — 날짜만 바뀌면
-
-
-def _atr_qty(capital: float, atr: float, policy: dict, cur_price: float) -> int:
-    """ATR 기반 포지션 사이징. cap에 의해 단일종목 한도로 클램프(설정된 경우만)."""
-    risk = capital * policy["atr_risk_pct"] / 100.0
-    risk_per_share = atr * policy["atr_mult"]
-    if risk_per_share <= 0:
-        return 0
-    qty = int(risk // risk_per_share)
-    # 단일 종목 비중 상한 — None이면 한도 없음(OFF).
-    mp = policy.get("max_position_pct")
-    if mp is not None and cur_price > 0:
-        cap_qty = int((capital * float(mp) / 100.0) // cur_price)
-        qty = min(qty, cap_qty)
-    return max(0, qty)
+    from quant_core.ir_engine import StrategyIR
+    from quant_core.ir_engine import live as ir_live
+    ir = StrategyIR.model_validate(defn)
+    return ir_live.cycle_exit_reason(
+        ir, held_days=held_days, dataset=dataset, symbol=symbol), None
 
 
 class Trader:
@@ -200,8 +138,6 @@ class Trader:
         self.ledger: dict[str, dict] = _load_json(LEDGER_PATH, {})
         self.equity: list[dict] = _load_json(EQUITY_PATH, [])
         self.pending: dict[str, dict] = _load_json(PENDING_ORDERS_PATH, {})
-        # 전략별 마지막 리밸런싱 일자 (sid → "YYYY-MM-DD") — 주기 게이팅
-        self.rebalance_state: dict[str, str] = _load_json(REBALANCE_PATH, {})
         # 미국 매수여력 모드 (cycle에서 risk_limits로 설정). 기본 통합증거금.
         self._us_bp_mode: str = "integrated"
         # Q5: 체결 후(_apply_fill) 즉시 kill switch 평가용 한도. cycle 진입 시
@@ -216,6 +152,9 @@ class Trader:
         # 무한 재귀 위험. cycle은 진입부에서 이미 ks를 평가하므로 중복 평가 불필요.
         # 진짜 필요 케이스는 intraday_loop의 _on_exec_event(별 thread).
         self._in_cycle = False
+        # 미국 정상 cycle에서 True — _submit_buy/_submit_sell이 예약주문(개장 전
+        # 접수 → 개시 자동전송)으로 라우팅. _cycle_body가 매 cycle 갱신.
+        self._reserved_us = False
 
     # ── 영속화 ────────────────────────────────────────────────────────────────
 
@@ -226,11 +165,10 @@ class Trader:
         _save_json(LEDGER_PATH, self.ledger)
         _save_json(EQUITY_PATH, self.equity)
         _save_json(PENDING_ORDERS_PATH, self.pending)
-        _save_json(REBALANCE_PATH, self.rebalance_state)
 
     def _log_trade(self, event: dict):
-        with open(TRADES_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        # 체결·거래 기록은 민감 — state_store 위임 (R5, 최초 생성 시 owner-only ACL).
+        state_store.append_jsonl(event, TRADES_PATH)
 
     # ── Phase 40 — KIS 잔고 ↔ ledger 정합성 자동 정정 ──────────────────────
     def reconcile_with_kis(self, today_iso: str | None = None) -> dict:
@@ -248,42 +186,48 @@ class Trader:
             log.error("reconcile: KIS 잔고 조회 실패 — skip: %s", e)
             return {"error": f"KIS 잔고 조회 실패: {e}"}
 
-        result = analytics.reconcile_ledger(snap.get("positions", []), self.ledger)
-        orphans = result.get("ledger_orphans", [])
-        applied: list[dict] = []
+        # M3: self.ledger 비교(reconcile_ledger)부터 차감·_save까지 단일 락 안에서
+        # — 같은 락을 쓰는 cycle·WS 체결이 비교와 변경 사이에 ledger를 바꿔
+        # stale 계획으로 차감하는 race를 막는다. account_snapshot(네트워크)은
+        # self.ledger를 읽지 않으므로 락 밖에 둔다. (settlement 경로는 이미 이
+        # 락을 쥐고 들어오며 RLock이라 재진입 안전, GUI 수동 호출 경로를 닫는다.)
+        with _CYCLE_LOCK:
+            result = analytics.reconcile_ledger(snap.get("positions", []), self.ledger)
+            orphans = result.get("ledger_orphans", [])
+            applied: list[dict] = []
 
-        if orphans:
-            plans = analytics.plan_orphan_adjustments(orphans)
-            for p in plans:
-                sid = p["sid"]
-                if sid not in self.ledger:
-                    continue
-                lg = self.ledger[sid]
-                removed = p["removed_qty"]
-                if removed <= 0:
-                    continue
-                # 거래 기록: 외부 매도로 분류
-                ev = {
-                    "ts": today, "action": "external_close",
-                    "symbol": p["symbol"], "qty": removed,
-                    "price": float(lg.get("entry_price", 0) or 0),
-                    "strategy": lg.get("strategy_name", ""),
-                    "reason": "HTS/MTS 수동 매도 추정 — reconcile 자동 차감",
-                    "sid": sid,
-                }
-                self._log_trade(ev)
-                if p["fully_closed"]:
-                    del self.ledger[sid]
-                    log.warning("reconcile: ledger 제거 [%s] %s qty %d → 0 (외부 매도 추정)",
-                                  sid, p["symbol"], p["old_qty"])
-                else:
-                    lg["qty"] = p["new_qty"]
-                    log.warning("reconcile: ledger 차감 [%s] %s qty %d → %d (외부 매도 추정)",
-                                  sid, p["symbol"], p["old_qty"], p["new_qty"])
-                applied.append(p)
-            self._save()
-        else:
-            log.info("reconcile: drift 없음 (in_sync %d종목)", len(result.get("in_sync", [])))
+            if orphans:
+                plans = analytics.plan_orphan_adjustments(orphans)
+                for p in plans:
+                    sid = p["sid"]
+                    if sid not in self.ledger:
+                        continue
+                    lg = self.ledger[sid]
+                    removed = p["removed_qty"]
+                    if removed <= 0:
+                        continue
+                    # 거래 기록: 외부 매도로 분류
+                    ev = {
+                        "ts": today, "action": "external_close",
+                        "symbol": p["symbol"], "qty": removed,
+                        "price": float(lg.get("entry_price", 0) or 0),
+                        "strategy": lg.get("strategy_name", ""),
+                        "reason": "HTS/MTS 수동 매도 추정 — reconcile 자동 차감",
+                        "sid": sid,
+                    }
+                    self._log_trade(ev)
+                    if p["fully_closed"]:
+                        del self.ledger[sid]
+                        log.warning("reconcile: ledger 제거 [%s] %s qty %d → 0 (외부 매도 추정)",
+                                      sid, p["symbol"], p["old_qty"])
+                    else:
+                        lg["qty"] = p["new_qty"]
+                        log.warning("reconcile: ledger 차감 [%s] %s qty %d → %d (외부 매도 추정)",
+                                      sid, p["symbol"], p["old_qty"], p["new_qty"])
+                    applied.append(p)
+                self._save()
+            else:
+                log.info("reconcile: drift 없음 (in_sync %d종목)", len(result.get("in_sync", [])))
 
         result["applied"] = applied
         result["external_extras_count"] = len(result.get("external_extras", []))
@@ -361,49 +305,52 @@ class Trader:
                              strategy_name=p.get("strategy_name", ""),
                              reason=p.get("reason", ""))
 
-        if side == "buy":
-            if sid in self.ledger:
-                # 추가 매수 — 평균단가 갱신
-                lg = self.ledger[sid]
-                total = lg["qty"] + filled_qty
-                # L-05 — 정상 경로엔 두 값 모두 양수라 안전하나, 경로 변경 또는
-                # 비정상 fill_qty/ledger qty=0 잔존 시 ZeroDivisionError 잠재.
-                # 1줄 가드로 명시. 둘 다 0이면 의미 없는 호출이므로 조용히 return.
-                if total <= 0:
-                    return
-                lg["entry_price"] = (lg["entry_price"] * lg["qty"]
-                                      + fill_price * filled_qty) / total
-                lg["qty"] = total
+        # M3: self.ledger 읽기-수정-쓰기를 단일 락으로 직렬화 — WS 체결 thread·
+        # monitor·cycle이 같은 원장을 동시 변경하는 race(lost update) 차단.
+        with _CYCLE_LOCK:
+            if side == "buy":
+                if sid in self.ledger:
+                    # 추가 매수 — 평균단가 갱신
+                    lg = self.ledger[sid]
+                    total = lg["qty"] + filled_qty
+                    # L-05 — 정상 경로엔 두 값 모두 양수라 안전하나, 경로 변경 또는
+                    # 비정상 fill_qty/ledger qty=0 잔존 시 ZeroDivisionError 잠재.
+                    # 1줄 가드로 명시. 둘 다 0이면 의미 없는 호출이므로 조용히 return.
+                    if total <= 0:
+                        return
+                    lg["entry_price"] = (lg["entry_price"] * lg["qty"]
+                                          + fill_price * filled_qty) / total
+                    lg["qty"] = total
+                else:
+                    self.ledger[sid] = {
+                        "symbol": symbol, "qty": filled_qty,
+                        "entry_date": today, "entry_price": fill_price,
+                        "peak_price": fill_price,
+                        "strategy_name": p.get("strategy_name", ""),
+                        "definition": p.get("definition", {}),
+                    }
+                ev = {"ts": today, "action": "buy", "symbol": symbol,
+                      "qty": filled_qty, "price": fill_price,
+                      "strategy": p.get("strategy_name", ""), "reason": "매수신호"}
+                self._log_trade(ev)
+                decisions.append(order_log.decision(
+                    "bought", sid, p.get("strategy_name", ""), symbol,
+                    f"{filled_qty}주 @ {fill_price:,.0f}원",
+                    {"intended": intended, "fill": fill_price}))
             else:
-                self.ledger[sid] = {
-                    "symbol": symbol, "qty": filled_qty,
-                    "entry_date": today, "entry_price": fill_price,
-                    "peak_price": fill_price,
-                    "strategy_name": p.get("strategy_name", ""),
-                    "definition": p.get("definition", {}),
-                }
-            ev = {"ts": today, "action": "buy", "symbol": symbol,
-                  "qty": filled_qty, "price": fill_price,
-                  "strategy": p.get("strategy_name", ""), "reason": "매수신호"}
-            self._log_trade(ev)
-            decisions.append(order_log.decision(
-                "bought", sid, p.get("strategy_name", ""), symbol,
-                f"{filled_qty}주 @ {fill_price:,.0f}원",
-                {"intended": intended, "fill": fill_price}))
-        else:
-            if sid in self.ledger:
-                lg = self.ledger[sid]
-                lg["qty"] -= filled_qty
-                if lg["qty"] <= 0:
-                    del self.ledger[sid]
-            ev = {"ts": today, "action": "sell", "symbol": symbol,
-                  "qty": filled_qty, "price": fill_price,
-                  "strategy": p.get("strategy_name", ""),
-                  "reason": p.get("reason", "")}
-            self._log_trade(ev)
-            decisions.append(order_log.decision(
-                "sold", sid, p.get("strategy_name", ""), symbol,
-                f"{filled_qty}주 @ {fill_price:,.0f}원 ({p.get('reason', '')})"))
+                if sid in self.ledger:
+                    lg = self.ledger[sid]
+                    lg["qty"] -= filled_qty
+                    if lg["qty"] <= 0:
+                        del self.ledger[sid]
+                ev = {"ts": today, "action": "sell", "symbol": symbol,
+                      "qty": filled_qty, "price": fill_price,
+                      "strategy": p.get("strategy_name", ""),
+                      "reason": p.get("reason", "")}
+                self._log_trade(ev)
+                decisions.append(order_log.decision(
+                    "sold", sid, p.get("strategy_name", ""), symbol,
+                    f"{filled_qty}주 @ {fill_price:,.0f}원 ({p.get('reason', '')})"))
 
         # Q5 Tier 1 — 체결 직후 kill switch 평가. 시초가 매수가 장중에 잡혀 자본이
         # day_start 대비 -X% 도달하는 정확한 순간을 잡는다. _daily_loss_limit_pct가
@@ -459,10 +406,15 @@ class Trader:
 
         반환: cancel 시도한 주문 건수.
         """
-        if not self.pending:
-            return 0
+        # M3: pending 스냅샷만 락 안에서 — KIS cancel(네트워크)은 락 밖에서 수행.
+        # cancel은 self.pending을 변경하지 않으므로(회수는 _resolve_pending이 담당)
+        # 스냅샷 후 락을 놓아 critical section을 짧게 유지한다.
+        with _CYCLE_LOCK:
+            if not self.pending:
+                return 0
+            items = list(self.pending.items())
         n = 0
-        for order_no, p in list(self.pending.items()):
+        for order_no, p in items:
             try:
                 self.broker.cancel(order_no, p["symbol"], p["qty"])
                 n += 1
@@ -478,6 +430,14 @@ class Trader:
 
     # ── 주문 발주 helpers ────────────────────────────────────────────────────
 
+    def _is_reserved_us(self, symbol: str) -> bool:
+        """미국 예약주문 라우팅 여부 — 정상 cycle US 진입(_reserved_us)이고 USD 종목.
+
+        M3: _submit_buy/_submit_sell에 동일 derivation이 중복돼 있던 것을 단일화.
+        _reserved_us는 __init__/매 cycle에서 항상 설정되므로 getattr 방어 불필요.
+        """
+        return self._reserved_us and _currency_of(symbol) == "USD"
+
     def _submit_buy(self, sid: str, strat_name: str, strat_def: dict,
                     symbol: str, qty: int, ref_price: float, policy: dict,
                     decisions: list[dict], catchup: bool = False) -> None:
@@ -489,13 +449,32 @@ class Trader:
                       qty, ref_price)
         use_limit = bool(policy["use_limit"])
 
+        # 미국 예약매수 — 개장 전(접수창) 발주, 정규장 개시에 KIS가 자동 전송.
+        # KIS는 미국 시장가 매수가 없어 지정가만 가능 → buy_tolerance 반영 limit.
+        # catch-up과 배타적(_reserved_us는 정상 cycle US에서만 True).
+        is_resv = self._is_reserved_us(symbol)
+        if is_resv:
+            limit = qc.round_to_tick(
+                ref_price * (1 + policy["buy_tolerance_pct"] / 100.0),
+                direction="up", currency=_currency_of(symbol))
+            limit = qc.apply_daily_price_limit(
+                limit, ref_price, "buy", _currency_of(symbol))
+            try:
+                r = self.broker.buy_resv_limit(symbol, qty, limit)
+            except Exception as e:
+                intents.mark_failed(today_iso, intent_id, f"buy_resv_limit: {e}")
+                log.error("미국 예약매수 발주 실패 [%s]: %s", symbol, e)
+                decisions.append(order_log.decision(
+                    "error", sid, strat_name, symbol, f"예약발주 예외: {e}"))
+                return
+            log.info("[us-resv] %s 예약매수 지정가 limit=%s", symbol, limit)
         # catch-up + 시장가 매수: 시초가 limit으로 변환.
         # 이유: 정상 cycle의 시장가는 09:00 시초가에 체결되나 catch-up은 09:30
         # 현재가에 체결 → 백테스트 가정(시가 + slippage)과 어긋남. 시가 × (1 +
         # bt_slippage_bps) limit으로 변환하면 백테스트 모델과 alignment + selection
         # bias 없음(가격은 시가 fixed). ref_price(어제 종가)는 유지 — apply_daily_
         # price_limit이 prev_close 기준 ±30% cap 정확히 계산하도록.
-        if catchup and not use_limit:
+        elif catchup and not use_limit:
             open_price = self.broker.today_open(symbol)
             if open_price <= 0:
                 # v0.9.7-beta — PR-1 정당 fallback (KIS API 진짜 한계 대비).
@@ -566,7 +545,20 @@ class Trader:
         use_limit = bool(policy["use_limit"])
         # Phase 38.9 — 매도 tolerance 단일화. 신호·청산 모두 같은 값.
         tol = policy["sell_tolerance_pct"]
-        if use_limit:
+        # 미국 예약매도 — MOO(장개시시장가)로 개시가 체결. 개장 전 접수.
+        is_resv = self._is_reserved_us(symbol)
+        if is_resv:
+            limit = 0
+            try:
+                r = self.broker.sell_resv_moo(symbol, qty)
+            except Exception as e:
+                intents.mark_failed(today_iso, intent_id, f"sell_resv_moo: {e}")
+                log.error("미국 예약매도 발주 실패 [%s]: %s", symbol, e)
+                decisions.append(order_log.decision(
+                    "error", sid, strat_name, symbol, f"예약발주 예외: {e}"))
+                return
+            log.info("[us-resv] %s 예약매도 MOO", symbol)
+        elif use_limit:
             limit = qc.round_to_tick(ref_price * (1 - tol / 100.0),
                                       direction="down", currency=_currency_of(symbol))
             # 한국 ±30% 가격제한폭 사전 클램프 — 하한가 cap
@@ -632,8 +624,10 @@ class Trader:
         if filled >= qty and fill_price > 0:
             self._apply_fill(order_no, p, filled, fill_price, decisions)
             return
-        # 그렇지 않으면 pending에 등록 → 다음 사이클 또는 _wait_pending이 폴링
-        self.pending[order_no] = p
+        # 그렇지 않으면 pending에 등록 → 다음 사이클 또는 _wait_pending이 폴링.
+        # M3: pending 등록도 cycle·WS 체결 thread와 같은 락으로 직렬화.
+        with _CYCLE_LOCK:
+            self.pending[order_no] = p
 
     def _wait_pending(self, timeout_sec: int, poll_sec: int,
                       decisions: list[dict]) -> None:
@@ -653,7 +647,7 @@ class Trader:
 
     def _try_buy_one_symbol(self, ledger_key: str, strategy_id: str,
                               strat_name: str, strat_def: dict,
-                              strat: "qc.Strategy", symbol: str,
+                              symbol: str,
                               dataset: dict, equity_now: float,
                               decisions: list[dict],
                               catchup: bool = False) -> bool:
@@ -751,41 +745,15 @@ class Trader:
                 f"가용자금 조회 실패: {e}"))
             return False
 
-        # 사이징 — 전일 종가 기준 (cash·prev_close 모두 종목 통화)
-        # Phase 47 — 4지 모드 (fixed_amount / pct_cash / equal_weight / atr_risk).
-        # 모든 모드는 max_position_pct가 설정된 경우 단일 종목 비중 상한 클램프
-        # (None = OFF, 한도 없음).
-        mode = policy["sizing_mode"]
-        _mp = policy.get("max_position_pct")
-        cap_qty = (int((capital * float(_mp) / 100.0) // prev_close)
-                     if _mp is not None and prev_close > 0 else None)
-        if mode == "atr_risk":
-            atr_val = 0.0
-            if "atr_14" in sdf.columns:
-                atr_val = float(sdf["atr_14"].iloc[-1] or 0.0)
-            if atr_val <= 0:
-                decisions.append(order_log.decision(
-                    "skip_no_atr", strategy_id, strat_name, symbol,
-                    "ATR 데이터 없음 — atr_risk 모드 진입 불가 "
-                    "(사이징을 정률/정액으로 변경하거나 dataset 보강 필요)"))
-                return False
-            qty = _atr_qty(capital, atr_val, policy, prev_close)
-        elif mode == "fixed_amount":
-            # 정액: 한 종목당 amount_krw 원. 통화 단위는 종목 통화와 일치한다고 가정
-            # (KRW 종목엔 KRW 금액). 미국 종목 fixed_amount는 별도 cycle 검토.
-            amount = float(policy.get("amount_krw") or 0)
-            qty = int(amount // prev_close)
-        elif mode == "equal_weight":
-            # 균등 분배: 자본 ÷ 동시 보유 한도. screener_limit이 1이면 정률 100%와 동일.
-            slot = capital / max(int(strat.screener_limit or 1), 1)
-            qty = int(slot // prev_close)
-        else:  # pct_cash (default) — 현행 정률
-            qty = int(cash * strat.amount_pct / 100.0 // prev_close)
+        # 사이징 — 전일 종가 기준 (cash·prev_close 모두 종목 통화).
+        # IR(전략 연구소)은 position.sizing(이벤트 진입 예산)으로 사이징한다.
+        # ir_live.event_buy_qty가 백테스트 엔진 _budget과 동일(amount_krw 또는
+        # cash×amount_pct%, 단일 유니버스=100%) + max_position_pct 캡까지 처리한다.
+        from quant_core.ir_engine import StrategyIR
+        from quant_core.ir_engine import live as ir_live
+        qty = ir_live.event_buy_qty(StrategyIR.model_validate(strat_def),
+                                    cash=cash, prev_close=prev_close, capital=capital)
 
-        # L-10 — max_position_pct가 설정된 경우만 단일 종목 비중 상한 클램프.
-        # capital은 통화 일치(KRW/USD)된 값. cap_qty=None이면 한도 없음(OFF).
-        if cap_qty is not None:
-            qty = min(qty, cap_qty)
         # 가용 현금 한도 (모든 모드 공통)
         qty = min(qty, int(cash // prev_close))
 
@@ -848,59 +816,25 @@ class Trader:
                 # 서버 preview에 있지만 로컬엔 배정 안 된 전략 — skip
                 continue
             strat_name, strat_def = name_def
-            trade_sym = strat_def.get("trade_symbol", "")
-            mode, targets = qc.parse_trade_symbols(trade_sym)
-
-            # 보유/한도 체크
-            if mode == "screener":
+            # IR(전략 연구소)은 universe.kind로 다중키 여부를 결정한다. 후보(cands)는
+            # 서버 preview가 이미 선정했다.
+            uni_kind = (strat_def.get("universe") or {}).get("kind", "single")
+            is_multi_key = uni_kind in ("list", "all", "screener")
+            if is_multi_key:
                 prefix = f"{sid}:"
                 held_keys = {k for k in self.ledger if k.startswith(prefix)}
-                screener_limit = int(strat_def.get("screener_limit", 1) or 1)
-                slots_left = screener_limit - len(held_keys)
+                slots_left = max(0, len(cands) - len(held_keys))
                 if slots_left <= 0:
                     decisions.append(order_log.decision(
                         "skip_held", sid, strat_name, "",
-                        f"자동 선택 한도 충족 ({len(held_keys)}/{screener_limit})"))
+                        f"IR 보유 한도 충족 ({len(held_keys)}종목)"))
                     continue
-                # Phase 55 — OFF mode lock-in: 한 번 매수 후 빈 슬롯 안 채움.
-                # rebalance dict는 frontend가 그대로 보낸 형식. legacy enabled도 지원.
-                rb = strat_def.get("rebalance") or {}
-                rb_mode = rb.get("mode") or (
-                    "replace" if rb.get("enabled") else "hold")
-                if rb_mode == "off" and len(held_keys) > 0:
-                    decisions.append(order_log.decision(
-                        "skip_locked", sid, strat_name, "",
-                        f"리밸런싱 OFF — 보유 {len(held_keys)}/{screener_limit} lock-in"))
-                    continue
-                is_multi_key = True
-            elif len(targets) > 1:
-                prefix = f"{sid}:"
-                held_keys = {k for k in self.ledger if k.startswith(prefix)}
-                screener_limit = int(strat_def.get("screener_limit", 1) or 1)
-                slots_left = screener_limit - len(held_keys)
-                if slots_left <= 0:
-                    decisions.append(order_log.decision(
-                        "skip_held", sid, strat_name, trade_sym,
-                        f"수동 다중 한도 충족 ({len(held_keys)}/{screener_limit})"))
-                    continue
-                is_multi_key = True
             else:
                 if sid in self.ledger or sid in sold_this_cycle:
                     decisions.append(order_log.decision(
-                        "skip_held", sid, strat_name, trade_sym,
-                        "이미 보유 또는 당일 청산"))
+                        "skip_held", sid, strat_name, "", "이미 보유 또는 당일 청산"))
                     continue
                 slots_left = 1
-                is_multi_key = False
-
-            try:
-                strat = qc.Strategy(**strat_def)
-            except Exception as e:
-                log.warning("전략 파싱 실패 [%s]: %s", strat_name, e)
-                decisions.append(order_log.decision(
-                    "error", sid, strat_name, "",
-                    f"전략 파싱 실패: {e}"))
-                continue
 
             bought = 0
             for c in cands:
@@ -916,7 +850,7 @@ class Trader:
                 if ledger_key in self.ledger or ledger_key in sold_this_cycle:
                     continue
                 if self._try_buy_one_symbol(
-                        ledger_key, sid, strat_name, strat_def, strat,
+                        ledger_key, sid, strat_name, strat_def,
                         symbol, dataset, equity_now, decisions,
                         catchup=catchup):
                     bought += 1
@@ -924,38 +858,6 @@ class Trader:
 
         log.info("preview 경로 진입 완료 — %d종목 발주 (신호 재평가 skip)",
                   n_preview_used)
-
-    def _rebalance_reason(self, ledger_key: str, strat, symbol: str,
-                          members_by_sid: dict, due_cache: dict,
-                          today: date) -> str | None:
-        """리밸런싱 매도 사유 — 자동선택 상위 N에서 탈락한 보유분이면 '리밸런싱'.
-
-        안전 가드:
-          - rebalance.mode != "replace"거나 자동선택 전략이 아니면 None.
-            (off·hold 모드는 탈락 매도 안 함 — 매도 룰만 동작.)
-          - 멤버십 데이터가 없으면(서버 preview 누락/빈 값) None — 절대 매도 안 함.
-          - 주기가 아직 도래 안 했으면 None.
-          - 종목이 여전히 상위 N에 있으면 None(유지).
-        """
-        rb = getattr(strat, "rebalance", None)
-        if rb is None or getattr(rb, "mode", "hold") != "replace":
-            return None
-        mode, _ = qc.parse_trade_symbols(strat.trade_symbol or "")
-        if mode != "screener":
-            return None
-        sid = ledger_key.split(":", 1)[0]
-        members = members_by_sid.get(sid)
-        if not members:
-            return None                    # 멤버십 데이터 없음 — 안전상 매도 안 함
-        if sid not in due_cache:
-            due_cache[sid] = _rebalance_due(
-                rb.period, self.rebalance_state.get(sid), today,
-                getattr(rb, "every_n_days", None))
-        if not due_cache[sid]:
-            return None
-        if symbol in members:
-            return None                    # 여전히 상위 N — 유지
-        return "리밸런싱"
 
     def _today_buy_summary(self, today_iso: str) -> tuple[int, int]:
         """오늘자 매수 거래의 (횟수, 누적 금액 KRW) 반환 (Phase 48 P1-D).
@@ -993,7 +895,8 @@ class Trader:
               risk_limits: dict | None = None,
               market: str = "KRX",
               krx_status: dict[str, dict] | None = None,
-              catchup: bool = False) -> dict:
+              catchup: bool = False,
+              reserved: bool = False) -> dict:
         """전략 목록을 1회 평가하고 매매한 뒤 동기화용 스냅샷을 반환한다.
 
         market: 이번 사이클이 다룰 시장 그룹('KRX' 또는 'US'). 청산은 해당 시장
@@ -1017,23 +920,29 @@ class Trader:
         with _CYCLE_LOCK:
             return self._cycle_locked(strategies, dataset, today,
                                        buy_candidates, risk_limits, market,
-                                       krx_status, catchup=catchup)
+                                       krx_status, catchup=catchup,
+                                       reserved=reserved)
 
     def _cycle_locked(self, strategies, dataset, today, buy_candidates,
                        risk_limits, market, krx_status,
-                       catchup: bool = False) -> dict:
+                       catchup: bool = False, reserved: bool = False) -> dict:
         # Q5(데드락 방지): _in_cycle 플래그를 try/finally로 보장 — 예외 발생 시에도
         # 반드시 reset되어야 다음 cycle에서 _apply_fill의 평가가 정상 동작.
         self._in_cycle = True
         # Phase 48 — 종목 상태 dict는 인스턴스에 저장해 _try_buy_one_symbol에서 사용.
         # cycle 단위 stale 안전 (dict는 cycle 시작 시 fresh, 다음 cycle에서 다시 받음).
         self._krx_status: dict[str, dict] = krx_status or {}
+        # 미국 예약주문 라우팅 — 개장 전 entry cycle에서만 True. 장중 손절/킬스위치
+        # 청산 re-entry(market="US"여도 reserved=False)는 즉시 시장 주문이어야 하므로
+        # market 추론이 아닌 명시 파라미터로 받는다. try/finally로 반드시 reset.
+        self._reserved_us = bool(reserved)
         try:
             return self._cycle_body(strategies, dataset, today,
                                      buy_candidates, risk_limits, market,
                                      catchup=catchup)
         finally:
             self._in_cycle = False
+            self._reserved_us = False
 
     def _cycle_body(self, strategies, dataset, today, buy_candidates,
                      risk_limits, market, catchup: bool = False) -> dict:
@@ -1121,37 +1030,22 @@ class Trader:
                 drawdown_pct, float(max_drawdown_limit_pct))
 
         # ── 2. 청산 패스 (Phase 38.2: 신호·시간 기반만 — 가격은 intraday가 담당) ──
-        # 리밸런싱 멤버십 — 서버 preview의 자동선택 상위 N 종목 (sid → [symbols]).
-        # 데이터가 없으면(빈 dict) 리밸런싱 매도는 발동하지 않는다(안전).
-        members_by_sid: dict[str, list] = {}
-        for entry in (buy_candidates or []):
-            esid = str(entry.get("strategy_id", ""))
-            if esid:
-                members_by_sid[esid] = entry.get("screener_members") or []
-        rebalance_due_cache: dict[str, bool] = {}
-
         sold_this_cycle: set[str] = set()
         for sid, pos in list(self.ledger.items()):
             # 시장 배칭 — 이번 사이클 시장의 보유분만 청산 (미국 보유분은
             # 미국 정규장 사이클에서만 매도, 그 반대도 동일).
             if _market_group_safe(pos["symbol"]) != market:
                 continue
+            held = (today - date.fromisoformat(pos["entry_date"])).days
             try:
-                strat = qc.Strategy(**pos["definition"])
+                reason, _ = _exit_reason_for(
+                    pos["definition"], held, dataset, pos["symbol"])
             except Exception as e:
                 log.warning("원장 전략 파싱 실패 [%s]: %s", sid, e)
                 continue
-
-            held = (today - date.fromisoformat(pos["entry_date"])).days
-            reason = _evaluate_exit(strat, held, dataset, pos["symbol"])
             # kill switch 활성 시 모든 보유 강제 청산
             if ks_active and not reason:
                 reason = "kill-switch"
-            # 리밸런싱 — 자동선택 상위 N에서 탈락한 보유분 매도 (주기 게이팅)
-            if not reason and not ks_active:
-                reason = self._rebalance_reason(
-                    sid, strat, pos["symbol"],
-                    members_by_sid, rebalance_due_cache, today)
 
             if not reason:
                 continue
@@ -1178,20 +1072,12 @@ class Trader:
             if intents.is_active(today_iso, sid, pos["symbol"], "sell"):
                 log.info("[L-01] 중복 매도 차단 %s/%s", sid, pos["symbol"])
                 continue
-            # Phase 56 — 매도 룰별 sell_pct. reason → key 매핑 후 보유 수량 ×%.
-            sell_pct = qc.sell_pct_for_reason(strat.sell_rules, reason)
-            sell_qty = max(1, int(pos["qty"] * sell_pct / 100.0))
-            sell_qty = min(sell_qty, int(pos["qty"]))   # 보유분 초과 방지
+            # IR(전략 연구소)은 per-rule 매도 비중이 없으므로 전량(100%) 청산.
+            sell_qty = int(pos["qty"])
             self._submit_sell(sid, pos.get("strategy_name", ""), pos["symbol"],
                               sell_qty, ref_price, policy, reason, decisions)
-            # sold_this_cycle은 sid 단위 — 부분 매도여도 같은 cycle 중복 매도 차단.
+            # sold_this_cycle은 sid 단위 — 같은 cycle 중복 매도 차단.
             sold_this_cycle.add(sid)
-
-        # 리밸런싱을 평가한(주기 도래) 전략은 오늘자로 기록 — 같은 주기 재발동 방지.
-        # 매도가 없었어도 주기는 소진된 것으로 본다.
-        for rsid, due in rebalance_due_cache.items():
-            if due:
-                self.rebalance_state[rsid] = today.isoformat()
 
         # ── 3. 진입 패스 (kill switch·drawdown 활성 시 건너뜀, preview 전용) ──
         if ks_active:
@@ -1233,8 +1119,6 @@ class Trader:
             "n_strategies": len(strategies),
             "n_bought": sum(1 for d in decisions if d["action"] == "bought"),
             "n_sold": sum(1 for d in decisions if d["action"] == "sold"),
-            "n_skip_gap": sum(1 for d in decisions if d["action"] == "skip_gap"),
-            "n_skip_signal": sum(1 for d in decisions if d["action"] == "skip_signal"),
             "n_skip_held": sum(1 for d in decisions if d["action"] == "skip_held"),
             "n_rejected": sum(1 for d in decisions if d["action"] == "rejected"),
             "n_unfilled": sum(1 for d in decisions if d["action"] == "unfilled"),

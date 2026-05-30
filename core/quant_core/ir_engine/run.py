@@ -1,12 +1,11 @@
-"""StrategyIR 실행 — 디스패치 + 팩터/리밸런스 백테스트.
+"""StrategyIR 디스패치 + 펼침/기간분할/이벤트스터디 레이어.
 
-명세 §7·§3.3. entry.mode × signal 타입으로 디스패치:
-  - on_signal + condition (단일종목) → run_backtest_ir (이벤트 드리븐 룰)
-  - scheduled/always               → _run_rebalance (팩터/포트폴리오)
-
-리밸런스 경로: 신호(score 또는 condition) → 포지션 4부품(방향·사이징·top_n·
-오버레이)으로 목표 가중치 행렬 → delay 적용 → 일별 P&L. 횡단·롱숏·포트폴리오를
-실제 백테스트로 실행 — 데이터가 얇아도 구조는 임의 전략을 표현·실행한다.
+명세 §7·§8. run_strategy_ir은 §5.4 루트 경계 계약을 강제한 뒤 **통합 실행 엔진**
+(engine.run_unified, §7.6)에 위임한다 — 이벤트·스케줄을 단일 포지션 기반 일별 루프로
+처리(진입×청산·롱숏·refill 임의 조합). 이 모듈은 그 위의 분석 레이어를 담는다:
+  - run_sweep: 펼침(조건/파라미터/자산/시간 축) → resultset
+  - run_period_split: 시간순 폴드 OOS 일관성
+  - _run_event_study: 이벤트(신호 참) 발생일 기준 forward 수익·경로지표
 """
 
 from __future__ import annotations
@@ -16,16 +15,13 @@ import copy
 import numpy as np
 import pandas as pd
 
-from ..backtest import (
-    _DEFAULT_COMMISSION, _DEFAULT_SELL_TAX, _DEFAULT_SLIPPAGE, _empty, _metrics,
-)
-from ..blocks import EvalContext, evaluate
+from ..backtest import _empty
+from ..blocks import EvalContext, evaluate, referenced_symbols
 from ..blocks.catalog import get, has
-from .backtest import run_backtest_ir, run_portfolio_ir
+from ..blocks.node import Node
 from .compare import (
-    compare_partition, one_sample_test, two_sample_test, walk_forward_consistency,
+    compare_partition, summarize_events, two_sample_test, walk_forward_consistency,
 )
-from .metrics import finalize_metrics
 from .spec import StrategyIR
 from .sweep import (
     daily_returns, partition_by_label, summarize_returns, sweep_condition,
@@ -34,67 +30,83 @@ from .sweep import (
 TRADING_DAYS = 252
 
 
+# ── 평가 컨텍스트 스코핑 ──────────────────────────────────────────────────────
+
+def _scoped(dataset: dict, syms, *nodes) -> dict:
+    """평가 대상 데이터를 유니버스(+명시 참조 외부심볼)로 좁힌 sub-dataset.
+
+    전 종목(4천+) 합집합 달력에서 종목별 시계열을 평가하면, 서로 다른 시장·휴장일
+    때문에 각 종목 값이 듬성해져 롤링 지표가 NaN이 된다(이벤트·룰 신호 0건 버그의
+    근본 원인). 유니버스 종목의 공통 달력에서만 평가하도록 좁힌다. 명시적 "SYM.x"
+    참조(VIX·S&P500 등)는 보존. 비면 안전하게 전체로 폴백.
+    """
+    keep = set(syms)
+    for nd in nodes:
+        if nd is not None:
+            keep |= referenced_symbols(nd)
+    sub = {s: dataset[s] for s in keep
+           if s in dataset and dataset[s] is not None and not dataset[s].empty}
+    return sub or dataset
+
+
+# ── 루트 경계 타입 계약 (명세 §5.4) ───────────────────────────────────────────
+
+def _out_type(node) -> str | None:
+    return get(node.op).out_type.value if (node is not None and has(node.op)) else None
+
+
+def _root_type_error(strategy: StrategyIR) -> str | None:
+    """signal 외 루트 경계의 out_type 계약을 엔진이 직접 강제 (§5.4 — validate_strategy 이중화).
+
+    신호(signal)는 run_strategy_ir 디스패치가 직접 검사한다. 여기선 나머지 루트 경계
+    — 스크리너 filter·매도조건·그룹라벨·펼침 라벨/이벤트 — 의 out_type을 확인해 미지원
+    타입을 조용히 캐스팅(astype(bool)·임의 그룹화)하지 않고 명시 거부한다. 검증을 우회하거나
+    엔진을 직접 호출해도 안전(label 코드가 조건으로 둔갑·연속 점수가 무의미 분할 생성 차단).
+    """
+    u, pos, sw = strategy.universe, strategy.position, strategy.sweep
+    if u.kind == "screener" and (u.screener or {}).get("filter") is not None:
+        ft = _out_type(Node.model_validate(u.screener["filter"]))
+        if ft != "condition":
+            return f"스크리너 filter는 condition이어야 합니다 (현재: {ft or '알 수 없는 블록'})."
+    if pos.exit.condition is not None and _out_type(pos.exit.condition) != "condition":
+        return f"매도 조건은 condition이어야 합니다 (현재: {_out_type(pos.exit.condition) or '알 수 없는 블록'})."
+    if pos.overlays.group_label is not None and _out_type(pos.overlays.group_label) != "label":
+        return f"그룹 노출 라벨은 label이어야 합니다 (현재: {_out_type(pos.overlays.group_label) or '알 수 없는 블록'})."
+    if sw.label is not None and _out_type(sw.label) != "label":
+        return f"펼침 분할 라벨은 label이어야 합니다 (현재: {_out_type(sw.label) or '알 수 없는 블록'})."
+    if sw.event is not None and _out_type(sw.event) != "condition":
+        return f"펼침 이벤트는 condition이어야 합니다 (현재: {_out_type(sw.event) or '알 수 없는 블록'})."
+    return None
+
+
 # ── 디스패치 ──────────────────────────────────────────────────────────────────
 
 def run_strategy_ir(strategy: StrategyIR, dataset: dict[str, pd.DataFrame]) -> dict:
-    """StrategyIR을 백테스트. entry.mode × signal 타입으로 경로 선택."""
-    ent = strategy.position.entry.mode
-    sim = strategy.simulation
-    if ent == "on_signal":
-        u = strategy.universe
-        ex = strategy.position.exit
-        sz = strategy.position.sizing
-        if u.kind == "single" and len(u.symbols) == 1:
-            return run_backtest_ir(
-                dataset, u.symbols[0], strategy.signal,
-                sell_node=ex.condition, hold_days=ex.hold_days,
-                take_profit=ex.take_profit, stop_loss=ex.stop_loss,
-                trail_atr_mult=ex.trail_atr_mult, trail_pct=ex.trail_pct,
-                fill=sim.fill, initial_capital=sim.initial_capital,
-                **_cost_kw(sim), start=sim.start, end=sim.end,
-            )
-        # 리스트 유니버스 → 이벤트 드리븐 포트폴리오 (S3)
-        return run_portfolio_ir(
-            dataset, u.symbols, strategy.signal,
-            sell_node=ex.condition, hold_days=ex.hold_days,
-            take_profit=ex.take_profit, stop_loss=ex.stop_loss,
-            trail_atr_mult=ex.trail_atr_mult, trail_pct=ex.trail_pct,
-            fill=sim.fill, initial_capital=sim.initial_capital,
-            amount_pct=sz.amount_pct,
-            amount_krw=(sz.amount_krw if sz.mode == "fixed_amount" else None),
-            **_cost_kw_nocur(sim), start=sim.start, end=sim.end,
-        )
-    return _run_rebalance(strategy, dataset)
+    """StrategyIR을 백테스트. entry.mode × signal 타입으로 경로 선택.
+
+    신호 타입 계약을 엔진이 직접 강제한다 — 디스패치는 타입 enum에 '닫혀' 있어, 미지원 타입
+    (label·scalar·미등록 op)을 조용히 점수/조건으로 둔갑시키지 않고 명시 거부한다. signal 외
+    루트 경계(스크리너·청산·그룹·펼침)는 _root_type_error로 함께 강제 — validate_strategy의
+    동일 계약(§5.4)을 엔진 불변식으로 이중화해 검증 우회·직접 호출에도 안전하다.
+    """
+    err = _root_type_error(strategy)
+    if err is not None:
+        return _empty(err)
+    # 통합 실행 엔진(§7.6)으로 위임 — 이벤트·스케줄을 단일 포지션 기반 일별 루프로 처리.
+    # 이벤트 경로는 기존 run_backtest_ir/run_portfolio_ir와 동치(패리티 고정), 스케줄은
+    # 정수주 회계로 전환(롯·현금드래그 반영). 진입×청산·롱숏·refill 임의 조합 가능.
+    from .engine import run_unified
+    return run_unified(strategy, dataset)
 
 
-def _cost_kw_nocur(sim) -> dict:
-    out = {}
-    if sim.commission is not None:
-        out["commission"] = sim.commission
-    if sim.slippage is not None:
-        out["slippage"] = sim.slippage
-    if sim.sell_tax is not None:
-        out["sell_tax"] = sim.sell_tax
-    return out
-
-
-def _cost_kw(sim) -> dict:
-    out = _cost_kw_nocur(sim)
-    out["currency"] = sim.currency
-    return out
-
-
-# ── 유니버스 ──────────────────────────────────────────────────────────────────
+# ── 유니버스 (펼침·이벤트스터디 공용) ─────────────────────────────────────────
 
 def _universe_symbols(strategy: StrategyIR, dataset: dict) -> list[str]:
     u = strategy.universe
     if u.kind in ("single", "list"):
         return [s for s in u.symbols if s in dataset and not dataset[s].empty]
-    if u.kind == "screener":
-        # 동적 스크리너 해결은 데이터 연동 후(legacy screener 통합 예정).
-        # 조용히 all로 폴백하지 않는다 — validate_strategy가 사전 차단.
-        return []
-    # all — 매크로/자산 지수 제외, OHLC 보유 종목
+    # all · screener — 매크로/자산 지수 제외, OHLC 보유 종목. 스크리너 후보=all과 동일,
+    # 시점별 자격은 _run_rebalance의 _screener_mask가 PIT(리밸런스 시점값)로 적용한다.
     macro: set = set()
     if u.exclude_macro:
         try:
@@ -109,183 +121,6 @@ def _universe_symbols(strategy: StrategyIR, dataset: dict) -> list[str]:
         if {"Open", "Close"}.issubset(df.columns):
             out.append(s)
     return out
-
-
-# ── 리밸런스 일자 ─────────────────────────────────────────────────────────────
-
-def _is_rebalance(i: int, last: int | None, idx: pd.DatetimeIndex,
-                  period: str, every_n: int | None) -> bool:
-    if last is None:
-        return True
-    if period == "daily":
-        return True
-    d, p = idx[i], idx[last]
-    if period == "weekly":
-        return d.isocalendar()[:2] != p.isocalendar()[:2]
-    if period == "monthly":
-        return (d.year, d.month) != (p.year, p.month)
-    if period == "every_n_days":
-        return bool(every_n) and (i - last) >= int(every_n)
-    return False
-
-
-# ── 가중치 산정 (포지션 4부품) ────────────────────────────────────────────────
-
-def _size(sel: pd.Series, sizing, vol_row, sign: float) -> pd.Series:
-    """선택된 종목에 사이징 적용 → 가중치(부호 포함, 합=sign 방향)."""
-    idx = sel.index
-    mode = sizing.mode
-    if mode == "signal_proportional":
-        base = sel.clip(lower=0)
-        if base.sum() <= 0:
-            base = pd.Series(1.0, index=idx)
-    elif mode == "vol_inverse" and vol_row is not None:
-        v = vol_row.reindex(idx)
-        inv = (1.0 / v).replace([np.inf, -np.inf], np.nan)
-        base = inv.fillna(inv[inv.notna()].mean() if inv.notna().any() else 1.0)
-        if base.sum() <= 0:
-            base = pd.Series(1.0, index=idx)
-    else:  # equal_weight / fixed_risk / kelly / fixed_amount / pct_cash → 동일가중
-        base = pd.Series(1.0, index=idx)
-    return base / base.sum() * sign
-
-
-def _weights_row(alpha_row: pd.Series, pos, vol_row) -> pd.Series:
-    a = alpha_row.dropna()
-    if a.empty:
-        return pd.Series(dtype=float)
-    sizing, top_n, direction = pos.sizing, pos.entry.top_n, pos.direction
-
-    if direction == "long_short":
-        n = top_n or max(1, len(a) // 5)
-        longs = a.nlargest(min(n, len(a)))
-        shorts = a.nsmallest(min(n, len(a)))
-        w = _size(longs, sizing, vol_row, +1.0).mul(0.5).add(
-            _size(shorts, sizing, vol_row, -1.0).mul(0.5), fill_value=0.0)
-    else:
-        sign = 1.0 if direction == "long" else -1.0
-        if top_n:
-            sel = a.nlargest(min(top_n, len(a)))
-        else:
-            sel = a[a > 0] if (a > 0).any() else a.nlargest(1)
-        w = _size(sel, sizing, vol_row, sign)
-
-    cap = sizing.max_position_pct / 100.0
-    w = w.clip(lower=-cap, upper=cap)
-    s = w.abs().sum()
-    return w / s if s > 0 else w
-
-
-def _apply_dd_stop(net: pd.Series, dd_pct: float) -> pd.Series:
-    eq = (1 + net).cumprod()
-    dd = (eq - eq.cummax()) / eq.cummax() * 100
-    breached = dd <= -abs(dd_pct)
-    if breached.any():
-        first = breached.idxmax()
-        net = net.copy()
-        net.loc[net.index > first] = 0.0
-    return net
-
-
-# ── 리밸런스/팩터 백테스트 ────────────────────────────────────────────────────
-
-def _run_rebalance(strategy: StrategyIR, dataset: dict) -> dict:
-    syms = _universe_symbols(strategy, dataset)
-    if not syms:
-        return _empty("유니버스에 종목이 없습니다.")
-
-    ctx = EvalContext.from_dataset(dataset)
-    try:
-        alpha = evaluate(strategy.signal, ctx)
-    except Exception as e:  # noqa: BLE001
-        return _empty(f"신호 평가 오류: {e}")
-    if not isinstance(alpha, pd.DataFrame):
-        return _empty("신호가 패널(종목×날짜)을 산출하지 않습니다.")
-
-    # condition 신호 → 1.0(True)/NaN(False): True 종목만 선택 대상
-    st = get(strategy.signal.op).out_type.value if has(strategy.signal.op) else "score"
-    if st == "condition":
-        b = alpha.astype(bool)
-        alpha = b.astype(float)
-        alpha = alpha.where(b, np.nan)
-
-    cols = [s for s in syms if s in alpha.columns]
-    if not cols:
-        return _empty("신호가 유니버스 종목을 포함하지 않습니다.")
-    alpha = alpha[cols]
-
-    sim = strategy.simulation
-    if sim.start is not None:
-        alpha = alpha[alpha.index >= pd.Timestamp(sim.start)]
-    if sim.end is not None:
-        alpha = alpha[alpha.index <= pd.Timestamp(sim.end)]
-    master = alpha.index
-    if len(master) < 2:
-        return _empty("백테스트 기간의 데이터가 부족합니다.")
-
-    # 일별 수익률 + 변동성 패널
-    rets = pd.DataFrame({
-        s: dataset[s]["Close"].reindex(master).ffill().pct_change().fillna(0.0)
-        for s in cols}, index=master)
-    vol = rets.rolling(strategy.position.sizing.vol_window).std()
-
-    # 목표 가중치 — 리밸런스 일자에만 갱신, 사이 보유(ffill)
-    pos = strategy.position
-    period = "daily" if pos.entry.mode == "always" else pos.entry.rebalance
-    W = pd.DataFrame(0.0, index=master, columns=cols)
-    last = None
-    cur = pd.Series(0.0, index=cols)
-    for i, d in enumerate(master):
-        if _is_rebalance(i, last, master, period, pos.entry.every_n_days):
-            cur = _weights_row(alpha.loc[d], pos,
-                               vol.loc[d] if d in vol.index else None
-                               ).reindex(cols).fillna(0.0)
-            last = i
-        W.iloc[i] = cur.to_numpy()
-
-    # 오버레이: 턴오버 억제
-    if pos.overlays.turnover_damp:
-        from ..expression_parser import hump
-        W = hump(W, float(pos.overlays.turnover_damp))
-
-    W = W * float(sim.leverage)
-    Wexec = W.shift(sim.delay if sim.delay else 0).fillna(0.0)  # look-ahead 방지
-
-    commission = sim.commission if sim.commission is not None else _DEFAULT_COMMISSION
-    slippage = sim.slippage if sim.slippage is not None else _DEFAULT_SLIPPAGE
-    sell_tax = sim.sell_tax if sim.sell_tax is not None else _DEFAULT_SELL_TAX
-    fee = commission + slippage + sell_tax * 0.5
-
-    turnover = Wexec.diff().abs().sum(axis=1).fillna(0.0)
-    gross = (Wexec * rets).sum(axis=1)
-
-    # 오버레이: 변동성 타겟 (trailing — look-ahead 없음)
-    if pos.overlays.vol_target:
-        real = gross.rolling(63).std() * np.sqrt(TRADING_DAYS)
-        scale = ((pos.overlays.vol_target / 100.0) / real.replace(0, np.nan)
-                 ).shift(1).clip(upper=3.0).fillna(1.0)
-        gross = gross * scale
-        turnover = turnover * scale
-
-    net = (gross - turnover * fee)
-    if pos.overlays.max_drawdown_stop:
-        net = _apply_dd_stop(net, pos.overlays.max_drawdown_stop)
-    net = net.clip(lower=-1.0)
-
-    equity = pd.Series((1 + net).cumprod() * sim.initial_capital, index=master, name="전략")
-
-    # 벤치마크 — 유니버스 동일가중 buy&hold
-    bench = np.zeros(len(master))
-    w0 = sim.initial_capital / len(cols)
-    for s in cols:
-        bench += ((1 + rets[s]).cumprod() * w0).to_numpy()
-    benchmark = pd.Series(bench, index=master, name="Buy&Hold")
-
-    met = finalize_metrics(_metrics(equity, benchmark, pd.DataFrame()),
-                           equity, benchmark, pd.DataFrame())
-    met["turnover"] = float(turnover.mean() * 100)
-    return {"success": True, "error": None, "equity": equity,
-            "benchmark": benchmark, "trades": pd.DataFrame(), "metrics": met}
 
 
 # ── 펼침 (비전 §4) — 조건·파라미터·자산 축 ────────────────────────────────────
@@ -304,23 +139,31 @@ def run_sweep(strategy: StrategyIR, dataset: dict) -> dict:
     axis: none(단일 실행) · condition(사후 라벨 분할) · parameter(설정 그리드 재실행)
           · asset(종목별 재실행).
     """
+    err = _root_type_error(strategy)
+    if err is not None:
+        return _empty(err)
     sw = strategy.sweep
     if sw.axis == "none":
         return run_strategy_ir(strategy, dataset)
 
     if sw.axis == "parameter":
-        if not sw.param_path or not sw.param_values:
-            return _empty("파라미터 축은 param_path·param_values가 필요합니다.")
+        grid = sw.param_grid
+        if not grid or any(not ax.values for ax in grid):
+            return _empty("파라미터 축은 param_grid(경로·값)가 필요합니다.")
+        import itertools
         base = strategy.model_dump()
+        axes_meta = [{"path": ax.path, "values": list(ax.values)} for ax in grid]
         buckets = {}
-        for v in sw.param_values:
+        for combo in itertools.product(*[ax.values for ax in grid]):
             d = copy.deepcopy(base)
             d["sweep"] = {"axis": "none"}
-            _set_path(d, sw.param_path, v)
+            for ax, v in zip(grid, combo):
+                _set_path(d, ax.path, v)
+            key = " | ".join(f"{ax.path.split('.')[-1]}={v}" for ax, v in zip(grid, combo))
             res = run_strategy_ir(StrategyIR.model_validate(d), dataset)
-            buckets[str(v)] = (summarize_returns(daily_returns(res["equity"]))
-                               if res.get("success") else {"error": res.get("error")})
-        return {"success": True, "axis": "parameter", "param": sw.param_path, "buckets": buckets}
+            buckets[key] = (summarize_returns(daily_returns(res["equity"]))
+                            if res.get("success") else {"error": res.get("error")})
+        return {"success": True, "axis": "parameter", "axes": axes_meta, "buckets": buckets}
 
     if sw.axis == "asset":
         if not sw.assets:
@@ -343,7 +186,8 @@ def run_sweep(strategy: StrategyIR, dataset: dict) -> dict:
         res = run_strategy_ir(strategy, dataset)
         if not res.get("success"):
             return res
-        lab = evaluate(sw.label, EvalContext.from_dataset(dataset))
+        lab_syms = _universe_symbols(strategy, dataset)
+        lab = evaluate(sw.label, EvalContext.from_dataset(_scoped(dataset, lab_syms, sw.label)))
         if isinstance(lab, pd.DataFrame):
             u = strategy.universe
             col = (u.symbols[0] if u.symbols and u.symbols[0] in lab.columns
@@ -394,11 +238,65 @@ def run_period_split(strategy: StrategyIR, dataset: dict) -> dict:
 
 # ── 이벤트 스터디 (비전 §4 시간축) ────────────────────────────────────────────
 
-def _run_event_study(strategy: StrategyIR, dataset: dict) -> dict:
-    """이벤트(신호 참) 발생일 기준 forward N일 수익 분포 + entry-시점 라벨 조건 + 유의성.
+def _market_index(dataset: dict, syms: list[str]) -> pd.Series | None:
+    """초과수익(excess) basis용 시장 지수 — 유니버스 동일가중 정규화 가격 평균.
 
-    "돌파 후 과매도 반등이 실제로 유의한가", "변동성 확대가 mean reversion 선행지표인가"
-    같은 질문에 답한다. 백테스트(P&L)가 아니라 조건부 forward 수익 분석.
+    종목별 (close/첫값) 정규화 → 횡단 평균. 어떤 날 d에서 M[d+k]/M[d]-1이 시장
+    누적수익. 단일 종목이면 자기 자신이라 excess가 무의미 → None.
+    """
+    if len(syms) < 2:
+        return None
+    norm = []
+    for s in syms:
+        df = dataset.get(s)
+        if df is None or "Close" not in df.columns or df.empty:
+            continue
+        c = df["Close"].astype(float)
+        base = c.dropna()
+        if base.empty or base.iloc[0] <= 0:
+            continue
+        norm.append(c / base.iloc[0])
+    if len(norm) < 2:
+        return None
+    return pd.concat(norm, axis=1).mean(axis=1)
+
+
+def _event_paths(ca, oa, p, w, basis, mvals):
+    """이벤트 위치 p·윈도 w에서 (endpoint, mae, mfe) 경로지표. 불가 시 None.
+
+    close   : 종가 anchor, k=1..w 누적.
+    intraday: 시가 anchor, k=0..w 누적(k=0=당일 시가→종가, intraday reversal).
+    excess  : 종가 anchor 누적 − 시장 누적.
+    """
+    q = p + w
+    if q >= len(ca):
+        return None
+    if basis == "intraday":
+        anchor = oa[p]
+        if not np.isfinite(anchor) or anchor <= 0:
+            return None
+        seg = ca[p:q + 1] / anchor - 1.0
+    else:
+        anchor = ca[p]
+        if not np.isfinite(anchor) or anchor <= 0:
+            return None
+        seg = ca[p + 1:q + 1] / anchor - 1.0
+        if basis == "excess":
+            if mvals is None or not np.isfinite(mvals[p]) or mvals[p] <= 0:
+                return None
+            seg = seg - (mvals[p + 1:q + 1] / mvals[p] - 1.0)
+    seg = seg[np.isfinite(seg)]
+    if seg.size == 0:
+        return None
+    return float(seg[-1]), float(seg.min()), float(seg.max())
+
+
+def _run_event_study(strategy: StrategyIR, dataset: dict) -> dict:
+    """이벤트(신호 참) 발생일 기준 forward 수익 + 경로지표(MAE·MFE) + 국면 유의성.
+
+    "돌파 후 반등이 유의한가", "변동성 확대가 mean reversion 선행지표인가", "갭하락 후
+    당일 종가까지 반등하나(intraday)", "거래량 동반 돌파의 forward 낙폭(MAE)" 같은
+    질문에 단일 메커니즘으로 답한다. basis로 종가/시가내재/초과수익 기준을 고른다.
     """
     from collections import defaultdict
 
@@ -406,8 +304,9 @@ def _run_event_study(strategy: StrategyIR, dataset: dict) -> dict:
     if not syms:
         return _empty("이벤트 분석 유니버스에 종목이 없습니다.")
     windows = strategy.sweep.windows or [5, 10, 20]
-    ctx = EvalContext.from_dataset(dataset)
+    basis = strategy.sweep.event_basis
     ev_node = strategy.sweep.event or strategy.signal
+    ctx = EvalContext.from_dataset(_scoped(dataset, syms, ev_node, strategy.sweep.label))
     ev_panel = evaluate(ev_node, ctx)
     if not isinstance(ev_panel, pd.DataFrame):
         return _empty("이벤트 신호가 패널을 산출하지 않습니다.")
@@ -418,52 +317,59 @@ def _run_event_study(strategy: StrategyIR, dataset: dict) -> dict:
         lp = evaluate(strategy.sweep.label, ctx)
         label_panel = lp if isinstance(lp, pd.DataFrame) else None
 
+    market = _market_index(dataset, syms) if basis == "excess" else None
     sim = strategy.simulation
-    collected: dict[int, list] = {w: [] for w in windows}   # w → [(ret, regime)]
+    start_ts = pd.Timestamp(sim.start) if sim.start is not None else None
+    end_ts = pd.Timestamp(sim.end) if sim.end is not None else None
+    collected: dict[int, list] = {w: [] for w in windows}   # w → [(end, mae, mfe, regime)]
     n_events = 0
     for sym in syms:
         df = dataset.get(sym)
         if df is None or "Close" not in df.columns:
             continue
-        close = df["Close"]
-        idx = close.index
+        idx = df.index
         if sym not in ev_panel.columns:
             continue
-        ev = ev_panel[sym].reindex(idx, fill_value=False)
-        if sim.start is not None:
-            ev = ev[ev.index >= pd.Timestamp(sim.start)]
-        if sim.end is not None:
-            ev = ev[ev.index <= pd.Timestamp(sim.end)]
-        fwd = {w: (close.shift(-w) / close - 1.0) for w in windows}
-        reg = (label_panel[sym].reindex(idx)
+        ca = df["Close"].to_numpy(dtype=float)
+        oa = (df["Open"].to_numpy(dtype=float) if "Open" in df.columns else ca)
+        mvals = (market.reindex(idx).ffill().to_numpy(dtype=float)
+                 if market is not None else None)
+        ev = ev_panel[sym].reindex(idx, fill_value=False).to_numpy(dtype=bool)
+        reg = (label_panel[sym].reindex(idx).to_numpy(dtype=float)
                if (label_panel is not None and sym in label_panel.columns) else None)
-        ev_dates = ev.index[ev.to_numpy(dtype=bool)]
-        n_events += len(ev_dates)
-        for d in ev_dates:
-            r = float(reg.loc[d]) if (reg is not None and not pd.isna(reg.loc[d])) else None
+        for p in np.flatnonzero(ev):
+            d = idx[p]
+            if (start_ts is not None and d < start_ts) or (end_ts is not None and d > end_ts):
+                continue
+            n_events += 1
+            r = (float(reg[p]) if reg is not None and np.isfinite(reg[p]) else None)
             for w in windows:
-                v = fwd[w].get(d, np.nan)
-                if not pd.isna(v):
-                    collected[w].append((float(v), r))
+                got = _event_paths(ca, oa, p, w, basis, mvals)
+                if got is not None:
+                    collected[w].append((got[0], got[1], got[2], r))
 
     overall: dict = {}
     by_regime: dict | None = {} if label_panel is not None else None
     for w in windows:
-        rets = pd.Series([x[0] for x in collected[w]], dtype=float)
-        overall[str(w)] = one_sample_test(rets)
+        rows = collected[w]
+        overall[str(w)] = summarize_events([x[0] for x in rows],
+                                           [x[1] for x in rows], [x[2] for x in rows])
         if by_regime is not None:
             groups: dict = defaultdict(list)
-            for v, r in collected[w]:
+            for end, mae, mfe, r in rows:
                 if r is not None:
-                    groups[r].append(v)
-            regimes = {str(k): one_sample_test(pd.Series(v)) for k, v in groups.items()}
+                    groups[r].append((end, mae, mfe))
+            regimes = {str(k): summarize_events([t[0] for t in v], [t[1] for t in v],
+                                                [t[2] for t in v]) for k, v in groups.items()}
             keys = sorted(groups.keys())
             pairwise = {}
             for i in range(len(keys)):
                 for j in range(i + 1, len(keys)):
                     pairwise[f"{keys[i]}_vs_{keys[j]}"] = two_sample_test(
-                        pd.Series(groups[keys[i]]), pd.Series(groups[keys[j]]))
+                        pd.Series([t[0] for t in groups[keys[i]]]),
+                        pd.Series([t[0] for t in groups[keys[j]]]))
             by_regime[str(w)] = {"by_regime": regimes, "pairwise": pairwise}
 
-    return {"success": True, "axis": "time", "windows": [str(w) for w in windows],
+    return {"success": True, "axis": "time", "basis": basis,
+            "windows": [str(w) for w in windows],
             "n_events": int(n_events), "overall": overall, "by_regime": by_regime}
