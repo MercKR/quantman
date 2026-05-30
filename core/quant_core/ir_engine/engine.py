@@ -462,22 +462,18 @@ def _universe_symbols(strategy: StrategyIR, dataset: dict) -> list:
 
 
 def _screener_mask(screener: dict, ctx, cols: list) -> pd.DataFrame:
-    """스크리너 자격 마스크(dates×cols, bool) — filter(조건)·rank(순위컷) AND, 시점별 PIT."""
-    from ..blocks.context import resolve_data
+    """스크리너 자격 마스크(dates×cols, bool) — 단일 선별 조건 평가, 시점별 PIT.
+
+    조건은 필터·횡단순위(rank 블록)를 AND/OR로 조합한 condition 트리. 횡단 연산은
+    엔진이 panel(dates×cols) 컨텍스트에서 그대로 평가한다(별도 rank 처리 없음)."""
     midx = ctx.master_idx
-    elig = pd.DataFrame(True, index=midx, columns=cols)
-    f = screener.get("filter")
-    if f is not None:
-        m = evaluate(Node.model_validate(f), ctx)
-        if isinstance(m, pd.DataFrame):
-            elig &= m.reindex(index=midx, columns=cols).fillna(False).astype(bool)
-    rk = screener.get("rank")
-    if rk and rk.get("ref") and rk.get("top_n"):
-        ref = resolve_data(rk["ref"], ctx).reindex(columns=cols)
-        asc = rk.get("direction", "top") == "bottom"
-        ranked = ref.rank(axis=1, ascending=asc, method="first")
-        elig &= (ranked <= int(rk["top_n"])).reindex(index=midx).fillna(False)
-    return elig
+    cond = screener.get("condition")
+    if cond is None:
+        return pd.DataFrame(True, index=midx, columns=cols)
+    m = evaluate(Node.model_validate(cond), ctx)
+    if isinstance(m, pd.DataFrame):
+        return m.reindex(index=midx, columns=cols).fillna(False).astype(bool)
+    return pd.DataFrame(True, index=midx, columns=cols)
 
 
 def _cap_groups(w: pd.Series, labels: pd.Series, cap_pct: float) -> pd.Series:
@@ -625,8 +621,8 @@ def _run_scheduled(strategy: StrategyIR, dataset: dict) -> dict:
     if not syms:
         return _empty("유니버스에 종목이 없습니다.")
     screener = strategy.universe.screener or {}
-    filt_node = (Node.model_validate(screener["filter"])
-                 if strategy.universe.kind == "screener" and screener.get("filter") else None)
+    filt_node = (Node.model_validate(screener["condition"])
+                 if strategy.universe.kind == "screener" and screener.get("condition") else None)
     gl = pos.overlays.group_label
     ds = _scoped(dataset, syms, signal, filt_node, gl)
     ctx = EvalContext.from_dataset(ds)

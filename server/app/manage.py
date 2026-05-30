@@ -99,13 +99,19 @@ def main_cli() -> None:
     ap = argparse.ArgumentParser(description="수동 데이터 갱신 CLI")
     ap.add_argument("target", choices=[
         "status", "master", "krx", "naver", "technical", "global", "kr",
-        "us", "us_caps", "us_metrics", "all"])
+        "us", "us_caps", "us_metrics", "all", "mark-dirty"])
     ap.add_argument("--limit", type=int, default=None,
                     help="미국 종목 앞 N개만 (개발/검증용)")
     args = ap.parse_args()
 
     if args.target == "status":
         cmd_status()
+        return
+
+    if args.target == "mark-dirty":
+        # 수동 파일 편집·삭제 후 라이브 서버 캐시가 자가 리로드하도록 세대 마커 bump.
+        from quant_core import data_fetcher
+        log.info("데이터 세대 마커 bump: %d", data_fetcher.mark_data_dirty())
         return
 
     from . import main as srv

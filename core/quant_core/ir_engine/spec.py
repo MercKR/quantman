@@ -30,7 +30,7 @@ from ..blocks.validate import (SEV_ERROR, SEV_INTEGRITY_WARN, Issue, has_market_
 class Universe(BaseModel):
     kind: Literal["single", "list", "all", "screener"] = "single"
     symbols: list[str] = Field(default_factory=list)   # single(1개)/list(다수)
-    screener: Optional[dict] = None                    # kind=screener: screener spec
+    screener: Optional[dict] = None                    # kind=screener: {"condition": Node}
     exclude_macro: bool = True                         # all: 매크로/자산 지수 제외
 
 
@@ -251,23 +251,28 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
                             "전체·스크리너 유니버스는 정기리밸런싱(scheduled)·상시(always) 진입과 함께 쓰세요.",
                             "universe"))
     if u.kind == "screener":
+        # 스크리너 = 단일 선별 조건(condition). 필터·횡단순위(rank 블록)·그룹 등을
+        # AND/OR로 자유 조합 — 별도 rank 특수 struct 없이 프리미티브 조합으로 일반화.
         sc = u.screener or {}
-        f, rk = sc.get("filter"), sc.get("rank")
-        if not f and not rk:
+        cond = sc.get("condition")
+        if not cond:
             issues.append(Issue("S-univ", SEV_ERROR,
-                                "스크리너는 filter(조건) 또는 rank(순위컷) 중 하나 이상이 필요합니다.", "universe"))
-        if f is not None:
+                                "스크리너는 선별 조건(condition)이 필요합니다.", "universe"))
+        else:
             try:
-                fnode = Node.model_validate(f)
+                cnode = Node.model_validate(cond)
             except Exception:                       # noqa: BLE001 — 잘못된 트리
-                issues.append(Issue("S-univ", SEV_ERROR, "스크리너 filter가 유효한 블록이 아닙니다.", "universe"))
+                issues.append(Issue("S-univ", SEV_ERROR, "스크리너 조건이 유효한 블록이 아닙니다.", "universe"))
             else:
-                issues += list(validate(fnode, valid_refs))
-                if signal_out_type(fnode) != "condition":
+                issues += list(validate(cnode, valid_refs))
+                issues += meaningfulness_issues(cnode, "universe.condition")   # M2·M3
+                if signal_out_type(cnode) != "condition":
                     issues.append(Issue("S-univ", SEV_ERROR,
-                                        "스크리너 filter는 condition(참/거짓) 블록이어야 합니다.", "universe"))
-        if rk is not None and (not rk.get("ref") or not rk.get("top_n")):
-            issues.append(Issue("S-univ", SEV_ERROR, "스크리너 rank는 ref·top_n이 필요합니다.", "universe"))
+                                        "스크리너 조건은 condition(참/거짓) 블록이어야 합니다 "
+                                        "(예: 횡단순위(시총)≤50, 거래대금>임계).", "universe"))
+                if not has_market_source(cnode):                              # M1
+                    issues.append(Issue("M-const", SEV_ERROR,
+                                        "스크리너 조건이 시장 데이터를 참조하지 않습니다.", "universe"))
 
     # 매도 조건 노드
     if pos.exit.condition is not None:

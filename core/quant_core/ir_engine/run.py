@@ -64,10 +64,10 @@ def _root_type_error(strategy: StrategyIR) -> str | None:
     엔진을 직접 호출해도 안전(label 코드가 조건으로 둔갑·연속 점수가 무의미 분할 생성 차단).
     """
     u, pos, sw = strategy.universe, strategy.position, strategy.sweep
-    if u.kind == "screener" and (u.screener or {}).get("filter") is not None:
-        ft = _out_type(Node.model_validate(u.screener["filter"]))
+    if u.kind == "screener" and (u.screener or {}).get("condition") is not None:
+        ft = _out_type(Node.model_validate(u.screener["condition"]))
         if ft != "condition":
-            return f"스크리너 filter는 condition이어야 합니다 (현재: {ft or '알 수 없는 블록'})."
+            return f"스크리너 조건은 condition이어야 합니다 (현재: {ft or '알 수 없는 블록'})."
     if pos.exit.condition is not None and _out_type(pos.exit.condition) != "condition":
         return f"매도 조건은 condition이어야 합니다 (현재: {_out_type(pos.exit.condition) or '알 수 없는 블록'})."
     if pos.overlays.group_label is not None and _out_type(pos.overlays.group_label) != "label":

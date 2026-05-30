@@ -1,6 +1,6 @@
 import type {
   BacktestRunSummary,
-  CommandRow, CommandType, DeviceRow, IrBlockSpec,
+  CommandRow, CommandType, DeviceRow, IndicatorInfo, IrBlockSpec,
   IrStrategyDef, IrStrategyResult,
   MarketContext, NextDayPreview, PortfolioRisk,
   ScreenerField, ScreenerMatch, ScreenerPreset, ScreenerSpecIO, ScreenerUserPreset,
@@ -74,7 +74,7 @@ export const api = {
     }),
   me: () => req<{ id: number; email: string; created_at: string }>("/auth/me"),
 
-  symbols: () => req<{ symbols: SymbolInfo[]; has_master: boolean }>("/symbols"),
+  symbols: () => req<{ symbols: SymbolInfo[]; indicator_catalog: IndicatorInfo[]; has_master: boolean }>("/symbols"),
 
   listStrategies: () => req<StrategyRow[]>("/strategies"),
   getStrategy: (id: number) => req<StrategyRow>(`/strategies/${id}`),

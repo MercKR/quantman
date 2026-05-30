@@ -20,7 +20,8 @@ from . import (calendar_cache, data_cache, kis_master_cache, krx_cache,
                 naver_fundamentals, technical_cache)
 from .config import settings
 from .db import create_db_and_tables
-from .routers import (auth, backtest, calendars as calendars_router, commands,
+from .routers import (admin as admin_router, auth, backtest,
+                       calendars as calendars_router, commands,
                        dataset, ir as ir_router, market, portfolio,
                        preview as preview_router,
                        screener as screener_router,
@@ -570,6 +571,7 @@ app.include_router(preview_router.router)
 app.include_router(calendars_router.router)
 app.include_router(trading_router.router)
 app.include_router(ir_router.router)
+app.include_router(admin_router.router)
 
 
 @app.get("/health")

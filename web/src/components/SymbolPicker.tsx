@@ -133,7 +133,7 @@ export default function SymbolPicker({
   }, [tradableOnly, presets.length]);
 
   const list = symbols.filter((s) =>
-    tradableOnly ? s.tradable : s.indicators.length > 0);
+    tradableOnly ? s.tradable : !!s.has_backtest_data);
   const empty = tradableOnly && list.length === 0 && symbols.length > 0;
 
   const tabOrder = tradableOnly ? TRADABLE_TAB_ORDER : OPERAND_TAB_ORDER;

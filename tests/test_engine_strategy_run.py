@@ -109,11 +109,11 @@ def test_engine_rejects_unsupported_root_boundaries():
                               overlays=Overlays(max_group_pct=30.0, group_label=score))), d)
     assert not r["success"] and "그룹 노출 라벨" in r.get("error", "")
 
-    # 스크리너 filter에 score → 거부 (condition 요구)
+    # 스크리너 조건에 score → 거부 (condition 요구)
     r = run_strategy_ir(StrategyIR(
-        signal=score, universe=Universe(kind="screener", screener={"filter": score.model_dump()}),
+        signal=score, universe=Universe(kind="screener", screener={"condition": score.model_dump()}),
         position=PositionSpec(entry=sched)), d)
-    assert not r["success"] and "스크리너 filter" in r.get("error", "")
+    assert not r["success"] and "스크리너 조건" in r.get("error", "")
 
     # 펼침 분할 라벨에 score → 거부 (label 요구), label이면 통과
     r = run_sweep(StrategyIR(

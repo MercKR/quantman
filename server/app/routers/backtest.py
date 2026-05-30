@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 
 from .. import data_cache, kis_master_cache
-from ..data_cache import get_dataset
 from ..deps import get_current_user
 from ..models import User
 
@@ -29,15 +28,17 @@ def _symbols_version_key() -> tuple[int, int]:
 
 
 def _build_symbols_payload() -> dict:
-    """빌더용 종목 union을 만든다. 비용이 커서 _symbols_cache로 결과를 재사용한다.
+    """빌더용 종목 union을 만든다. 경량 심볼 인덱스(parquet 메타)로 빌드 — 전체
+    지표계산(load_dataset, 22k×compute ≈ 8.5분) 없이 종목 목록만 구성한다.
 
-    1) KIS 마스터의 모든 매수 가능 종목 (trade_symbol 후보, tradable=True)
-    2) 서버 dataset의 종목 (조건 평가/지표용, has indicators)
+    1) KIS 마스터의 매수 가능 종목 (tradable)
+    2) 데이터 보유 종목 (인덱스의 has_ohlc)
 
-    교집합인 종목은 둘 다 (tradable + indicators), 나머지는 한 쪽만.
+    지표 메타는 종목마다 동일(전역)하므로 per-symbol 배열 대신 indicator_catalog로
+    1회만 보낸다(이전엔 22k× 중복 직렬화 = 43.5MB). 빌더는 이 카탈로그로 지표 드롭다운을
+    구성하고, 종목별 실제 보유 여부는 백테스트/검증 시점에 확정된다.
     """
-    data = get_dataset()
-    indic_cols = set(qc.get_all_indicator_columns())
+    index = data_cache.get_symbol_index()      # {sym: {rows, has_ohlc}} — 지표계산 없음
 
     master_list = kis_master_cache.get_master_list()
     has_master = len(master_list) > 0
@@ -59,10 +60,9 @@ def _build_symbols_payload() -> dict:
             return f"국내{kind_label} ({market})"
         return f"{region} {kind_label}".strip()
 
-    # 1) dataset 종목 (지표 평가 가능). 마스터에도 있으면 tradable.
-    for sym, df in sorted(data.items()):
-        cols = [c for c in df.columns if c in indic_cols]
-        has_ohlc = {"Open", "Close"}.issubset(df.columns)
+    # 1) 데이터 보유 종목 (인덱스). 마스터에도 있으면 tradable.
+    for sym in sorted(index):
+        has_ohlc = index[sym]["has_ohlc"]
         # 클래스주 심볼로지: dataset은 대시(BRK-B), 마스터는 슬래시(BRK/B) →
         # 정규화 조회해야 매칭(안 하면 Berkshire 등이 tradable=False가 됨).
         meta = master_by_code.get(sym) or master_by_code.get(sym.replace("-", "/")) or {}
@@ -76,24 +76,15 @@ def _build_symbols_payload() -> dict:
             "tradable": in_master and has_ohlc,
             "has_backtest_data": has_ohlc,
             "kind": kind if in_master else None,
-            "rows": len(df),
-            "indicators": [{
-                "key": c,
-                "label": qc.get_indicator_label(c),
-                "group": qc.get_indicator_group(c),
-                "unit": qc.get_indicator_unit(c),
-                "compare_group": qc.get_indicator_compare_group(c),
-            } for c in cols],
+            "rows": index[sym]["rows"],
         })
         seen.add(sym)
 
-    # 2) 마스터에는 있지만 dataset에 없는 종목 — 라이브 매매만 가능 (지표 없음)
+    # 2) 마스터에는 있지만 데이터 없는 종목 — 라이브 매매만 가능
     for code, meta in master_by_code.items():
         if code in seen:
             continue
-        # §4.8: 미국은 데이터 보유분(S&P500, dataset)만 selectable로 노출한다.
-        # 마스터에만 있고 데이터 없는 미국 종목(~1만+)을 selectable로 두면
-        # 사용자가 골라도 자동매매가 skip_no_data로 조용히 건너뛰어 혼란 → 제외.
+        # §4.8: 미국은 데이터 보유분만 selectable로 노출(데이터 없는 ~1만+ 미국 종목 제외).
         if meta.get("market") in ("NAS", "NYS", "AMS"):
             continue
         kind = meta.get("kind", "stock")
@@ -105,11 +96,19 @@ def _build_symbols_payload() -> dict:
             "has_backtest_data": False,
             "kind": kind,
             "rows": 0,
-            "indicators": [],
         })
 
-    return {"symbols": out, "has_master": has_master,
-            "master_status": kis_master_cache.get_status()}
+    # 전역 지표 카탈로그 — 컬럼별 메타(종목 무관). 빌더 지표 드롭다운용, 1회 전송.
+    indicator_catalog = [{
+        "key": c,
+        "label": qc.get_indicator_label(c),
+        "group": qc.get_indicator_group(c),
+        "unit": qc.get_indicator_unit(c),
+        "compare_group": qc.get_indicator_compare_group(c),
+    } for c in qc.get_all_indicator_columns()]
+
+    return {"symbols": out, "indicator_catalog": indicator_catalog,
+            "has_master": has_master, "master_status": kis_master_cache.get_status()}
 
 
 @router.get("/symbols")

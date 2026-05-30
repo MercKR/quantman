@@ -51,16 +51,14 @@ def required_data(strategy: "StrategyIR") -> set[str]:
     base, fund = set(BASE_INDICATOR_COLS), set(FUND_INDICATOR_COLS)
     pos, sim, sw, u = strategy.position, strategy.simulation, strategy.sweep, strategy.universe
     nodes = [strategy.signal, pos.exit.condition, sw.label, sw.event, pos.overlays.group_label]
-    # 스크리너 자격(filter 조건 + rank 기준)의 참조도 무결성 검사 대상에 포함.
+    # 스크리너 선별 조건(필터+횡단순위 포함)의 데이터 참조도 무결성 검사 대상에 포함.
     if u.kind == "screener" and u.screener:
-        from ..blocks.node import Node, data as _data
-        if u.screener.get("filter"):
+        from ..blocks.node import Node
+        if u.screener.get("condition"):
             try:
-                nodes.append(Node.model_validate(u.screener["filter"]))
+                nodes.append(Node.model_validate(u.screener["condition"]))
             except Exception:                        # noqa: BLE001 — 잘못된 트리는 validate가 처리
                 pass
-        if u.screener.get("rank", {}).get("ref"):
-            nodes.append(_data(u.screener["rank"]["ref"]))
     req: set[str] = {"price.close"}      # 어떤 백테스트도 종가는 필요
 
     # 체결·청산 → 시가/고저 (fill은 이벤트드리븐 on_signal 경로에서만 의미)

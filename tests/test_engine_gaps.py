@@ -227,7 +227,7 @@ def test_sector_exclusion_screener(monkeypatch):
                 inputs={"signal": Node(op="attribute", params={"attr": "Industry"})})
     s = StrategyIR(
         signal=data("momentum_12_1m"),
-        universe=Universe(kind="screener", screener={"filter": excl.model_dump()}),
+        universe=Universe(kind="screener", screener={"condition": excl.model_dump()}),
         position=PositionSpec(entry=Entry(mode="scheduled", rebalance="monthly", top_n=2)),
         simulation=SimSpec(initial_capital=1e7))
     assert not [i for i in validate_strategy(s) if i.is_error]

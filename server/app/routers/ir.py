@@ -10,10 +10,12 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ValidationError
 from sqlmodel import Session, select
 
+import quant_core as qc
 from quant_core.blocks import DatasetMeta, available_refs, catalog_spec
 from quant_core.ir_engine import (StrategyIR, backtest_from_spec, strategy_from_spec,
                                   validate_strategy)
 
+from .. import data_cache
 from ..data_cache import get_dataset, get_manifest
 from ..db import get_session
 from ..deps import get_current_user
@@ -60,7 +62,12 @@ def ir_validate(body: dict, user: User = Depends(get_current_user)):
         return {"ok": False, "issues": [{
             "rule": "schema", "severity": 30, "is_error": True,
             "message": f"정의 형식 오류: {e.errors()[0]['msg']}", "path": "root"}]}
-    issues = validate_strategy(s, valid_refs=available_refs(get_dataset()))
+    # 실시간 검증은 compute 불필요 — 경량 심볼 인덱스 키 ∪ 전역 컬럼으로 유효참조 구성
+    # (전체 지표계산 load_dataset 8.5분에 묶이지 않게). available_refs(dataset)와 동치.
+    valid_refs = (set(data_cache.get_symbol_index().keys())
+                  | {"Open", "High", "Low", "Close", "Volume"}
+                  | set(qc.get_all_indicator_columns()))
+    issues = validate_strategy(s, valid_refs=valid_refs)
     out = [{"rule": i.rule, "severity": i.severity, "is_error": i.is_error,
             "message": i.message, "path": i.path} for i in issues]
     return {"ok": not any(i["is_error"] for i in out), "issues": out}

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from ..expression_parser import (
-    cs_normalize, cs_rank, cs_scale, cs_zscore, group_neutralize, hump,
+    cs_normalize, cs_scale, cs_zscore, group_neutralize, hump,
 )
 from .catalog import BlockDef, register
 from .types import ValueType
@@ -21,7 +21,23 @@ def _cs(op: str, fn, doc: str) -> None:
                       requires_panel=True, doc=doc))
 
 
-_cs("rank", cs_rank, "횡단 순위(0~1)")
+def _ev_rank(resolved, params, ctx):
+    """횡단 순위 — unit·descending로 일반화한 단일 프리미티브.
+
+    unit="pct"(0~1 분위) | "count"(1·2·3… 개수). descending=큰 값이 1위(상위).
+    동순위는 method="first"로 결정적 분해. 기본(pct·오름차순)은 cs_rank와 수치 동일
+    → 기존 팩터 알파 무영향. 선별은 compare로: 상위 50개=rank(…,count,desc)≤50,
+    상위 10%=rank(…,pct,desc)≤0.1 (큰 값이 1위→낮은 분위가 상위)."""
+    x = resolved["signal"]
+    pct = params.get("unit", "pct") != "count"
+    ascending = not bool(params.get("descending", False))
+    return x.rank(axis=1, pct=pct, ascending=ascending, method="first")
+
+
+register(BlockDef("rank", ValueType.SCORE, _ev_rank, slots={"signal": ValueType.SCORE},
+                  param_defaults={"unit": "pct", "descending": False},
+                  requires_panel=True,
+                  doc="횡단 순위 — 분위(0~1) 또는 개수(1·2·3), 큰/작은 값 기준 선택"))
 _cs("zscore", cs_zscore, "횡단 표준화(평균0·표준편차1)")
 _cs("normalize", cs_normalize, "횡단 평균 차감(평균0)")
 _cs("scale", cs_scale, "절대 비중합=1 스케일")

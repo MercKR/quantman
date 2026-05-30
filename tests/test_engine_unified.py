@@ -447,8 +447,13 @@ def test_unified_a1_shape_screener_quarterly_exit():
     d = _multi()
     filt = Node(op="compare", params={"op": ">"},
                 inputs={"left": data("momentum_12_1m"), "right": const(-100.0)})  # 전부 통과(경로 가동)
-    screener = {"filter": filt.model_dump(),
-                "rank": {"ref": "momentum_12_1m", "top_n": 3, "direction": "top"}}
+    # 단일 선별 조건: 필터 ∧ 횡단순위(모멘텀 상위 3, count·desc)
+    rank_cond = Node(op="compare", params={"op": "<="},
+                     inputs={"left": Node(op="rank", params={"descending": True, "unit": "count"},
+                                          inputs={"signal": data("momentum_12_1m")}),
+                             "right": const(3.0)})
+    screener = {"condition": Node(op="logic", params={"logic": "AND"},
+                                  inputs={"0": filt, "1": rank_cond}).model_dump()}
     base = dict(signal=data("momentum_12_1m"),
                 universe=Universe(kind="screener", screener=screener),
                 simulation=SimSpec(initial_capital=1e7))

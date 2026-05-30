@@ -9,6 +9,7 @@ Data fetcher — 가격·매크로 시계열(parquet). 펀더멘털·섹터·상
 import io
 import json
 import os
+import tempfile
 import time
 import requests
 import warnings
@@ -186,6 +187,40 @@ def _merge(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     return combined.sort_index()
 
 
+# ── 데이터셋 세대 마커 (캐시 일관성) ──────────────────────────────────────────
+# 인메모리 캐시(서버 data_cache)가 디스크/다른 프로세스의 변경을 감지하도록, 모든
+# 벌크 변경이 이 토큰을 갱신한다. 서버는 읽기 시 토큰을 싸게 확인해 바뀌었으면 리로드.
+# manage·백필·cron이 별도 프로세스라도 공유 파일이라 라이브 서버가 자가 치유한다.
+# (수동 파일 편집처럼 이 경로를 우회한 변경은 admin invalidate로 강제.)
+_GENERATION_PATH = DATA_DIR / "_generation"
+
+
+def data_generation() -> int:
+    """현재 데이터셋 세대 토큰(쓰기마다 갱신). 파일 없으면 0."""
+    try:
+        return int(_GENERATION_PATH.read_text().strip() or "0")
+    except (FileNotFoundError, ValueError, OSError):
+        return 0
+
+
+def mark_data_dirty() -> int:
+    """데이터셋 변경 기록 — 세대 토큰을 현재 ns로 원자적 갱신. 벌크 변경 완료점·
+    레지스트리 저장·서버 invalidate가 호출(per-file 호출 금지 — churn). 반환=새 토큰."""
+    token = time.time_ns()
+    fd, tmp = tempfile.mkstemp(dir=str(_GENERATION_PATH.parent), prefix="._gen")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(str(token))
+        os.replace(tmp, _GENERATION_PATH)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return token
+
+
 # ── 사용자 종목 관리 ──────────────────────────────────────────────────────────
 
 def load_user_stocks() -> list[dict]:
@@ -347,6 +382,8 @@ def fetch_korean_stocks(codes: list[str], start: str = "2015-01-01",
             print(f"  진행: {i+1}/{len(codes)} (성공 {n_ok} · 신규없음 {n_skip} · 실패 {n_fail})")
 
     print(f"한국 종목 fetch 완료: 총 {len(codes)} → 성공 {n_ok} · 신규없음 {n_skip} · 실패 {n_fail}")
+    if n_ok:
+        mark_data_dirty()       # 데이터 변경 — 라이브 캐시 자가 리로드 신호
     return {"ok": n_ok, "skip": n_skip, "fail": n_fail}
 
 
@@ -446,6 +483,8 @@ def fetch_managed_overseas(limit: int | None = None, verbose: bool = False,
     recent_start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
     done = _fetch_overseas_batched(upd_codes, recent_start, batch, verbose)
     done += _fetch_overseas_batched(new_codes, backfill_start, batch, verbose)
+    if done:
+        mark_data_dirty()       # 데이터 변경 — 라이브 캐시 자가 리로드 신호
     return done
 
 
@@ -765,6 +804,7 @@ def fetch_all(verbose: bool = True) -> dict[str, pd.DataFrame]:
             else:
                 print(f"  {name}: 데이터 없음")
 
+    mark_data_dirty()           # 데이터 변경 — 라이브 캐시 자가 리로드 신호
     return results
 
 
@@ -812,6 +852,33 @@ def load_fund_all() -> dict[str, pd.DataFrame]:
         if not df.empty:
             result[stock["code"]] = df
     return result
+
+
+def dataset_symbol_index() -> dict[str, dict]:
+    """load_all과 동일한 심볼 집합을 **데이터 로드·지표계산 없이** parquet 메타(footer)만
+    읽어 {sym: {"rows", "has_ohlc"}}로 반환.
+
+    종목 목록 응답(/symbols)·참조 검증(/ir/validate)이 전체 지표계산(load_dataset,
+    22k×compute_all ≈ 8.5분)에 묶이지 않도록 분리한 경량 인덱스. footer만 읽어
+    DataFrame을 메모리에 적재하지 않는다(저메모리·고속)."""
+    import pyarrow.parquet as pq
+    names = (list(ALL_SYMBOLS)
+             + [s["name"] for s in load_user_stocks()]
+             + load_managed_kr_codes()
+             + [s["code"] for s in load_managed_overseas()])
+    out: dict[str, dict] = {}
+    for sym in dict.fromkeys(names):           # 순서보존 dedupe
+        p = _parquet_path(sym)
+        if not p.exists():
+            continue
+        try:
+            md = pq.read_metadata(p)
+            cols = set(md.schema.names)
+        except Exception:                       # noqa: BLE001 — 손상 parquet skip
+            continue
+        out[sym] = {"rows": md.num_rows,
+                    "has_ohlc": "Open" in cols and "Close" in cols}
+    return out
 
 
 if __name__ == "__main__":

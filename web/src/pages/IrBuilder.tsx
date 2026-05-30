@@ -5,7 +5,7 @@ import SentenceTree, { type Catalog } from "../components/SentenceTree";
 import EquityChart from "../components/EquityChart";
 import MultiSymbolPicker from "../components/MultiSymbolPicker";
 import type {
-  IrBlockSpec, IrEventStat, IrNode, IrStrategyDef, IrStrategyResult, SymbolInfo,
+  IndicatorInfo, IrBlockSpec, IrEventStat, IrNode, IrStrategyDef, IrStrategyResult, SymbolInfo,
 } from "../types";
 
 /**
@@ -72,6 +72,7 @@ type SweepAxis = "none" | "condition" | "parameter" | "asset" | "time";
 export default function IrBuilder() {
   const [catalogList, setCatalogList] = useState<IrBlockSpec[]>([]);
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
+  const [indicatorCatalog, setIndicatorCatalog] = useState<IndicatorInfo[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [validation, setValidation] = useState<IrValidation | null>(null);
 
@@ -111,12 +112,9 @@ export default function IrBuilder() {
   const [sweepWindows, setSweepWindows] = useState("5, 10, 20");
   const [eventBasis, setEventBasis] = useState("close");   // close|intraday|excess
 
-  // 유니버스 — 스크리너 (factor)
+  // 유니버스 — 스크리너: 단일 선별 조건(필터+횡단순위를 자유 조합한 condition)
   const [useScreener, setUseScreener] = useState(false);
-  const [screenerFilter, setScreenerFilter] = useState<IrNode | null>(null);
-  const [rankRef, setRankRef] = useState("");
-  const [rankTopN, setRankTopN] = useState<number | "">(50);
-  const [rankDir, setRankDir] = useState("top");
+  const [screenerCond, setScreenerCond] = useState<IrNode | null>(null);
 
   const [capital, setCapital] = useState(10_000_000);
   // 시뮬레이션 (A5)
@@ -160,7 +158,11 @@ export default function IrBuilder() {
 
   useEffect(() => {
     Promise.all([api.irCatalog(), api.symbols()])
-      .then(([cat, sym]) => { setCatalogList(cat.blocks); setSymbols(sym.symbols); })
+      .then(([cat, sym]) => {
+        setCatalogList(cat.blocks);
+        setSymbols(sym.symbols);
+        setIndicatorCatalog(sym.indicator_catalog ?? []);
+      })
       .catch((e) => setLoadErr(e.message ?? String(e)));
   }, []);
 
@@ -202,13 +204,10 @@ export default function IrBuilder() {
     const u = def.universe ?? { kind: "single" };
     if (u.kind === "screener") {
       setUseScreener(true);
-      const sc = u.screener ?? {};
-      setScreenerFilter(sc.filter ?? null);
-      if (sc.rank) {
-        setRankRef(sc.rank.ref ?? "");
-        setRankTopN(numOrEmpty(sc.rank.top_n));
-        setRankDir(sc.rank.direction ?? "top");
-      }
+      // 단일 선별 조건. 옛 형식(filter)은 condition으로 흡수(경량 마이그레이션);
+      // 옛 rank 순위컷은 횡단순위 블록으로 재작성 필요(출시 전이라 자동변환 생략).
+      const sc = (u.screener ?? {}) as { condition?: IrNode; filter?: IrNode };
+      setScreenerCond(sc.condition ?? sc.filter ?? null);
       setUniverseSymbols("");
     } else {
       setUseScreener(false);
@@ -281,11 +280,9 @@ export default function IrBuilder() {
   }
 
   const dataSymbols = useMemo(() => symbols.filter((s) => s.has_backtest_data), [symbols]);
-  const selfIndicators = useMemo(() => {
-    const first = universeSymbols.split(",")[0]?.trim();
-    return (symbols.find((s) => s.symbol === first)?.indicators
-      ?? dataSymbols[0]?.indicators ?? []);
-  }, [symbols, dataSymbols, universeSymbols]);
+  // 지표 메타는 전역(컬럼별·종목 무관) — /symbols의 indicator_catalog 1회 수신분 사용.
+  // (이전엔 종목별 indicators 배열을 골랐으나, 메타가 동일해 전역 카탈로그로 대체.)
+  const selfIndicators = indicatorCatalog;
 
   // 신호 출력 타입 자동 감지(condition=룰 트리거 · score=팩터 알파). 강제하지 않음.
   const signalType = signal ? catalog.get(signal.op)?.out_type : undefined;
@@ -316,11 +313,7 @@ export default function IrBuilder() {
     // ── 유니버스 ──
     let universe: Record<string, unknown>;
     if (useScreener) {
-      const screener: Record<string, unknown> = {};
-      if (screenerFilter) screener.filter = screenerFilter;
-      if (rankRef.trim() && rankTopN !== "")
-        screener.rank = { ref: rankRef.trim(), top_n: rankTopN, direction: rankDir };
-      universe = { kind: "screener", screener };
+      universe = { kind: "screener", screener: { condition: screenerCond } };
     } else {
       universe = syms.length
         ? { kind: syms.length > 1 ? "list" : "single", symbols: syms }
@@ -493,35 +486,19 @@ export default function IrBuilder() {
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
             <input type="checkbox" checked={useScreener}
                    onChange={(e) => setUseScreener(e.target.checked)} />
-            스크리너로 종목 선별 (자격 필터 + 순위컷) — 켜면 위 종목 대신 적용 · 정기/상시 진입 전용
+            스크리너로 종목 선별 — 켜면 위 종목 대신 적용 · 정기/상시 진입 전용
           </label>
           {useScreener && (
             <div style={{ marginTop: 8 }}>
               <div className="muted" style={{ fontSize: 13, marginBottom: 6 }}>
-                자격 필터(참/거짓 조건)와 순위컷을 <b>AND</b>로 묶어 매 리밸런싱일마다 후보 유니버스를 추립니다.
-                그 후보 위에서 다시 신호와 아래 "진입·포지션"의 상위 N·매매 방향이 실제 보유 종목을 정합니다(2단계).
+                매 리밸런싱일마다 이 <b>선별 조건</b>을 만족하는 종목이 후보 유니버스가 됩니다.
+                필터와 <b>횡단 순위</b>를 한 조건에서 자유 조합하세요 — 예: <i>거래대금 &gt; 100억 그리고
+                시가총액의 횡단순위(큰 값·개수) ≤ 50</i> (상위 50종목). 순위 단위를 분위(0~1)로 바꾸면
+                상위 %로도 선별됩니다. 후보 위에서 신호·진입·포지션이 실제 보유를 정합니다(2단계).
               </div>
-              <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
-                자격 필터 (예: 섹터 제외·거래대금 조건). 비우면 순위컷만 적용.</div>
-              <SentenceTree node={screenerFilter} catalog={catalog} symbols={symbols}
+              <SentenceTree node={screenerCond} catalog={catalog} symbols={symbols}
                          selfIndicators={selfIndicators} requiredType="condition"
-                         onChange={setScreenerFilter} />
-              <div className="lab-row" style={{ marginTop: 8 }}>
-                <label className="lab-field">순위 기준 (지표)
-                  <input type="text" value={rankRef} placeholder="예: market_cap, adv_20d"
-                         onChange={(e) => setRankRef(e.target.value)} />
-                </label>
-                <label className="lab-field">컷 N (상위/하위 종목 수)
-                  <input type="number" value={rankTopN}
-                         onChange={(e) => setRankTopN(e.target.value === "" ? "" : Number(e.target.value))} />
-                </label>
-                <label className="lab-field">순위 방향
-                  <select value={rankDir} onChange={(e) => setRankDir(e.target.value)}>
-                    <option value="top">상위(큰 값)</option>
-                    <option value="bottom">하위(작은 값)</option>
-                  </select>
-                </label>
-              </div>
+                         onChange={setScreenerCond} />
             </div>
           )}
         </div>

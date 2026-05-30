@@ -1,7 +1,8 @@
-"""Stage 3 — 백테스트 스크리너 유니버스(PIT) 검증.
+"""백테스트 스크리너 유니버스(PIT) — 단일 선별 조건(condition) 검증.
 
-screener = filter(조건 Node, 임계) + rank(순위컷)의 시점별 AND 자격 마스크. 각 리밸런스 시점에
-그 날의 값으로 자격 판정(PIT). 기존엔 validate가 차단하던 stub — 데이터 연동(market_cap) 후 해제.
+스크리너 = 필터·횡단순위(rank 블록)를 AND/OR로 조합한 단일 condition의 시점별 자격 마스크.
+각 리밸런스 시점에 그 날의 값으로 PIT 판정. rank 블록의 unit(개수/분위)·descending으로
+상위 N개·상위 X% 모두 한 프리미티브로 표현(별도 rank struct 없음).
 
     cd platform && pytest tests/test_screener.py -v
 """
@@ -32,49 +33,99 @@ def _ds():
             "C": mk(10 + 0.3 * t, 3), "D": mk(8 + 0.3 * t, 2)}
 
 
-def _spec(screener: dict) -> dict:
+# ── 조건 빌더 (프리미티브 조합) ────────────────────────────────────────────────
+
+def _data(ref):
+    return {"op": "data", "params": {"ref": ref}}
+
+def _const(v):
+    return {"op": "const", "params": {"value": v}}
+
+def _rank_cond(ref, cut, descending=True, unit="count", op="<="):
+    """횡단순위 선별: rank(ref, descending, unit) op cut. 상위 N개=count·desc, 상위 X%=pct·desc."""
+    return {"op": "compare", "params": {"op": op},
+            "inputs": {"left": {"op": "rank",
+                                "params": {"descending": descending, "unit": unit},
+                                "inputs": {"signal": _data(ref)}},
+                       "right": _const(cut)}}
+
+def _cmp(ref, op, val):
+    return {"op": "compare", "params": {"op": op},
+            "inputs": {"left": _data(ref), "right": _const(val)}}
+
+def _and(*conds):
+    return {"op": "logic", "params": {"logic": "AND"},
+            "inputs": {str(i): c for i, c in enumerate(conds)}}
+
+
+def _spec(condition) -> dict:
     return {"signal": {"op": "data", "params": {"ref": "momentum_12_1m"}},
-            "universe": {"kind": "screener", "screener": screener},
+            "universe": {"kind": "screener",
+                         "screener": ({"condition": condition} if condition else {})},
             "position": {"direction": "long", "sizing": {"mode": "equal_weight"},
                          "entry": {"mode": "scheduled", "rebalance": "monthly", "top_n": 2}},
             "simulation": {"initial_capital": 1e7}}
 
 
+# ── 실행 ───────────────────────────────────────────────────────────────────────
+
 def test_screener_rank_topn_runs():
-    res = strategy_from_spec(_spec({"rank": {"ref": "market_cap", "top_n": 2, "direction": "top"}}), _ds())
+    res = strategy_from_spec(_spec(_rank_cond("market_cap", 2)), _ds())
     assert res["success"], res
     assert len(res["equity"]) > 0
 
 
 def test_screener_filter_threshold_runs():
-    flt = {"filter": {"op": "compare", "params": {"op": ">"},
-                      "inputs": {"left": {"op": "data", "params": {"ref": "market_cap"}},
-                                 "right": {"op": "const", "params": {"value": 50.0}}}}}
-    res = strategy_from_spec(_spec(flt), _ds())
+    res = strategy_from_spec(_spec(_cmp("market_cap", ">", 50.0)), _ds())
     assert res["success"], res
 
 
-def test_screener_pit_eligibility_flips():
-    """리밸런스 시점값으로 자격 판정(PIT) — 정적 스냅샷이 아님."""
+def test_screener_filter_and_rank_combined_runs():
+    """필터 ∧ 횡단순위를 한 조건으로 — 거래대금류 필터 + 시총 상위 N."""
+    cond = _and(_cmp("market_cap", ">", 5.0), _rank_cond("market_cap", 2))
+    res = strategy_from_spec(_spec(cond), _ds())
+    assert res["success"], res
+
+
+# ── PIT 자격 (시점별) ──────────────────────────────────────────────────────────
+
+def test_screener_pit_eligibility_flips_count():
+    """상위 N개(count·desc) — 시점값으로 자격 판정(PIT), 정적 스냅샷 아님."""
     ctx = EvalContext.from_dataset(_ds())
-    elig = _screener_mask({"rank": {"ref": "market_cap", "top_n": 2, "direction": "top"}},
-                          ctx, ["A", "B", "C", "D"])
+    elig = _screener_mask({"condition": _rank_cond("market_cap", 2)}, ctx, ["A", "B", "C", "D"])
     assert [c for c in elig.columns if elig.iloc[0][c]] == ["A", "B"]    # 초기 대형
     assert [c for c in elig.columns if elig.iloc[-1][c]] == ["C", "D"]   # 후기 대형
 
 
-def test_screener_requires_filter_or_rank():
-    res = strategy_from_spec(_spec({}), _ds())
+def test_screener_pit_eligibility_percentile():
+    """상위 X%(pct·desc) — 4종목 상위 50% = 2종목. count와 동일 결과여야."""
+    ctx = EvalContext.from_dataset(_ds())
+    elig = _screener_mask({"condition": _rank_cond("market_cap", 0.5, unit="pct")},
+                          ctx, ["A", "B", "C", "D"])
+    assert [c for c in elig.columns if elig.iloc[0][c]] == ["A", "B"]
+    assert [c for c in elig.columns if elig.iloc[-1][c]] == ["C", "D"]
+
+
+def test_screener_rank_ascending_selects_smallest():
+    """descending=False → 작은 값이 상위. 시총 하위 2개(초기 C·D)."""
+    ctx = EvalContext.from_dataset(_ds())
+    elig = _screener_mask({"condition": _rank_cond("market_cap", 2, descending=False)},
+                          ctx, ["A", "B", "C", "D"])
+    assert [c for c in elig.columns if elig.iloc[0][c]] == ["C", "D"]    # 초기 소형
+
+
+# ── 검증 게이트 ────────────────────────────────────────────────────────────────
+
+def test_screener_requires_condition():
+    res = strategy_from_spec(_spec(None), _ds())
     assert not res["success"]
     assert any(i["rule"] == "S-univ" for i in res["issues"])
 
 
 def test_screener_rejects_on_signal():
-    spec = _spec({"rank": {"ref": "market_cap", "top_n": 2}})
+    spec = _spec(_rank_cond("market_cap", 2))
     spec["position"]["entry"] = {"mode": "on_signal"}
-    spec["signal"] = {"op": "compare", "params": {"op": ">"},
-                      "inputs": {"left": {"op": "data", "params": {"ref": "market_cap"}},
-                                 "right": {"op": "const", "params": {"value": 50.0}}}}
+    spec["signal"] = _cmp("market_cap", ">", 50.0)
     res = strategy_from_spec(spec, _ds())
     assert not res["success"]
     assert any(i["rule"] == "S-univ" for i in res["issues"])

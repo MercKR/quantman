@@ -190,8 +190,8 @@ def _evaluate_ir_strategy(strat_def: dict, dataset: dict, cash: float,
         out["skipped"].append({"reason": "유니버스에 종목이 없습니다."})
         return out
     screener = u.screener or {}
-    filt = (Node.model_validate(screener["filter"])
-            if u.kind == "screener" and screener.get("filter") else None)
+    filt = (Node.model_validate(screener["condition"])
+            if u.kind == "screener" and screener.get("condition") else None)
     ds = _scoped(dataset, syms, s.signal, filt, pos.overlays.group_label)
     ctx = EvalContext.from_dataset(ds)
     try:

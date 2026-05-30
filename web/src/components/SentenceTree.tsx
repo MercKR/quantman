@@ -28,7 +28,7 @@ export function makeNode(op: string, catalog: Catalog): IrNode {
 }
 
 interface SymLite {
-  symbol: string; name?: string; indicators: IndicatorInfo[];
+  symbol: string; name?: string;
   has_backtest_data?: boolean; category?: string;
 }
 interface Props {
@@ -199,10 +199,9 @@ function DataLeaf({ node, symbols, selfIndicators, onChange }: Props & { node: I
   const ref = String(node.params?.ref ?? "__SELF__.Close");
   const [symPart, indPart] = ref.includes(".")
     ? [ref.slice(0, ref.indexOf(".")), ref.slice(ref.indexOf(".") + 1)] : ["__SELF__", ref];
-  const indicatorsFor = (sym: string): IndicatorInfo[] => {
-    if (sym === "__SELF__") return [...PRICE_COLS, ...selfIndicators];
-    return [...PRICE_COLS, ...(symbols.find((x) => x.symbol === sym)?.indicators ?? [])];
-  };
+  // 지표 메타는 전역 카탈로그(selfIndicators)로 통일 — 종목별 지표 배열은 페이로드에서
+  // 제거됨(43.5MB→경량). 실제 종목별 보유 여부는 백테스트/검증 시점에 확정.
+  const indicators: IndicatorInfo[] = [...PRICE_COLS, ...selfIndicators];
   const setRef = (sym: string, ind: string) =>
     onChange({ ...node, params: { ...node.params, ref: `${sym}.${ind}` } });
   return (
@@ -211,7 +210,7 @@ function DataLeaf({ node, symbols, selfIndicators, onChange }: Props & { node: I
                        onChange={(sym) => setRef(sym, indPart)} />
       <span className="st-of">의</span>
       <select className="st-param" value={indPart} onChange={(e) => setRef(symPart, e.target.value)}>
-        {indicatorsFor(symPart).map((i) => <option key={i.key} value={i.key}>{i.label}</option>)}
+        {indicators.map((i) => <option key={i.key} value={i.key}>{i.label}</option>)}
       </select>
       <button type="button" className="st-x" title="삭제" onClick={() => onChange(null)}>✕</button>
     </span>
