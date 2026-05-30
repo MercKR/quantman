@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 from ..blocks.catalog import get, has
 from ..blocks.integrity import DatasetMeta, integrity_issues
 from ..blocks.node import Node
-from ..blocks.validate import SEV_ERROR, SEV_INTEGRITY_WARN, Issue, prioritize, validate
+from ..blocks.validate import (SEV_ERROR, SEV_INTEGRITY_WARN, Issue, has_market_source,
+                               meaningfulness_issues, prioritize, validate)
 
 # ── 유니버스 (대상 종목 집합) ─────────────────────────────────────────────────
 
@@ -129,6 +130,10 @@ class SimSpec(BaseModel):
     short_borrow_pct: Optional[float] = None
     funding_cost_pct: Optional[float] = None
     rfr_pct: Optional[float] = None
+    # 유지증거금률(%) — 레버리지 포지션의 자기자본비율(nav/gross)이 이 값 미만이면 마진콜:
+    # 목표 레버리지(nav×L)로 강제 복원(nav≤0이면 전량 청산). None=꺼짐.
+    # 일봉 종가 기준 체크 — intraday 데이터 없음(가짜 폴백 안 함, §7.6 정직한 한계).
+    maintenance_margin_pct: Optional[float] = None
     start: Optional[str] = None
     end: Optional[str] = None
     period_split: Literal["single", "walk_forward", "oos", "kfold"] = "single"
@@ -175,6 +180,7 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
                       meta: Optional[DatasetMeta] = None) -> list[Issue]:
     """StrategyIR 정합성 — 블록 메타규칙 + 구조 규칙(신호타입×진입 등) + 무결성."""
     issues: list[Issue] = list(validate(s.signal, valid_refs))
+    issues += meaningfulness_issues(s.signal, "signal")   # M2·M3 — 동어반복·모순·퇴화 윈도우
     st = signal_out_type(s.signal)
     ent, pos, u = s.position.entry, s.position, s.universe
 
@@ -184,6 +190,13 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
     if st is not None and st not in ("condition", "score"):
         issues.append(Issue("S-signal", SEV_ERROR,
                             "최상위 신호는 condition(참/거짓) 또는 score(점수) 블록이어야 합니다.", "signal"))
+
+    # M1 — 신호는 시장 데이터를 ≥1회 참조해야 한다. 순수 상수·산술식은 시장에 반응하지
+    # 않아(예: const(5)>const(0) → 매일 매수) 백테스트가 무의미하다.
+    if st in ("condition", "score") and not has_market_source(s.signal):
+        issues.append(Issue("M-const", SEV_ERROR,
+                            "신호가 시장 데이터를 참조하지 않습니다 — 상수·산술만으론 시장에 "
+                            "반응하지 않아 백테스트가 무의미합니다.", "signal"))
 
     # 신호 타입 × 진입/방향 호환
     if ent.mode == "on_signal" and st != "condition":
@@ -200,6 +213,23 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
                             "임계 선택(threshold)은 신호가 score(점수)여야 합니다 — "
                             "참/거짓 신호는 그 자체가 임계 선택이므로 condition 신호를 쓰세요.",
                             "position.entry"))
+
+    # M4 — 선택 파라미터 범위 (퇴화 선택 방지: top_n=0/음수, top_pct 범위밖이면 조용한 무거래)
+    if ent.top_n is not None and ent.top_n < 1:
+        issues.append(Issue("M-select", SEV_ERROR, "top_n은 1 이상이어야 합니다.", "position.entry"))
+    if ent.top_pct is not None and not (0 < ent.top_pct <= 100):
+        issues.append(Issue("M-select", SEV_ERROR, "top_pct는 0 초과 100 이하여야 합니다.", "position.entry"))
+
+    # M6 — 유니버스/사이징 공허 조합 (경고: 선택이 무의미하거나 매수가 안 됨)
+    if u.kind in ("single", "list") and ent.top_n is not None and ent.top_n > len(u.symbols):
+        issues.append(Issue("M-vacuous", SEV_INTEGRITY_WARN,
+                            f"top_n({ent.top_n})이 유니버스 종목 수({len(u.symbols)})보다 많습니다 — 전체 선택과 동일.",
+                            "position.entry"))
+    if (pos.sizing.mode == "fixed_weight" and pos.sizing.weights
+            and u.kind in ("single", "list") and not (set(pos.sizing.weights) & set(u.symbols))):
+        issues.append(Issue("M-vacuous", SEV_INTEGRITY_WARN,
+                            "fixed_weight 가중치에 유니버스 종목이 하나도 없습니다 — 매수되지 않습니다.",
+                            "position.sizing"))
 
     # 포지션 짝 제약 (비전 §3.3)
     if ent.mode in ("scheduled", "always") and pos.sizing.mode in ("fixed_amount", "pct_cash"):
@@ -242,8 +272,27 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
     # 매도 조건 노드
     if pos.exit.condition is not None:
         issues += list(validate(pos.exit.condition, valid_refs))
+        issues += meaningfulness_issues(pos.exit.condition, "exit.condition")   # M2·M3
+        if not has_market_source(pos.exit.condition):                          # M1
+            issues.append(Issue("M-const", SEV_ERROR,
+                                "매도 조건이 시장 데이터를 참조하지 않습니다 — 항상 청산/미청산되어 무의미합니다.",
+                                "exit.condition"))
         if signal_out_type(pos.exit.condition) != "condition":
             issues.append(Issue("S-exit", SEV_ERROR, "매도 조건은 condition 블록이어야 합니다.", "exit.condition"))
+
+    # M5 — 청산 규칙 부호·범위 (관례: 익절>0%, 손절<0%, 보유기간≥1, 트레일링>0).
+    # 부호가 틀리면 즉시청산/미청산으로 조용히 퇴화한다.
+    ex = pos.exit
+    if ex.hold_days is not None and ex.hold_days < 1:
+        issues.append(Issue("M-exit", SEV_ERROR, "보유기간(hold_days)은 1 이상이어야 합니다.", "position.exit"))
+    if ex.take_profit is not None and ex.take_profit <= 0:
+        issues.append(Issue("M-exit", SEV_ERROR, "익절(take_profit)은 양수(%)여야 합니다.", "position.exit"))
+    if ex.stop_loss is not None and ex.stop_loss >= 0:
+        issues.append(Issue("M-exit", SEV_ERROR, "손절(stop_loss)은 음수(%)여야 합니다.", "position.exit"))
+    if ex.trail_pct is not None and ex.trail_pct <= 0:
+        issues.append(Issue("M-exit", SEV_ERROR, "트레일링(trail_pct)은 양수(%)여야 합니다.", "position.exit"))
+    if ex.trail_atr_mult is not None and ex.trail_atr_mult <= 0:
+        issues.append(Issue("M-exit", SEV_ERROR, "ATR 트레일링 배수(trail_atr_mult)는 양수여야 합니다.", "position.exit"))
 
     # 오버레이 (그룹 캡·낙폭 제어)
     ov = pos.overlays

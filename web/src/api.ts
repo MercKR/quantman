@@ -53,6 +53,12 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return data;
 }
 
+// 논리 정합성 검증 이슈 (서버 validate_strategy → /ir/validate). is_error=true면 차단.
+export type IrIssue = {
+  rule: string; severity: number; is_error: boolean; message: string; path: string;
+};
+export type IrValidation = { ok: boolean; issues: IrIssue[] };
+
 export const api = {
   signup: (email: string, password: string) =>
     req<{ access_token: string }>("/auth/signup", {
@@ -169,6 +175,11 @@ export const api = {
   // StrategyIR 전체 구조(유니버스·신호·포지션 4부품·시뮬·펼침) 백테스트
   runIrStrategy: (strategy: Record<string, unknown>) =>
     req<IrStrategyResult>("/ir/strategy", {
+      method: "POST", body: JSON.stringify(strategy),
+    }),
+  // 논리 정합성 실시간 검증 — 백테스트 없이 이슈 목록(에러/경고) 반환.
+  validateIr: (strategy: Record<string, unknown>) =>
+    req<IrValidation>("/ir/validate", {
       method: "POST", body: JSON.stringify(strategy),
     }),
 };

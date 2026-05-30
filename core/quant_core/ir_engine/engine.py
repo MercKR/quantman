@@ -29,7 +29,7 @@ from ..backtest import (
 )
 from ..blocks import EvalContext, Node, evaluate, referenced_symbols, select_symbol
 from ..blocks.catalog import get, has
-from ..exec_defaults import round_to_tick
+from ..exec_defaults import margin_rate, round_to_tick
 from .metrics import finalize_metrics
 from .spec import StrategyIR
 
@@ -697,6 +697,7 @@ def _run_scheduled(strategy: StrategyIR, dataset: dict) -> dict:
     rfr_daily = (sim.rfr_pct / 100.0 / TRADING_DAYS) if sim.rfr_pct else 0.0
     borrow_daily = (sim.short_borrow_pct / 100.0 / TRADING_DAYS) if sim.short_borrow_pct else 0.0
     funding_daily = (sim.funding_cost_pct / 100.0 / TRADING_DAYS) if sim.funding_cost_pct else 0.0
+    maint = (sim.maintenance_margin_pct / 100.0) if sim.maintenance_margin_pct else None
     defer = (sim.fill == "next_open")
     period = "daily" if ent.mode == "always" else ent.rebalance
 
@@ -734,6 +735,11 @@ def _run_scheduled(strategy: StrategyIR, dataset: dict) -> dict:
         거래세는 매도(롱청산·숏개시) 단방향. 트레이드는 전량 청산 시에만 기록(라운드트립)."""
         nonlocal cash, turnover_notional
         reasons = reasons or {}
+        # 매수여력 = NAV×L. 현금이 floor_cash까지 내려가도록(=차입) 허용해 Σ|w|=lev 타깃을 채운다.
+        # lev=1이면 floor_cash=0 → 캡이 정확히 기존 현금캡(cash//per)과 동일(무레버리지 무영향).
+        nav_exec = cash + sum(p.shares * close[s][i] for s, p in positions.items()
+                              if not np.isnan(close[s][i]))
+        floor_cash = nav_exec * (1.0 - lev)
         allsyms = set(positions) | set(target)
         for s in allsyms:                              # 거래 의도 노티오널(턴오버 지표)
             cur = positions[s].shares if s in positions else 0.0
@@ -790,13 +796,13 @@ def _run_scheduled(strategy: StrategyIR, dataset: dict) -> dict:
                     _record(s, p, cover, px, i, reasons.get(s, "리밸런스"))
                     del positions[s]
                 if tgt > 0:                            # 부호교차 → 롱 개시
-                    buy = min(int(tgt), int(cash // per)) if per > 0 else 0
+                    buy = min(int(tgt), int((cash - floor_cash) // per)) if per > 0 else 0
                     if buy > 0:
                         cash -= buy * per
                         positions[s] = Position(legs=[(s, 1.0)], shares=buy, entry_price=px,
                                                 entry_i=i, peak_high=px, peak_close=px)
-            else:                                      # 롱 증가/신규 — 현금 한도
-                buy = min(int(tgt - cur), int(cash // per)) if per > 0 else 0
+            else:                                      # 롱 증가/신규 — 매수여력(NAV×L) 한도
+                buy = min(int(tgt - cur), int((cash - floor_cash) // per)) if per > 0 else 0
                 if buy <= 0:
                     continue
                 cash -= buy * per
@@ -871,15 +877,28 @@ def _run_scheduled(strategy: StrategyIR, dataset: dict) -> dict:
         if (borrow_daily or funding_daily) and positions:   # 숏 차입·레버리지 펀딩
             sv = sum(abs(p.shares) * close[s][i] for s, p in positions.items()
                      if p.shares < 0 and not np.isnan(close[s][i]))
-            gross = sum(abs(p.shares) * close[s][i] for s, p in positions.items()
-                        if not np.isnan(close[s][i]))
+            # 증거금 요구액 Σ(margin_rate×노티오널). 선물은 부분증거금이라 nav를 넘는
+            # 부분만 현금 차입 → 그만큼만 펀딩. 현금주식(rate=1)이면 gross 그대로(기존 동일).
+            margin_req = sum(margin_rate(s) * abs(p.shares) * close[s][i]
+                             for s, p in positions.items() if not np.isnan(close[s][i]))
             navv = cash + sum(p.shares * close[s][i] for s, p in positions.items()
                               if not np.isnan(close[s][i]))
-            cash -= sv * borrow_daily + max(0.0, gross - navv) * funding_daily
+            cash -= sv * borrow_daily + max(0.0, margin_req - navv) * funding_daily
         if pending is not None and defer:
             _execute(pending[0], i, pending[1])
             pending = None
-        if _is_rebalance(i, last, master, period, ent.every_n_days):
+        mc_target = None                               # 마진콜 — EOD 자기자본비율(nav/gross)<유지율
+        if maint and positions:
+            navv = cash + sum(p.shares * close[s][i] for s, p in positions.items()
+                              if not np.isnan(close[s][i]))
+            grossv = sum(abs(p.shares) * close[s][i] for s, p in positions.items()
+                         if not np.isnan(close[s][i]))
+            if grossv > 0 and navv < maint * grossv:   # 목표 레버리지(nav×L)로 강제 복원(nav≤0이면 전량)
+                scale = min(1.0, max(0.0, navv * lev / grossv)) if navv > 0 else 0.0
+                mc_target = {s: int(positions[s].shares * scale) for s in positions}
+        if mc_target is not None:
+            target, reasons, act = mc_target, {s: "마진콜" for s in positions}, True
+        elif _is_rebalance(i, last, master, period, ent.every_n_days):
             excluded = set()
             target, reasons = _compute_target(i, d), {}
             last = i

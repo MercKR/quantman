@@ -159,6 +159,65 @@ def is_valid(node: Node, valid_refs: set[str] | None = None) -> bool:
     return not any(i.is_error for i in validate(node, valid_refs))
 
 
+# ── 의미 검증 (M-rules) — 타입은 유효하나 의미가 공허·모순인 트리 ───────────────
+# validate()는 타입·구조만 본다. 여기선 "백테스트가 무의미해지는" 논리 퇴화를
+# 정적으로 잡는다(완벽한 정리증명은 불가능 — 열거 가능한 흔한 클래스만 포착).
+
+_DEGEN_BINARY_OPS = {"-", "/"}          # X−X≡0, X/X≡1 → 상수(무의미)
+_WINDOWED_PARAMS = ("window", "lag", "days")   # 음수=런타임 오류, 0=전기간 NaN→무거래
+
+
+def has_market_source(node: Node) -> bool:
+    """트리에 const가 아닌 소스 잎(data·attribute·calendar 등)이 ≥1개 있는가.
+
+    모든 잎이 const면 시장에 반응하지 않는 순수 상수/산술식 → 신호로 무의미.
+    (예: const(5)>const(0) → 항상 매수. attribute/calendar는 종목·시점에 따라
+    변하므로 정당한 소스로 인정.)
+    """
+    if not node.inputs:                  # 터미널(잎)
+        return node.op != OP_CONST
+    return any(has_market_source(c) for c in node.inputs.values())
+
+
+def meaningfulness_issues(node: Node, path: str = "signal") -> list[Issue]:
+    """타입 유효하나 의미 공허·모순인 패턴 검출 — 동어반복·모순·자기참조·퇴화 윈도우.
+
+    호출자가 signal·exit.condition 등 트리 루트마다 적용한다. M1(시장참조)은
+    트리 전체 속성이라 has_market_source로 호출자(validate_strategy)가 별도 검사.
+    """
+    issues: list[Issue] = []
+    _walk_meaning(node, path, issues)
+    return issues
+
+
+def _walk_meaning(node: Node, path: str, issues: list[Issue]) -> None:
+    # M3 — 윈도우/지연 파라미터 ≥ 1 (음수=eval 크래시, 0=전기간 NaN→조용한 무거래)
+    for p in _WINDOWED_PARAMS:
+        v = node.params.get(p)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v < 1:
+            issues.append(Issue("M-window", SEV_ERROR,
+                                f"{node.op}의 {p}는 1 이상이어야 합니다 (현재 {v}).", path))
+
+    # M2 — 반사적 퇴화: 좌우 부분트리가 구조적으로 동일(Node ==는 깊은 비교)
+    kids = list(node.inputs.values())
+    if len(kids) == 2 and kids[0] == kids[1]:
+        if node.op in ("compare", "cross"):
+            issues.append(Issue("M-degen", SEV_ERROR,
+                                f"양변이 동일해 항상 같은 결과입니다 — 무의미한 {node.op} 조건.", path))
+        elif node.op == "binary" and node.params.get("op") in _DEGEN_BINARY_OPS:
+            issues.append(Issue("M-degen", SEV_ERROR,
+                                f"같은 값끼리 '{node.params.get('op')}' 연산은 상수가 됩니다 — 무의미.", path))
+
+    # M2b — 상수 vs 상수 비교(항상 참/거짓인 상수 조건) — 경고(상위 트리가 의미를 가질 수 있음)
+    if (node.op == "compare" and len(kids) == 2
+            and all(k.op == OP_CONST for k in kids)):
+        issues.append(Issue("M-const-cmp", SEV_INTEGRITY_WARN,
+                            "두 상수를 비교 — 항상 참/거짓인 상수 조건입니다.", path))
+
+    for slot, child in node.inputs.items():
+        _walk_meaning(child, f"{path}/{slot}", issues)
+
+
 # ── 규칙5 — 완결성·기본값 ─────────────────────────────────────────────────────
 
 def apply_defaults(node: Node) -> Node:

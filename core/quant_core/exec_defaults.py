@@ -89,6 +89,22 @@ def merged_execution(strategy_exec: dict | None) -> dict:
     return out
 
 
+# ── 종목별 증거금률 (레버리지 백테스트) ───────────────────────────────────────
+# 거래소 선물은 노티오널의 일부만 증거금으로 묶고, 보유비용(carry)은 연속선물 가격에
+# 이미 반영된다 → 레버리지 펀딩(현금 차입이자)을 부과하지 않는다. 현금 주식·ETF·지수는
+# 1.0(전액 증거금=차입이 곧 비용). dataset 키 기준(KR 종목은 숫자코드라 "선물" 미포함).
+_FUTURES_KEYS = frozenset({
+    "원유선물", "천연가스선물", "금선물", "은선물", "구리선물",
+    "코스피200선물", "나스닥100선물",
+})
+_FUTURES_MARGIN_RATE = 0.15            # KRX/해외 선물 위탁증거금 ~7~15% — 보수적 단일값.
+
+
+def margin_rate(symbol: str) -> float:
+    """레버리지 백테스트용 증거금률(0~1). 선물=부분증거금, 그 외=1.0(전액)."""
+    return _FUTURES_MARGIN_RATE if symbol in _FUTURES_KEYS else 1.0
+
+
 # ── KIS 호가 단위 (KOSPI/KOSDAQ 공통, 2023년 기준) ─────────────────────────────
 
 _TICK_TABLE = [

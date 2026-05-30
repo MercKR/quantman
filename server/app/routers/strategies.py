@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
-from quant_core.ir_engine import StrategyIR
+from quant_core.ir_engine import StrategyIR, validate_strategy
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -36,10 +36,34 @@ def _validate(engine: str, definition: dict) -> tuple[str, dict]:
                             "전략 엔진은 'ir'만 지원합니다 (레거시 operand 제거됨).")
     try:
         s = StrategyIR.model_validate(definition)
-        return s.name, s.model_dump()
     except ValidationError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"전략 정의가 올바르지 않습니다: {e.errors()[0]['msg']}")
+    # 논리 정합성 — 의미 공허·모순 로직(M-rules)·구조 규칙(S-rules) 등 SEV_ERROR는
+    # 저장 차단(모든 모드 — 사용자 결정). 데이터 가용성(R0)은 valid_refs 없이 건너뜀
+    # (백테스트 실행이 소유). 무의미한 백테스트가 저장·모의/실전으로 새는 것을 막는다.
+    errors = [i for i in validate_strategy(s) if i.is_error]
+    if errors:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            f"전략 로직이 올바르지 않습니다: {errors[0].message}")
+    return s.name, s.model_dump()
+
+
+def _assert_live_tradable(run_mode: str, definition: dict) -> None:
+    """레버리지(>1배) 전략은 실거래(모의·실전) 불가 — 백테스트/리서치 전용 게이트.
+
+    실거래는 사용자 KIS '현금계좌'로 체결한다(로컬앱은 order-cash만; 신용거래 미지원).
+    엔진 레버리지는 차입/증거금을 가정하므로 현금계좌로는 체결할 수 없다 → backtest≠live
+    분기를 막기 위해 모의·실전 승격을 차단한다. 실거래로 2x 노출이 필요하면 레버리지 ETF
+    (예: KODEX 레버리지 122630)를 '현금 매수'하면 된다(레버리지가 ETF 가격에 내장).
+    """
+    if run_mode in ("paper", "live"):
+        lev = float((definition.get("simulation") or {}).get("leverage") or 1.0)
+        if lev > 1.0:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "레버리지(>1배) 전략은 백테스트 전용입니다 — 모의·실전 적용 불가. "
+                "실거래에서 레버리지가 필요하면 레버리지 ETF(예: KODEX 레버리지)를 현금 매수하세요.")
 
 
 def _out(s: Strategy) -> StrategyOut:
@@ -115,6 +139,7 @@ def create_strategy(
     if body.engine not in _VALID_ENGINES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "engine이 올바르지 않습니다.")
     name, definition = _validate(body.engine, body.definition)
+    _assert_live_tradable(body.run_mode, definition)
     now = datetime.now(timezone.utc)
     row = Strategy(user_id=user.id, name=name, run_mode=body.run_mode,
                    engine=body.engine, definition=definition,
@@ -154,6 +179,7 @@ def update_strategy(
     if body.engine not in _VALID_ENGINES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "engine이 올바르지 않습니다.")
     name, definition = _validate(body.engine, body.definition)
+    _assert_live_tradable(body.run_mode, definition)
 
     # Phase 59 — 변경 전 정의를 버전으로 스냅샷 (사용자 선택: 매 PUT마다)
     _snapshot_version(session, row, reason="manual_edit")

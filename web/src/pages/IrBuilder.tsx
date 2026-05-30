@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api } from "../api";
+import { api, type IrValidation } from "../api";
 import SentenceTree, { type Catalog } from "../components/SentenceTree";
 import EquityChart from "../components/EquityChart";
 import type {
@@ -72,6 +72,7 @@ export default function IrBuilder() {
   const [catalogList, setCatalogList] = useState<IrBlockSpec[]>([]);
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [validation, setValidation] = useState<IrValidation | null>(null);
 
   // 진입 트리거 — 엔진의 직교 축(이벤트/정기/상시). 신호·청산·사이징과 독립.
   const [entryMode, setEntryMode] = useState("on_signal");
@@ -428,6 +429,18 @@ export default function IrBuilder() {
     }
   }
 
+  // 실시간 논리 검증 — 빌드된 전략이 바뀔 때마다(400ms 디바운스) /ir/validate 호출.
+  // bodyJson(직렬화)을 변경 감지자로 사용해 다수 state 의존을 한 dep로 요약. 에러 시 버튼 게이팅.
+  const bodyJson = signal ? JSON.stringify(buildStrategy()) : "";
+  useEffect(() => {
+    if (!bodyJson) { setValidation(null); return; }
+    const t = setTimeout(() => {
+      api.validateIr(JSON.parse(bodyJson)).then(setValidation).catch(() => setValidation(null));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [bodyJson]);
+  const hasErrors = validation ? !validation.ok : false;
+
   if (loadErr) {
     return <div className="panel"><div className="page-title">전략 연구소</div>
       <p className="muted">카탈로그를 불러오지 못했습니다: {loadErr}</p></div>;
@@ -723,6 +736,12 @@ export default function IrBuilder() {
             </select>
           </label>
         </div>
+        {leverage > 1 && (
+          <div className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+            레버리지(1배 초과)는 <strong>백테스트 전용</strong>입니다 — 모의·실전 적용은 차단됩니다.
+            실거래에서 2배 노출이 필요하면 레버리지 ETF(예: KODEX 레버리지 122630)를 현금으로 매수하세요.
+          </div>
+        )}
         <div className="muted" style={{ fontSize: 13, margin: "10px 0 4px" }}>
           비용 (비우면 시장 기본값) — 수수료·슬리피지·매도세는 비율(0.0005=5bp), 차입·펀딩·무위험은 연율%</div>
         <div className="lab-row">
@@ -837,15 +856,31 @@ export default function IrBuilder() {
         )}
       </div>
 
+      {validation && validation.issues.length > 0 && (
+        <div className={"panel" + (hasErrors ? " result-fail" : "")}>
+          <div className="panel-title">
+            {hasErrors ? "논리 오류 — 수정해야 백테스트·저장 가능" : "검토 안내"}
+          </div>
+          <ul className="issue-list">
+            {validation.issues.map((i, k) => (
+              <li key={k} className={i.is_error ? "neg" : "muted"}>
+                <strong>{i.is_error ? "오류" : "경고"}</strong>: {i.message}
+                {i.path !== "root" ? ` (${i.path})` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="lab-actions">
-        <button type="button" onClick={run} disabled={running || saving || !signal}>
+        <button type="button" onClick={run} disabled={running || saving || !signal || hasErrors}>
           {running ? "백테스트 중…" : "백테스트 실행"}
         </button>
-        <button type="button" disabled={running || saving || !signal}
+        <button type="button" disabled={running || saving || !signal || hasErrors}
                 onClick={() => save("draft")}>
           {saving ? "저장 중…" : editId ? "✓ 수정 저장 (새 버전)" : "전략 저장 (초안)"}
         </button>
-        <button type="button" className="apply-btn" disabled={running || saving || !signal}
+        <button type="button" className="apply-btn" disabled={running || saving || !signal || hasErrors}
                 onClick={() => save("paper")}>
           {saving ? "적용 중…" : "모의 적용"}
         </button>

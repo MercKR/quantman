@@ -462,6 +462,142 @@ def test_unified_a1_shape_screener_quarterly_exit():
     assert not np.isclose(a["equity"].iloc[-1], b["equity"].iloc[-1]), "동적 청산이 결과를 바꿔야"
 
 
+# ── Phase 1: 레버리지(노출>순자산) — 매수여력=NAV×L ───────────────────────────
+
+def _rising(rate: float, periods: int = 120):
+    idx = pd.date_range("2020-01-01", periods=periods, freq="B")
+    close = 100 * (1 + rate) ** np.arange(periods)
+    return pd.DataFrame({"Open": close, "High": close * 1.001, "Low": close * 0.999,
+                         "Close": close, "Volume": 1e6, "ma_dev_20d": 1.0}, index=idx)
+
+
+def _always_true():
+    """ma_dev_20d(=1.0) > 0 — 항상 참 condition(상시 보유)."""
+    return Node(op="compare", params={"op": ">"},
+                inputs={"left": data("ma_dev_20d"), "right": const(0.0)})
+
+
+def test_leverage_amplifies_single_asset():
+    """단일 상승자산 상시보유 — lev=2가 lev=1 수익을 크게 증폭(레버리지 작동, no-op 아님)."""
+    d = {"AAA": _rising(0.003)}
+
+    def _run(lev):
+        return run_unified(StrategyIR(
+            signal=_always_true(), universe=Universe(kind="single", symbols=["AAA"]),
+            position=PositionSpec(direction="long", sizing=Sizing(mode="equal_weight"),
+                                  entry=Entry(mode="always")),
+            simulation=SimSpec(initial_capital=1e7, leverage=lev, fill="close")), d)
+    r1, r2 = _run(1.0), _run(2.0)
+    assert r1["success"] and r2["success"], (r1.get("error"), r2.get("error"))
+    # 일일 리밸런싱 2배 → 대략 2배 복리. 비용 감안 1.7배 이상이면 레버리지가 실제로 채워진 것.
+    assert r2["metrics"]["total_return"] > r1["metrics"]["total_return"] * 1.7
+
+
+def test_leverage_no_greedy_collapse():
+    """균등가중 2종목 lev=2 — 대칭 쌍(±0.3%/일)이면 net≈0. 첫 종목 현금 독식 손상버그 회귀가드.
+
+    손상버그면 현금이 첫 종목(AAA)에 쏠려 단일종목 lev=2처럼 큰 양수익이 됨.
+    올바르면 두 종목 모두 1×nav씩 채워져 롱끼리 상쇄 → 거의 평탄.
+    """
+    idx = pd.date_range("2020-01-01", periods=120, freq="B")
+
+    def mk(rate):
+        close = 100 * (1 + rate) ** np.arange(120)
+        return pd.DataFrame({"Open": close, "High": close * 1.001, "Low": close * 0.999,
+                             "Close": close, "Volume": 1e6, "ma_dev_20d": 1.0}, index=idx)
+    d = {"AAA": mk(0.003), "BBB": mk(-0.003)}
+
+    def _run(syms):
+        return run_unified(StrategyIR(
+            signal=_always_true(), universe=Universe(kind="list", symbols=syms),
+            position=PositionSpec(direction="long", sizing=Sizing(mode="equal_weight"),
+                                  entry=Entry(mode="always")),
+            simulation=SimSpec(initial_capital=1e7, leverage=2.0, fill="close")), d)
+    pair, aaa_only = _run(["AAA", "BBB"]), _run(["AAA"])
+    assert pair["success"] and aaa_only["success"], (pair.get("error"), aaa_only.get("error"))
+    # 독식 아님: 대칭 쌍은 단일 AAA lev=2 수익의 절반 미만(사실상 평탄)이어야.
+    assert pair["metrics"]["total_return"] < aaa_only["metrics"]["total_return"] * 0.5
+    assert abs(pair["metrics"]["total_return"]) < 20.0   # 거의 평탄(상쇄)
+
+
+def test_leverage_funding_cost_reduces_return():
+    """lev=2 + 펀딩비용(10%) → 차입분(=nav)에 이자 → 무펀딩보다 수익↓."""
+    d = {"AAA": _rising(0.003)}
+
+    def _run(funding):
+        return run_unified(StrategyIR(
+            signal=_always_true(), universe=Universe(kind="single", symbols=["AAA"]),
+            position=PositionSpec(direction="long", entry=Entry(mode="always")),
+            simulation=SimSpec(initial_capital=1e7, leverage=2.0, funding_cost_pct=funding,
+                               fill="close")), d)
+    r0, r10 = _run(0.0), _run(10.0)
+    assert r0["success"] and r10["success"], (r0.get("error"), r10.get("error"))
+    assert r10["metrics"]["total_return"] < r0["metrics"]["total_return"]
+
+
+# ── Phase 3: 종목별 증거금/노티오널(선물 펀딩 면제) ───────────────────────────
+
+def test_futures_margin_exempts_funding():
+    """선물은 carry가 가격에 내장 → 레버리지 펀딩 면제. 동일 경로·동일 lev=2·동일 펀딩률에서
+    선물(원유선물)이 현금주식(코드)보다 펀딩비용이 작아 최종 수익이 높아야."""
+    base = _rising(0.002)
+    d_fut, d_eq = {"원유선물": base.copy()}, {"005930": base.copy()}
+
+    def _run(d, sym):
+        return run_unified(StrategyIR(
+            signal=_always_true(), universe=Universe(kind="single", symbols=[sym]),
+            position=PositionSpec(direction="long", entry=Entry(mode="always")),
+            simulation=SimSpec(initial_capital=1e7, leverage=2.0, funding_cost_pct=10.0,
+                               fill="close")), d)
+    fut, eq = _run(d_fut, "원유선물"), _run(d_eq, "005930")
+    assert fut["success"] and eq["success"], (fut.get("error"), eq.get("error"))
+    # 유일한 차이는 증거금률(선물 0.15 vs 주식 1.0) → 선물 펀딩 면제 → 수익↑.
+    assert fut["metrics"]["total_return"] > eq["metrics"]["total_return"]
+
+
+# ── Phase 2: 유지증거금 강제청산(마진콜) ──────────────────────────────────────
+
+def test_maintenance_margin_prevents_wipeout():
+    """월간 레버리지(3x) 포지션 급락 — 유지증거금이 마진콜로 디레버리지해 NAV 음수 폭주를 막는다.
+
+    무청산: 고정 보유라 급락 시 nav가 음수로 폭주.
+    유지증거금: nav/gross<유지율이면 목표 3x로 강제 복원 → nav>0 유지.
+    """
+    idx = pd.date_range("2020-01-01", periods=50, freq="B")
+    close = np.concatenate([np.full(20, 100.0), 100 * 0.93 ** np.arange(1, 31)])  # 20일 평탄→ -7%/일
+    df = pd.DataFrame({"Open": close, "High": close * 1.001, "Low": close * 0.999,
+                       "Close": close, "Volume": 1e6, "ma_dev_20d": 1.0}, index=idx)
+
+    def _run(maint):
+        return run_unified(StrategyIR(
+            signal=_always_true(), universe=Universe(kind="single", symbols=["AAA"]),
+            position=PositionSpec(direction="long",
+                                  entry=Entry(mode="scheduled", rebalance="monthly")),
+            simulation=SimSpec(initial_capital=1e7, leverage=3.0, fill="close",
+                               maintenance_margin_pct=maint)), {"AAA": df})
+    mc, no_mc = _run(25.0), _run(None)
+    assert mc["success"] and no_mc["success"], (mc.get("error"), no_mc.get("error"))
+    # 두 실행의 유일한 차이가 maintenance_margin_pct이므로 결과 차이는 마진콜 발동을 의미.
+    # (부분 디레버리지는 라운드트립이 아니라 trades에 기록되지 않음 — 자산곡선으로 검증.)
+    assert not np.isclose(mc["equity"].iloc[-1], no_mc["equity"].iloc[-1]), "마진콜이 결과를 바꿔야"
+    assert no_mc["equity"].min() < 0, "무청산은 NAV가 음수로 폭주(고정 보유 + 3x 급락)"
+    assert mc["equity"].iloc[-1] > 0, "유지증거금이 NAV 음수 폭주를 막아야"
+    assert mc["equity"].min() > no_mc["equity"].min(), "유지증거금이 손실을 제한"
+
+
+def test_maintenance_margin_inactive_when_unleveraged():
+    """무레버리지(1x)면 자기자본=gross라 유지율 25%에 절대 안 걸림(마진콜 0)."""
+    d = {"AAA": _rising(0.002)}
+    res = run_unified(StrategyIR(
+        signal=_always_true(), universe=Universe(kind="single", symbols=["AAA"]),
+        position=PositionSpec(direction="long", entry=Entry(mode="scheduled", rebalance="monthly")),
+        simulation=SimSpec(initial_capital=1e7, leverage=1.0, fill="close",
+                           maintenance_margin_pct=25.0)), d)
+    assert res["success"], res.get("error")
+    if len(res["trades"]):
+        assert not (res["trades"]["청산사유"] == "마진콜").any()
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

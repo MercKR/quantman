@@ -150,3 +150,113 @@ def test_invalid_engine_rejected():
     r = client.post("/strategies", headers=_auth(tok),
                     json={"definition": _IR_DEF, "run_mode": "draft", "engine": "bogus"})
     assert r.status_code == 422, r.text
+
+
+# ── 레버리지 리서치 게이트 — leverage>1은 백테스트 전용(모의·실전 차단) ────────
+
+def _lev_def(lev: float) -> dict:
+    d = dict(_IR_DEF)
+    d["simulation"] = {**_IR_DEF["simulation"], "leverage": lev}
+    return d
+
+
+def test_leverage_draft_allowed():
+    """레버리지>1 전략은 draft(백테스트/리서치)로 저장 가능."""
+    client, tok = _build()
+    r = client.post("/strategies", headers=_auth(tok),
+                    json={"definition": _lev_def(2.0), "run_mode": "draft", "engine": "ir"})
+    assert r.status_code == 201, r.text
+
+
+def test_leverage_paper_rejected():
+    """레버리지>1 전략을 모의로 저장하면 422(실거래 현금계좌로 체결 불가)."""
+    client, tok = _build()
+    r = client.post("/strategies", headers=_auth(tok),
+                    json={"definition": _lev_def(2.0), "run_mode": "paper", "engine": "ir"})
+    assert r.status_code == 422, r.text
+
+
+def test_leverage_live_rejected():
+    """레버리지>1 전략을 실전으로 저장하면 422."""
+    client, tok = _build()
+    r = client.post("/strategies", headers=_auth(tok),
+                    json={"definition": _lev_def(3.0), "run_mode": "live", "engine": "ir"})
+    assert r.status_code == 422, r.text
+
+
+def test_unleveraged_paper_allowed():
+    """레버리지=1(기본)은 모의 적용 정상 — 게이트 회귀 가드."""
+    client, tok = _build()
+    r = client.post("/strategies", headers=_auth(tok),
+                    json={"definition": _lev_def(1.0), "run_mode": "paper", "engine": "ir"})
+    assert r.status_code == 201, r.text
+
+
+def test_leverage_promote_to_live_rejected_on_update():
+    """draft 레버리지 전략을 update로 실전 승격하려 하면 422."""
+    client, tok = _build()
+    sid = client.post("/strategies", headers=_auth(tok),
+                      json={"definition": _lev_def(2.0), "run_mode": "draft",
+                            "engine": "ir"}).json()["id"]
+    r = client.put(f"/strategies/{sid}", headers=_auth(tok),
+                   json={"definition": _lev_def(2.0), "run_mode": "live", "engine": "ir"})
+    assert r.status_code == 422, r.text
+
+
+# ── 논리 정합성 게이트 — 무의미·모순 로직은 저장 차단(모든 모드) ────────────────
+
+def _def_with_signal(sig: dict) -> dict:
+    return {"name": "t", "universe": {"kind": "single", "symbols": ["005930"]},
+            "signal": sig, "position": {"direction": "long", "entry": {"mode": "on_signal"}},
+            "simulation": {"initial_capital": 5_000_000}}
+
+
+_CONST_SIG = {"op": "compare", "params": {"op": ">"},
+              "inputs": {"left": {"op": "const", "params": {"value": 5}},
+                         "right": {"op": "const", "params": {"value": 0}}}}
+_SELF_CMP_SIG = {"op": "compare", "params": {"op": ">"},
+                 "inputs": {"left": {"op": "data", "params": {"ref": "__SELF__.Close"}},
+                            "right": {"op": "data", "params": {"ref": "__SELF__.Close"}}}}
+
+
+def test_save_rejects_constant_signal_even_draft():
+    """상수 신호(시장 미참조) → draft 저장도 422 (모든 저장 에러 차단)."""
+    client, tok = _build()
+    r = client.post("/strategies", headers=_auth(tok),
+                    json={"definition": _def_with_signal(_CONST_SIG), "run_mode": "draft", "engine": "ir"})
+    assert r.status_code == 422, r.text
+
+
+def test_save_rejects_self_comparison():
+    """X > X (동어반복/모순) → 422."""
+    client, tok = _build()
+    r = client.post("/strategies", headers=_auth(tok),
+                    json={"definition": _def_with_signal(_SELF_CMP_SIG), "run_mode": "draft", "engine": "ir"})
+    assert r.status_code == 422, r.text
+
+
+def test_ir_validate_endpoint_flags_constant_signal(monkeypatch):
+    """/ir/validate가 백테스트 없이 논리 오류를 이슈로 반환(UI 실시간 검증). 데이터셋 불요."""
+    from app.routers import ir as ir_router
+    monkeypatch.setattr(ir_router, "get_dataset", lambda: {})   # 데이터셋 로드 회피
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as s:
+        u = User(email="t@example.com"); s.add(u); s.commit(); s.refresh(u); uid = u.id
+    app = FastAPI()
+    app.include_router(ir_router.router)
+
+    def _ov():
+        with Session(engine) as s:
+            yield s
+    app.dependency_overrides[get_session] = _ov
+    client = TestClient(app)
+    tok = create_access_token(uid)
+
+    r = client.post("/ir/validate", headers=_auth(tok), json=_def_with_signal(_CONST_SIG))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert any(i["rule"] == "M-const" for i in body["issues"])

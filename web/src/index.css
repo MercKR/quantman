@@ -278,8 +278,13 @@ button {
 /* 호버는 --accent-hover(흰 위 4.2:1) — 기존 --accent(#d97757)는 흰 글자 대비 ~3:1로 가독성 낮음 */
 button:hover { background: var(--accent-hover); }
 button:active { background: var(--accent-strong); }
-button:disabled { opacity: .5; cursor: not-allowed; }
-button:disabled:hover { background: var(--ink); }
+/* 비활성 — 변형(apply-btn 등) 무관하게 일관된 muted 회색. opacity 대신 명시 색으로
+   '비활성' affordance를 분명히(accent 버튼이 흐릿한 컬러로 남지 않게). 호버 무반응. */
+button:disabled {
+  background: var(--border); color: var(--muted); border-color: var(--border);
+  opacity: 1; cursor: not-allowed;
+}
+button:disabled:hover { background: var(--border); }
 button.ghost { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
 button.ghost:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
 button.ghost:disabled:hover { background: var(--bg); border-color: var(--border); }

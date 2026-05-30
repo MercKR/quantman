@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlmodel import Session, select
 
 from quant_core.blocks import DatasetMeta, available_refs, catalog_spec
-from quant_core.ir_engine import backtest_from_spec, strategy_from_spec
+from quant_core.ir_engine import (StrategyIR, backtest_from_spec, strategy_from_spec,
+                                  validate_strategy)
 
 from ..data_cache import get_dataset, get_manifest
 from ..db import get_session
@@ -44,6 +45,25 @@ class IrBacktestIn(BaseModel):
 def ir_catalog(user: User = Depends(get_current_user)):
     """블록 카탈로그 — 빌더가 제공할 블록·슬롯·기본값 명세."""
     return {"blocks": catalog_spec()}
+
+
+@router.post("/validate")
+def ir_validate(body: dict, user: User = Depends(get_current_user)):
+    """전략 정의의 논리 정합성 검증 — 백테스트 없이 이슈 목록 반환 (UI 실시간 검증).
+
+    구조(S-rules)·의미(M-rules)·데이터 가용성(R0)·무결성을 한 번에 검사한다.
+    ok=false면 에러(차단), issues에 경고도 함께(차단 안 함).
+    """
+    try:
+        s = StrategyIR.model_validate(body)
+    except ValidationError as e:
+        return {"ok": False, "issues": [{
+            "rule": "schema", "severity": 30, "is_error": True,
+            "message": f"정의 형식 오류: {e.errors()[0]['msg']}", "path": "root"}]}
+    issues = validate_strategy(s, valid_refs=available_refs(get_dataset()))
+    out = [{"rule": i.rule, "severity": i.severity, "is_error": i.is_error,
+            "message": i.message, "path": i.path} for i in issues]
+    return {"ok": not any(i["is_error"] for i in out), "issues": out}
 
 
 @router.post("/backtest")
