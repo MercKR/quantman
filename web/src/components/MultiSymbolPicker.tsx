@@ -29,18 +29,20 @@ function categoryFor(cat: string): string {
   return cat;
 }
 
-export default function MultiSymbolPicker({ symbols, value, onChange, inline }: {
+export default function MultiSymbolPicker({ symbols, value, onChange, inline, scope = "tradable" }: {
   symbols: SymbolInfo[];
   value: string;                   // 콤마 분리 — "005930,000660"
   onChange: (v: string) => void;
   /** inline=true: "+ 종목 추가" 버튼 없이 종목 리스트 항상 노출 (모달 등 큰 영역 전용). */
   inline?: boolean;
+  /** 노출 범위 — tradable: 실거래 가능 종목(매수 대상용) · backtest: 백테스트 데이터 보유 종목(연구소용). */
+  scope?: "tradable" | "backtest";
 }) {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss<HTMLDivElement>(open, setOpen);
 
   const selected = value.split(",").map((s) => s.trim()).filter(Boolean);
-  const list = symbols.filter((s) => s.tradable);
+  const list = symbols.filter((s) => (scope === "backtest" ? s.has_backtest_data : s.tradable));
 
   // 다중선택 — 팝오버를 닫지 않고 토글. 연속으로 여러 종목 체크 가능.
   function toggle(sym: string) {
@@ -59,7 +61,9 @@ export default function MultiSymbolPicker({ symbols, value, onChange, inline }: 
     key: s.symbol,
     label: s.name ? `${s.symbol} ${s.name}` : s.symbol,
     cat: categoryFor(s.category),
-    badge: s.has_backtest_data === false ? "백테스트 불가" : undefined,
+    badge: scope === "backtest"
+      ? (s.tradable === false ? "실거래 불가" : undefined)   // 백테스트는 되나 자동매매 대상 아님(지수·매크로 등)
+      : (s.has_backtest_data === false ? "백테스트 불가" : undefined),
   }));
 
   // Inline 모드 — chips 영역 + 종목 리스트 항상 노출. "+ 종목 추가" 버튼 없음.
@@ -143,5 +147,53 @@ export default function MultiSymbolPicker({ symbols, value, onChange, inline }: 
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * 단일 종목 참조 선택기 — 데이터 블록의 ref(예: "005930.Close")용.
+ * 유니버스 선택기와 동일한 시장별 탭 + 검색 팝오버. "이 종목"(__SELF__, 전략 대상)이 기본.
+ * 콤마 자유입력 select 대신 탭 분류 제공 — 종목명·코드 검색으로 빠르게 찾는다.
+ */
+export function SymbolRefPicker({ symbols, value, onChange }: {
+  symbols: { symbol: string; name?: string; category?: string; has_backtest_data?: boolean }[];
+  value: string;                   // "__SELF__" 또는 종목코드
+  onChange: (sym: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = usePopoverDismiss<HTMLSpanElement>(open, setOpen);
+
+  const list = symbols.filter((s) => s.has_backtest_data);
+  const sel = value === "__SELF__" ? null : list.find((s) => s.symbol === value);
+  const chipLabel = value === "__SELF__" ? "이 종목"
+    : sel?.name ? `${value} ${sel.name}` : value;
+
+  const items = [
+    { key: "__SELF__", label: "이 종목 (전략 대상)", cat: "기본" },
+    ...list.map((s) => ({
+      key: s.symbol,
+      label: s.name ? `${s.symbol} ${s.name}` : s.symbol,
+      cat: categoryFor(s.category ?? ""),
+    })),
+  ];
+
+  return (
+    <span className="chip-wrap" ref={ref}>
+      <button type="button" className="chip" onClick={() => setOpen((v) => !v)}>
+        {chipLabel}
+        <span className="chip-caret">▾</span>
+      </button>
+      {open && (
+        <div className="popover popover-wide">
+          <TabbedSymbolList
+            items={items}
+            order={["기본", ...TRADABLE_TAB_ORDER]}
+            selected={value}
+            placeholder="종목명 또는 코드 검색…"
+            onPick={(k) => { onChange(k); setOpen(false); }}
+          />
+        </div>
+      )}
+    </span>
   );
 }

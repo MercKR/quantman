@@ -418,24 +418,77 @@ def sp500_yf_codes() -> list[str]:
     return [c["symbol"].replace(".", "-") for c in load_sp500() if c.get("symbol")]
 
 
-def fetch_managed_overseas(limit: int | None = None, sleep_sec: float = 0.3,
-                           verbose: bool = False) -> int:
-    """managed_overseas 등록 해외 종목 OHLCV를 yfinance로 일괄 수집.
+_OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
+
+
+def fetch_managed_overseas(limit: int | None = None, verbose: bool = False,
+                           batch: int = 200, backfill_start: str = "2015-01-01") -> int:
+    """managed_overseas 해외 종목 OHLCV를 yfinance 배치(yf.download)로 일괄 수집.
+
+    종목당 1콜 루프는 미국 마스터 전체(~1만+) 규모에 부적합(수 시간) → 배치로
+    수백 종목을 1콜에 받는다. 신규(parquet 없음)는 backfill_start부터 백필,
+    기존은 최근창만 incremental. 데이터 없는 티커는 자동 skip → /symbols 비노출
+    (§4.8 "데이터 보유분만"). _merge/_save로 단일수집과 동일하게 병합·저장한다.
 
     글로벌 cron과 수동 갱신(manage)이 공유. limit=N이면 앞 N개만(개발/검증용).
-    Returns: 시도한 종목 수.
+    Returns: 데이터를 저장한 종목 수.
     """
-    import time
     codes = [s.get("code", "") for s in load_managed_overseas() if s.get("code")]
+    seen: set[str] = set()
+    codes = [c for c in codes if not (c in seen or seen.add(c))]   # 순서보존 dedupe
     if limit is not None:
         codes = codes[:limit]
-    for i, code in enumerate(codes):
-        fetch_yfinance(code, code)
-        if verbose and (i + 1) % 50 == 0:
-            print(f"  해외 fetch {i + 1}/{len(codes)}")
-        if sleep_sec:
-            time.sleep(sleep_sec)        # yfinance rate limit 완화
-    return len(codes)
+
+    new_codes = [c for c in codes if not _parquet_path(c).exists()]
+    upd_codes = [c for c in codes if _parquet_path(c).exists()]
+
+    # 기존: 최근 ~10일만(과대수집은 _merge가 중복 제거 — 저렴). 신규: 전체 백필.
+    recent_start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+    done = _fetch_overseas_batched(upd_codes, recent_start, batch, verbose)
+    done += _fetch_overseas_batched(new_codes, backfill_start, batch, verbose)
+    return done
+
+
+def _fetch_overseas_batched(codes: list[str], start: str, batch: int,
+                            verbose: bool = False) -> int:
+    """yf.download 배치 수집 — chunk별 1콜, 티커별로 분리해 merge·save. 저장 수 반환."""
+    import time
+    done = 0
+    for i in range(0, len(codes), batch):
+        chunk = codes[i:i + batch]
+        try:
+            data = yf.download(chunk, start=start, auto_adjust=True,
+                               group_by="ticker", threads=True, progress=False)
+        except Exception as e:
+            print(f"  [배치 오류] {chunk[0]}…{chunk[-1]}: {e}")
+            continue
+        if data is None or data.empty:
+            if verbose:
+                print(f"  해외 배치 {min(i + batch, len(codes))}/{len(codes)} (빈 응답)")
+            time.sleep(1.0)
+            continue
+        multi = isinstance(data.columns, pd.MultiIndex)
+        for code in chunk:
+            try:
+                if multi:
+                    if code not in data.columns.get_level_values(0):
+                        continue
+                    df = data[code].copy()
+                else:
+                    df = data.copy()
+                df = df[[c for c in _OHLCV_COLS if c in df.columns]].dropna(how="all")
+                if df.empty:
+                    continue
+                df.index = pd.to_datetime(df.index).tz_localize(None)
+                merged = _merge(_load_existing(code), df)
+                _save(code, merged)
+                done += 1
+            except Exception as e:
+                print(f"  [오류] {code}: {e}")
+        if verbose:
+            print(f"  해외 배치 {min(i + batch, len(codes))}/{len(codes)} (저장 {done})")
+        time.sleep(1.0)        # 배치 간 rate-limit 완화
+    return done
 
 
 # ── Binance REST (비트코인) ───────────────────────────────────────────────────

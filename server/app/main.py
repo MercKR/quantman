@@ -238,14 +238,17 @@ def _refresh_global_dataset() -> None:
     # 매크로/자산/사용자 종목 (yfinance, FDR ETF, FRED, Binance, 공포탐욕)
     data_fetcher.fetch_all(verbose=False)
 
-    # S&P500 큐레이션 유니버스를 fetch 전에 시드 — 콜드스타트 레이스 방지.
-    # 시드는 원래 _refresh_kr_dataset(18:15)에만 있어, 첫 부팅 때 글로벌 초기 갱신이
-    # kr보다 먼저 돌면 managed_overseas가 비어 US OHLCV를 못 받고 us_metrics가
-    # 0이 됐다(다음 07:30 cron까지). 글로벌에서도 시드해 항상 S&P500을 포함한다.
-    # save_managed_overseas가 union이라 멱등 — 중복 호출 안전.
-    _seed_sp500_overseas()
+    # 해외 종목 시드를 fetch 전에 — 콜드스타트 레이스 방지. 시드는 원래
+    # _refresh_kr_dataset(18:15)에만 있어, 첫 부팅 때 글로벌 초기 갱신이 kr보다
+    # 먼저 돌면 managed_overseas가 비어 US OHLCV를 못 받았다. save_managed_overseas는
+    # union이라 멱등. US 마스터 시드는 마스터 로드가 선행돼야 하므로 가드(멱등).
+    if not kis_master_cache.get_master_set():
+        _log.info("해외 시드 전 KIS 마스터 로드 (콜드스타트 가드)")
+        kis_master_cache.refresh()
+    _seed_sp500_overseas()         # 클래스주 yf 코드 보존
+    _seed_us_master_overseas()     # KIS 미국 마스터 전체 (주식+ETF) — 국내와 대칭
 
-    # 해외 종목(S&P500 + on-demand) — yfinance 의존이라 글로벌 cron에 묶음
+    # 해외 종목 — yfinance 배치 수집 (글로벌 cron에 묶음)
     n = data_fetcher.fetch_managed_overseas()
     if n:
         _log.info("해외 종목 fetch: %d 종목", n)
@@ -320,7 +323,8 @@ def _refresh_kr_dataset() -> None:
 
     existing_overseas = data_fetcher.load_managed_overseas()
     data_fetcher.save_managed_overseas(existing_overseas + overseas_new)
-    _seed_sp500_overseas()      # S&P500 큐레이션 유니버스 추가 (미국 자동선택)
+    _seed_sp500_overseas()        # S&P500 큐레이션 (클래스주 yf 코드 보존)
+    _seed_us_master_overseas()    # KIS 미국 마스터 전체 (주식+ETF) — 국내와 대칭
 
     data_cache.invalidate()
     _trigger_preview("dataset_kr")
@@ -336,6 +340,22 @@ def _seed_sp500_overseas() -> int:
           for c in data_fetcher.load_sp500() if c.get("symbol")]
     data_fetcher.save_managed_overseas(data_fetcher.load_managed_overseas() + sp)
     return len(sp)
+
+
+def _seed_us_master_overseas() -> int:
+    """KIS 미국 마스터(NAS/NYS/AMS, 주식+ETF) 전체를 managed_overseas에 union.
+
+    국내(managed_kr = KIS 마스터 KOSPI/KOSDAQ 전체)와 대칭. 데이터 없는 종목은
+    yfinance fetch가 빈 결과 → parquet 미생성 → /symbols 자동 제외(§4.8)되므로
+    별도 유동성 필터 없이 "전부 시드 → 데이터 있는 것만 노출"로 자동 큐레이션된다.
+    클래스주(BRK.B 등) 정확한 yf 코드는 _seed_sp500_overseas가 보장(code 기준 dedupe).
+    """
+    from quant_core import data_fetcher
+    master = kis_master_cache.get_master_list()
+    us = [{"code": (m.get("ticker") or m["symbol"]), "name": m.get("name", "")}
+          for m in master if m.get("market") in ("NAS", "NYS", "AMS")]
+    data_fetcher.save_managed_overseas(data_fetcher.load_managed_overseas() + us)
+    return len(us)
 
 
 def _initial_dataset_refresh():

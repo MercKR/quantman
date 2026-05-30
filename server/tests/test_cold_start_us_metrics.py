@@ -38,6 +38,8 @@ def _patch(monkeypatch, master_loaded: bool) -> list[str]:
     monkeypatch.setattr(data_fetcher, "fetch_managed_overseas", _fetch_overseas)
     monkeypatch.setattr(appmain, "_seed_sp500_overseas",
                         lambda: calls.append("seed"))
+    monkeypatch.setattr(appmain, "_seed_us_master_overseas",
+                        lambda: calls.append("seed_us"))
     monkeypatch.setattr(appmain.data_cache, "invalidate",
                         lambda: calls.append("invalidate"))
     monkeypatch.setattr(appmain, "_trigger_preview",

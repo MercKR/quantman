@@ -1,4 +1,5 @@
 import type { IndicatorInfo, IrBlockSpec, IrNode, IrParamSpec, IrValueType } from "../types";
+import { SymbolRefPicker } from "./MultiSymbolPicker";
 
 /**
  * 문장형 빈칸 에디터 — 노코드 전략의 핵심 차별점. BlockTree를 대체.
@@ -27,7 +28,8 @@ export function makeNode(op: string, catalog: Catalog): IrNode {
 }
 
 interface SymLite {
-  symbol: string; name?: string; indicators: IndicatorInfo[]; has_backtest_data?: boolean;
+  symbol: string; name?: string; indicators: IndicatorInfo[];
+  has_backtest_data?: boolean; category?: string;
 }
 interface Props {
   node: IrNode | null;
@@ -203,13 +205,10 @@ function DataLeaf({ node, symbols, selfIndicators, onChange }: Props & { node: I
   };
   const setRef = (sym: string, ind: string) =>
     onChange({ ...node, params: { ...node.params, ref: `${sym}.${ind}` } });
-  const dataSyms = symbols.filter((s) => s.has_backtest_data);
   return (
     <span className="st-leaf" data-out="score">
-      <select className="st-param" value={symPart} onChange={(e) => setRef(e.target.value, indPart)}>
-        <option value="__SELF__">이 종목</option>
-        {dataSyms.map((s) => <option key={s.symbol} value={s.symbol}>{s.name ? `${s.symbol} ${s.name}` : s.symbol}</option>)}
-      </select>
+      <SymbolRefPicker symbols={symbols} value={symPart}
+                       onChange={(sym) => setRef(sym, indPart)} />
       <span className="st-of">의</span>
       <select className="st-param" value={indPart} onChange={(e) => setRef(symPart, e.target.value)}>
         {indicatorsFor(symPart).map((i) => <option key={i.key} value={i.key}>{i.label}</option>)}

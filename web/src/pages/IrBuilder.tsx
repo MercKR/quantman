@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, type IrValidation } from "../api";
 import SentenceTree, { type Catalog } from "../components/SentenceTree";
 import EquityChart from "../components/EquityChart";
+import MultiSymbolPicker from "../components/MultiSymbolPicker";
 import type {
   IrBlockSpec, IrEventStat, IrNode, IrStrategyDef, IrStrategyResult, SymbolInfo,
 } from "../types";
@@ -471,21 +472,23 @@ export default function IrBuilder() {
       {/* 유니버스 */}
       <div className="panel">
         <div className="panel-title">유니버스</div>
+        {!useScreener && (
+          <div style={{ marginBottom: 10 }}>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>대상 종목</div>
+            <MultiSymbolPicker symbols={symbols} value={universeSymbols}
+                               onChange={setUniverseSymbols} scope="backtest" />
+            <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              비우면 전체 종목이 유니버스가 됩니다. 백테스트 데이터 보유 {dataSymbols.length.toLocaleString()}개에서 선택 ·
+              "실거래 불가" 배지는 백테스트 전용(지수·매크로 등, 자동매매 대상 아님).
+            </p>
+          </div>
+        )}
         <div className="lab-row">
-          <label className="lab-field">종목 (쉼표 — 비우면 전체)
-            <input type="text" value={universeSymbols} placeholder="비우면 전체 종목"
-                   onChange={(e) => setUniverseSymbols(e.target.value)} style={{ minWidth: 240 }} />
-          </label>
           <label className="lab-field">초기자본
             <input type="number" value={capital} step={1_000_000}
                    onChange={(e) => setCapital(Number(e.target.value))} />
           </label>
         </div>
-        {dataSymbols.length > 0 && (
-          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-            백테스트 데이터 보유 종목 {dataSymbols.length.toLocaleString()}개 · 예: {dataSymbols.slice(0, 4).map((s) => s.symbol).join(", ")}
-          </p>
-        )}
         <div style={{ marginTop: 12 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
             <input type="checkbox" checked={useScreener}
@@ -494,8 +497,12 @@ export default function IrBuilder() {
           </label>
           {useScreener && (
             <div style={{ marginTop: 8 }}>
+              <div className="muted" style={{ fontSize: 13, marginBottom: 6 }}>
+                자격 필터(참/거짓 조건)와 순위컷을 <b>AND</b>로 묶어 매 리밸런싱일마다 후보 유니버스를 추립니다.
+                그 후보 위에서 다시 신호와 아래 "진입·포지션"의 상위 N·매매 방향이 실제 보유 종목을 정합니다(2단계).
+              </div>
               <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
-                자격 필터 (condition — 예: 섹터 제외·거래대금 조건). 비우면 순위컷만 적용.</div>
+                자격 필터 (예: 섹터 제외·거래대금 조건). 비우면 순위컷만 적용.</div>
               <SentenceTree node={screenerFilter} catalog={catalog} symbols={symbols}
                          selfIndicators={selfIndicators} requiredType="condition"
                          onChange={setScreenerFilter} />
@@ -504,11 +511,11 @@ export default function IrBuilder() {
                   <input type="text" value={rankRef} placeholder="예: market_cap, adv_20d"
                          onChange={(e) => setRankRef(e.target.value)} />
                 </label>
-                <label className="lab-field">컷 N
+                <label className="lab-field">컷 N (상위/하위 종목 수)
                   <input type="number" value={rankTopN}
                          onChange={(e) => setRankTopN(e.target.value === "" ? "" : Number(e.target.value))} />
                 </label>
-                <label className="lab-field">방향
+                <label className="lab-field">순위 방향
                   <select value={rankDir} onChange={(e) => setRankDir(e.target.value)}>
                     <option value="top">상위(큰 값)</option>
                     <option value="bottom">하위(작은 값)</option>
@@ -540,7 +547,7 @@ export default function IrBuilder() {
       <div className="panel">
         <div className="panel-title">진입 · 포지션</div>
         <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-          진입 트리거·방향·사이징을 자유 조합합니다. 부적합 조합(예: 이벤트 진입 + 점수 신호)은 실행 시 안내됩니다.
+          진입 트리거·매매 방향·사이징을 자유 조합합니다. 정기/상시 진입의 "상위 N"은 (스크리너가 추린) 후보 중 신호 점수로 실제 보유 종목을 고릅니다. 부적합 조합(예: 이벤트 진입 + 점수 신호)은 실행 시 안내됩니다.
         </p>
         <div className="lab-row">
           <label className="lab-field">진입 트리거
@@ -548,7 +555,7 @@ export default function IrBuilder() {
               {ENTRY_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </label>
-          <label className="lab-field">방향
+          <label className="lab-field">매매 방향
             <select value={direction} onChange={(e) => setDirection(e.target.value)}>
               {DIRECTION_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>

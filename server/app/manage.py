@@ -42,7 +42,8 @@ def cmd_us(limit: int | None = None) -> None:
 
     _ensure_master()
     n_seed = main._seed_sp500_overseas()
-    log.info("S&P500 시드: %d종목", n_seed)
+    n_etf = main._seed_us_master_overseas()
+    log.info("S&P500 시드: %d종목 · 미국 마스터 전체(주식+ETF) 시드: %d종목", n_seed, n_etf)
 
     n = data_fetcher.fetch_managed_overseas(limit=limit, verbose=True)
     log.info("해외 OHLCV fetch: %d종목 시도", n)
