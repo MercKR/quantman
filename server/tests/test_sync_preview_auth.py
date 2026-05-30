@@ -114,12 +114,28 @@ def test_sync_preview_rejects_user_jwt():
     assert client.get("/sync/preview", headers=_jwt(tok)).status_code == 401
 
 
-def test_sync_preview_available_false_when_preview_missing():
-    """스냅샷은 있으나 next_day_preview 키가 없으면 available=false (200, 무크래시)."""
-    client, _ = _build({"balance": {}})       # preview 키 없음
+def test_sync_preview_builds_on_demand_when_preview_key_missing(monkeypatch):
+    """스냅샷은 있으나 next_day_preview 키가 없으면 즉석(on-demand) build (v0.9.13).
+
+    preview 키 부재 시 build_user_preview를 자리에서 호출해 cron 의존을 제거한다.
+    전략이 0개인 유저는 build가 정상 동작하되 매수 후보가 없어 available=True·후보 0
+    (available=False는 '스냅샷 자체가 없음'일 때만 — 아래 no_snapshot 케이스).
+    이는 cron(refresh_all_users_preview)이 빈 후보 preview를 그대로 merge하는 동작과
+    일치하며, 무신호 날을 'preview 없음'으로 오인해 신규 진입을 막지 않게 한다.
+
+    실제 dataset 로드(수십초)·KIS 마스터를 피하려 데이터 의존만 stub —
+    build_user_preview의 진짜 로직(전략 0개 → available=True)을 그대로 검증한다.
+    """
+    from app import kis_master_cache, preview_engine
+    monkeypatch.setattr(preview_engine, "get_dataset", lambda: {})
+    monkeypatch.setattr(kis_master_cache, "get_master_list", lambda: [])
+    client, _ = _build({"balance": {}})       # preview 키 없음 → on-demand build
     r = client.get("/sync/preview", headers=_dev())
     assert r.status_code == 200
-    assert r.json()["available"] is False
+    body = r.json()
+    assert body["available"] is True          # 전략 0개라도 build 성공
+    assert body["summary"]["n_buy_candidates"] == 0
+    assert body["by_strategy"] == []
 
 
 def test_sync_preview_available_false_when_no_snapshot():
