@@ -22,7 +22,7 @@ from .spec import StrategyIR, validate_strategy
 _EXIT_KW = (
     "hold_days", "take_profit", "stop_loss", "trail_atr_mult", "trail_pct",
     "sell_amount_pct", "rule_sell_pcts", "fill", "commission", "slippage",
-    "sell_tax", "currency", "initial_capital", "start", "end",
+    "sell_tax", "initial_capital", "start", "end",
 )
 
 

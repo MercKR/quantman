@@ -51,7 +51,6 @@ def run_backtest_ir(
     commission: float = _DEFAULT_COMMISSION,
     slippage: float = _DEFAULT_SLIPPAGE,
     sell_tax: float = _DEFAULT_SELL_TAX,
-    currency: str = "KRW",
     initial_capital: float = 10_000_000.0,
     start=None,
     end=None,
@@ -60,6 +59,9 @@ def run_backtest_ir(
 
     buy_node/sell_node는 type:condition Node. 단일 종목 path의 체결·청산·성과 로직.
     """
+    # 통화는 종목에서 추론(국내 6자리 숫자=KRW, 그 외=USD) — 다종목 경로와 동일 규칙.
+    # 호가단위 라운딩(round_to_tick)용. 시뮬 설정으로 덮어쓰지 않음(미국주식 KRW 정수절삭 방지).
+    currency = "KRW" if trade_symbol.isdigit() else "USD"
     if trade_symbol not in dataset or dataset[trade_symbol].empty:
         return _empty(f"'{trade_symbol}' 데이터 없음")
     trade_df = dataset[trade_symbol]

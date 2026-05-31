@@ -192,7 +192,7 @@ register(DataTypeSpec(
     label="종목 마스터(통화·시장·종목구분·종목명)", frequency="static",
     history_rule="현행 스냅샷(일 1~2회 갱신)", source="KIS .mst/.cod",
     provides=["currency", "market", "kind", "name"], required_meta=["source", "fetched_at"],
-    downstream=["simulation.currency", "fill(round_to_tick)", "universe.exclude_macro"],
+    downstream=["fill(round_to_tick)", "universe.exclude_macro"],
     current_status="partial",
     notes="권위 메타가 메모리 캐시에만 존재 — dataset 미부착. currency를 sym.isdigit() 휴리스틱 대체.",
 ))

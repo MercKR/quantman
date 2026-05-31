@@ -51,7 +51,7 @@ def _assert_parity(s, d):
               stop_loss=ex.stop_loss, trail_atr_mult=ex.trail_atr_mult, trail_pct=ex.trail_pct,
               fill=sim.fill, initial_capital=sim.initial_capital, start=sim.start, end=sim.end)
     if u.kind == "single":
-        b = run_backtest_ir(d, u.symbols[0], s.signal, currency=sim.currency, **kw)
+        b = run_backtest_ir(d, u.symbols[0], s.signal, **kw)
     else:
         b = run_portfolio_ir(d, u.symbols, s.signal, amount_pct=sz.amount_pct,
                              amount_krw=(sz.amount_krw if sz.mode == "fixed_amount" else None), **kw)

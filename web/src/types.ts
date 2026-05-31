@@ -243,8 +243,7 @@ export interface IrStrategyDef {
     kind: "single" | "list" | "all" | "screener";
     symbols?: string[];
     screener?: {
-      filter?: IrNode | null;
-      rank?: { ref: string; top_n: number; direction: string } | null;
+      condition?: IrNode | null;
     } | null;
     exclude_macro?: boolean;
   };
@@ -275,7 +274,7 @@ export interface IrStrategyDef {
   simulation: {
     initial_capital?: number; delay?: number; fill?: string;
     commission?: number | null; slippage?: number | null; sell_tax?: number | null;
-    currency?: string; leverage?: number;
+    leverage?: number;
     short_borrow_pct?: number | null; funding_cost_pct?: number | null; rfr_pct?: number | null;
     maintenance_margin_pct?: number | null;    // 레버리지 마진콜 유지증거금률(%)
     start?: string | null; end?: string | null; period_split?: string;

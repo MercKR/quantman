@@ -123,7 +123,6 @@ class SimSpec(BaseModel):
     commission: Optional[float] = None
     slippage: Optional[float] = None
     sell_tax: Optional[float] = None
-    currency: str = "KRW"
     leverage: float = 1.0
     # 연율 비용(%) — 숏 차입(short_borrow_pct)·레버리지 펀딩(funding_cost_pct)·현금 무위험수익(rfr_pct).
     # 종목별 차입가능 여부는 데이터 부재로 미모델(정직한 한계 — §7.6).

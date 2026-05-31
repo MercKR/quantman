@@ -230,7 +230,7 @@ def run_unified(strategy: StrategyIR, dataset: dict[str, pd.DataFrame]) -> dict:
             "close": cl, "high": hi, "low": lo,
             "exec": ((hi + lo + cl) / 3.0) if fill == "typical" else cl,
             "atr": (df["atr_14"].to_numpy(dtype=float) if "atr_14" in df.columns else None),
-            "currency": sim.currency if single else ("KRW" if sym.isdigit() else "USD"),
+            "currency": "KRW" if sym.isdigit() else "USD",
         }
         buy_arrs[sym] = _sym_bool(buy_panel, sym, master_idx)
         sell_arrs[sym] = _sym_bool(sell_panel, sym, master_idx) if sell_panel is not None else None
@@ -683,8 +683,7 @@ def _run_scheduled(strategy: StrategyIR, dataset: dict) -> dict:
         else:
             sell_arr[s] = None
     refill_mode = ent.refill
-    cur_of = {s: (sim.currency if strategy.universe.kind == "single"
-                  else ("KRW" if s.isdigit() else "USD")) for s in cols}
+    cur_of = {s: ("KRW" if s.isdigit() else "USD") for s in cols}
     commission = sim.commission if sim.commission is not None else _DEFAULT_COMMISSION
     slippage = sim.slippage if sim.slippage is not None else _DEFAULT_SLIPPAGE
     sell_tax = sim.sell_tax if sim.sell_tax is not None else _DEFAULT_SELL_TAX
