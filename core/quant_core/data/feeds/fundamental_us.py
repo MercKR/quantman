@@ -20,6 +20,7 @@ import requests
 
 from ..manifest import default_manifest_path
 from .fundamentals_common import compute_fundamentals
+from ...parquet_io import write_parquet_atomic
 
 _UA = os.environ.get("SEC_USER_AGENT", "quant-platform research eogkrvlfrl@gmail.com")
 _HEADERS = {"User-Agent": _UA}
@@ -194,8 +195,7 @@ def fetch(tickers: list[str], throttle: float = 0.12) -> dict:
             n_empty += 1
         else:
             p = _fund_path(t)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            df.to_parquet(p)
+            write_parquet_atomic(df, p)        # 원자적 — 중단 시 잘린 파일 안 남김
             n_ok += 1
         if throttle:
             time.sleep(throttle)

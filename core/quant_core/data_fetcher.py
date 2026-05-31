@@ -21,6 +21,8 @@ import FinanceDataReader as fdr
 from pathlib import Path
 from datetime import datetime, timedelta
 
+from .parquet_io import read_parquet_safe, write_parquet_atomic, quarantine_corrupt
+
 warnings.filterwarnings("ignore")
 
 # 데이터 저장 위치 — 환경변수로 덮어쓸 수 있다(로컬앱은 사용자 디렉터리를 가리킴).
@@ -168,14 +170,17 @@ def _fund_path(name: str) -> Path:
 
 def _load_existing(symbol: str) -> pd.DataFrame:
     p = _parquet_path(symbol)
-    return pd.read_parquet(p) if p.exists() else pd.DataFrame()
+    if not p.exists():
+        return pd.DataFrame()
+    df = read_parquet_safe(p)          # 손상 시 격리+None → 빈 DF(전체 재수급 유도)
+    return df if df is not None else pd.DataFrame()
 
 def _save(symbol: str, df: pd.DataFrame):
     if df.empty:
         return
     df = df.sort_index()
     df.index = pd.to_datetime(df.index).tz_localize(None)
-    df.to_parquet(_parquet_path(symbol))
+    write_parquet_atomic(df, _parquet_path(symbol))
 
 def _merge(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     if existing.empty:
@@ -739,7 +744,10 @@ def search_tickers(query: str, max_results: int = 8) -> list[dict]:
 def load_stock_fundamentals(name: str) -> pd.DataFrame:
     """저장된 펀더멘털 parquet 로드."""
     p = _fund_path(name)
-    return pd.read_parquet(p) if p.exists() else pd.DataFrame()
+    if not p.exists():
+        return pd.DataFrame()
+    df = read_parquet_safe(p)          # 손상 펀더멘털도 격리·skip → load_fund_all 전체 보호
+    return df if df is not None else pd.DataFrame()
 
 
 def fetch_user_stock(name: str, ticker: str, verbose: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -811,25 +819,25 @@ def fetch_all(verbose: bool = True) -> dict[str, pd.DataFrame]:
 def load_all() -> dict[str, pd.DataFrame]:
     """저장된 parquet에서 전체 심볼 로드. 매크로/자산 + 사용자 종목 + 자동 관리 한국·해외 종목."""
     result = {}
+
+    def _add(sym: str) -> None:
+        p = _parquet_path(sym)
+        if not p.exists():
+            return
+        df = read_parquet_safe(p)      # 손상 파일은 격리·skip → 한 종목이 전체 로드를 못 죽임
+        if df is not None:
+            result[sym] = df
+
     for symbol in ALL_SYMBOLS:
-        p = _parquet_path(symbol)
-        if p.exists():
-            result[symbol] = pd.read_parquet(p)
+        _add(symbol)
     for stock in load_user_stocks():
-        p = _parquet_path(stock["name"])
-        if p.exists():
-            result[stock["name"]] = pd.read_parquet(p)
+        _add(stock["name"])
     # Phase 29: 자동 관리 한국 종목 (KIS 마스터 KOSPI/KOSDAQ union)
     for code in load_managed_kr_codes():
-        p = _parquet_path(code)
-        if p.exists():
-            result[code] = pd.read_parquet(p)
+        _add(code)
     # Phase 29: on-demand 등록된 해외 종목
     for stock in load_managed_overseas():
-        code = stock["code"]
-        p = _parquet_path(code)
-        if p.exists():
-            result[code] = pd.read_parquet(p)
+        _add(stock["code"])
     return result
 
 
@@ -874,7 +882,8 @@ def dataset_symbol_index() -> dict[str, dict]:
         try:
             md = pq.read_metadata(p)
             cols = set(md.schema.names)
-        except Exception:                       # noqa: BLE001 — 손상 parquet skip
+        except Exception as e:                  # noqa: BLE001 — 손상 parquet 격리+로그 후 skip
+            quarantine_corrupt(p, e)
             continue
         out[sym] = {"rows": md.num_rows,
                     "has_ohlc": "Open" in cols and "Close" in cols}

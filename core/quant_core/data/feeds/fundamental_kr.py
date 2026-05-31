@@ -20,6 +20,7 @@ import os
 
 from ..manifest import default_manifest_path
 from .fundamentals_common import compute_fundamentals
+from ...parquet_io import write_parquet_atomic
 
 # field -> (account_id 별칭, account_nm 폴백, kind). kind: is(손익·3M)·cf(현금흐름·YTD)·bs(시점).
 _FIELD_DEFS = {
@@ -218,8 +219,7 @@ def fetch(codes: list[str], years: list[int], budget_calls: int = 9000,
             n_fail += 1
         else:
             if df is not None and not df.empty:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                df.to_parquet(p)
+                write_parquet_atomic(df, p)       # 원자적 — 중단 시 잘린 파일 안 남김
                 n_ok += 1
         calls += 5 * len(years)                  # 재무 4분기 + 주식총수 1(연간)
         if calls >= budget_calls:

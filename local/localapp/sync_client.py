@@ -380,8 +380,16 @@ def fetch_dataset_symbol(key: str, dest_path: Path) -> bool:
     if r.status_code == 404:
         return False
     r.raise_for_status()
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    dest_path.write_bytes(r.content)
+    import io
+    import pandas as pd
+    from quant_core.parquet_io import write_parquet_atomic
+    # 잘린 다운로드(네트워크 중단) 검증 — 손상이면 저장하지 않고 실패 처리(다음 sync에서 재시도).
+    try:
+        df = pd.read_parquet(io.BytesIO(r.content))
+    except Exception as e:
+        log.warning("다운로드 parquet 손상, 저장 skip [%s]: %s", key, e)
+        return False
+    write_parquet_atomic(df, dest_path)    # 원자적 — 쓰기 중단돼도 잘린 파일 안 남김
     return True
 
 

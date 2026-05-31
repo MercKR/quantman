@@ -12,6 +12,7 @@ from collections.abc import Iterable
 import pandas as pd
 
 from .data_fetcher import _parquet_path, load_all, load_fund_all
+from .parquet_io import read_parquet_safe
 from .indicators import compute_all
 
 
@@ -46,8 +47,11 @@ def load_dataset_for(symbols: Iterable[str],
     raw: dict[str, pd.DataFrame] = {}
     for sym in wanted:
         p = _parquet_path(sym)
-        if p.exists():
-            raw[sym] = pd.read_parquet(p)
+        if not p.exists():
+            continue
+        df = read_parquet_safe(p)      # 손상 파일은 격리·skip(load_all과 동일 동작)
+        if df is not None:
+            raw[sym] = df
     if not with_indicators:
         return raw
     # funds: 사용자 종목 펀더멘털만(소량). load_dataset과 동일하게 .get(sym) 매칭.

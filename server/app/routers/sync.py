@@ -500,19 +500,36 @@ async def upload_parquet(
 
     dest_path = dest_dir / safe_name
 
+    import io
     import anyio
+    import pandas as pd
+    from quant_core.parquet_io import write_parquet_atomic
+
+    content = await file.read()
+
+    # 1) 무결성 게이트: 업로드 바이트가 실제로 유효한 parquet인지 검증. 잘리거나 손상된
+    #    업로드(네트워크 중단·로컬 파일 손상)를 디스크에 적재하지 않는다(부류 결함의 유입 차단).
     try:
-        content = await file.read()
-        # blocking 디스크 쓰기를 비동기 스레드 풀에 위임하여 이벤트 루프 정지 차단
-        await anyio.to_thread.run_sync(dest_path.write_bytes, content)
-        _log.info("Parquet 동기화 성공: %s (%s, %d bytes) -> device:%s", safe_name, category, len(content), device.id)
+        df = await anyio.to_thread.run_sync(lambda: pd.read_parquet(io.BytesIO(content)))
+    except Exception as e:
+        _log.warning("유효하지 않은 parquet 업로드 거부 [%s]: %s", safe_name, e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"손상되었거나 유효하지 않은 parquet 파일입니다: {e}",
+        )
+
+    # 2) 원자적 저장: 재배포·OOM이 쓰기 도중 끼어들어도 최종 경로엔 완결 파일만 남는다
+    #    (직접 write_bytes는 중단 시 footer 없는 잘린 파일을 남겨 load_all 전체를 깨뜨렸다).
+    try:
+        await anyio.to_thread.run_sync(write_parquet_atomic, df, dest_path)
     except Exception as e:
         _log.error("Parquet 저장 실패 [%s]: %s", safe_name, e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"서버에 Parquet 파일을 저장하는 중 오류가 발생했습니다: {e}"
+            detail=f"서버에 Parquet 파일을 저장하는 중 오류가 발생했습니다: {e}",
         )
 
+    _log.info("Parquet 동기화 성공: %s (%s, %d bytes) -> device:%s", safe_name, category, len(content), device.id)
     return {"ok": True, "filename": safe_name, "category": category, "size": len(content)}
 
 
