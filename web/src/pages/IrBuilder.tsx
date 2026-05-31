@@ -1085,7 +1085,7 @@ function ResultPanel({ result }: { result: IrStrategyResult }) {
       </div>
       {result.equity?.length ? (
         <div style={{ marginTop: 16 }}>
-          <EquityChart equity={result.equity} benchmark={result.benchmark} />
+          <EquityChart equity={result.equity} benchmark={result.benchmark} trades={result.trades} />
         </div>
       ) : null}
     </div>
