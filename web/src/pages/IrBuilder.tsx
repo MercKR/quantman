@@ -167,14 +167,18 @@ export default function IrBuilder() {
     () => new Map(catalogList.map((b) => [b.op, b])), [catalogList]);
 
   useEffect(() => {
-    Promise.all([api.irCatalog(), api.symbols(), api.listStrategies().catch(() => [])])
-      .then(([cat, sym, strats]) => {
-        setCatalogList(cat.blocks);
-        setSymbols(sym.symbols);
-        setIndicatorCatalog(sym.indicator_catalog ?? []);
-        setStrategies(strats as StrategyRow[]);
-      })
-      .catch((e) => setLoadErr(e.message ?? String(e)));
+    // 독립 fetch — 묶지 않는다. catalog(가벼움)가 오면 신호 빌더 즉시 렌더,
+    // symbols(콜드스타트 시 갱신에 막혀 느릴 수 있음)는 늦게 와도 유니버스 피커만 대기.
+    // (이전 Promise.all은 느린 /symbols가 빠른 catalog까지 묶어 신호 섹션이 먹통.)
+    api.irCatalog()
+      .then((cat) => setCatalogList(cat.blocks))
+      .catch((e) => setLoadErr(e.message ?? String(e)));   // catalog는 빌더 필수 — 실패만 에러
+    api.symbols()
+      .then((sym) => { setSymbols(sym.symbols); setIndicatorCatalog(sym.indicator_catalog ?? []); })
+      .catch(() => {/* 종목 지연/실패해도 신호 빌더는 동작 — 유니버스/스크리너만 영향 */});
+    api.listStrategies()
+      .then((strats) => setStrategies(strats))
+      .catch(() => {/* "내 전략" 탭만 비활성 — 비치명 */});
   }, []);
 
   // ?edit=<id> — 저장된 IR 전략을 불러와 전 폼 state로 역-하이드레이션.
