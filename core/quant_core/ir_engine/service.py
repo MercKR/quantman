@@ -100,17 +100,28 @@ def strategy_from_spec(
     meta: DatasetMeta | None = None,
     manifest=None,
     strict: bool = False,
+    strategy_resolver=None,
 ) -> dict:
     """완전한 StrategyIR(dict)을 검증·실행. 단일/팩터/포트폴리오/펼침 모두 처리.
 
     sweep.axis != none이면 펼침(resultset), 아니면 1회 백테스트.
     manifest 제공 시 데이터 무결성 4액션 게이트(생존편향·조정·PIT·가용성·캘린더)를 함께 적용.
     strict=True면 편향형 경고를 거부로 승격(실전 자금 투입 前 게이트).
+    strategy_resolver(token)->자식 spec: strat:<id> 합성 자산을 물질화(전략 조합 G3). server가 주입.
     """
     try:
         s = StrategyIR.model_validate(spec)
     except Exception as e:  # noqa: BLE001 — 사용자 입력 파싱 실패
         return {"success": False, "error": f"전략 파싱 오류: {e}"}
+
+    # 전략 조합 — strat:<id> 참조를 자식 equity로 물질화. 공유 캐시 보호 위해 사본에 주입.
+    from .compose import has_strat_refs, materialize_strategy_assets
+    if has_strat_refs(s):
+        try:
+            dataset = materialize_strategy_assets(s, dict(dataset), strategy_resolver)
+        except ValueError as e:
+            return {"success": False, "error": f"전략 조합 오류: {e}"}
+        valid_refs = None   # 합성 심볼 포함해 재계산
 
     if valid_refs is None:
         valid_refs = available_refs(dataset)
@@ -127,9 +138,10 @@ def strategy_from_spec(
         return {"success": False, "error": errors[0].message,
                 "issues": [_issue_dict(i) for i in issues]}
 
-    if s.sweep.axis != "none":
+    # target!=return(신호값·IC 분석)은 axis와 무관하게 run_sweep이 전용 경로로 분기.
+    if s.sweep.axis != "none" or s.sweep.target != "return":
         res = run_sweep(s, dataset)
-    elif s.simulation.period_split != "single":
+    elif s.simulation.period_split != "single" or s.simulation.split_dates:
         res = run_period_split(s, dataset)
     else:
         res = run_strategy_ir(s, dataset)

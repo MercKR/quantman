@@ -9,8 +9,12 @@
 from .backtest import run_backtest_ir  # noqa: F401
 from .run import run_period_split, run_strategy_ir, run_sweep  # noqa: F401
 from .compare import (  # noqa: F401
-    bootstrap_mean_ci, compare_partition, distribution, excess_distribution,
-    one_sample_test, two_sample_test, walk_forward_consistency,
+    block_bootstrap_ci, bootstrap_mean_ci, compare_partition, distribution,
+    excess_distribution, jackknife_by_year, one_sample_test, two_sample_test,
+    walk_forward_consistency,
+)
+from .compose import (  # noqa: F401
+    collect_strat_refs, has_strat_refs, materialize_strategy_assets,
 )
 from .service import backtest_from_spec, strategy_from_spec  # noqa: F401
 from .spec import (  # noqa: F401
@@ -25,10 +29,11 @@ from .sweep import (  # noqa: F401
 __all__ = [
     "run_backtest_ir", "run_strategy_ir", "run_sweep", "run_period_split",
     "backtest_from_spec", "strategy_from_spec",
+    "collect_strat_refs", "has_strat_refs", "materialize_strategy_assets",
     "StrategyIR", "Universe", "PositionSpec", "Sizing", "Entry", "Exit",
     "Overlays", "SimSpec", "SweepSpec", "ParamAxis", "validate_strategy", "signal_out_type",
     "run_condition_sweep", "sweep_condition", "partition_by_label",
     "summarize_returns", "daily_returns",
-    "two_sample_test", "bootstrap_mean_ci", "walk_forward_consistency",
-    "distribution", "compare_partition", "excess_distribution",
+    "two_sample_test", "bootstrap_mean_ci", "block_bootstrap_ci", "jackknife_by_year",
+    "walk_forward_consistency", "distribution", "compare_partition", "excess_distribution",
 ]

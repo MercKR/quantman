@@ -150,5 +150,66 @@ def test_ir_backtest_persisted_to_saved_strategy():
     assert len(c.get(f"/strategies/{sid}/backtests", headers=H).json()) == 1
 
 
+def _compose_client():
+    """TestClient + 2 유저 — 전략 조합(strat:) HTTP 경로·소유 경계 검증용."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy.pool import StaticPool
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from app.db import get_session
+    from app.models import User
+    from app.routers import ir as ir_router
+    from app.routers import strategies as strat_router
+    from app.security import create_access_token
+
+    eng = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                        poolclass=StaticPool)
+    SQLModel.metadata.create_all(eng)
+    uids = {}
+    with Session(eng) as s:
+        for name in ("u1", "u2"):
+            u = User(email=f"{name}@example.com"); s.add(u); s.commit(); s.refresh(u)
+            uids[name] = u.id
+    app = FastAPI()
+    app.include_router(ir_router.router)
+    app.include_router(strat_router.router)
+
+    def _ov():
+        with Session(eng) as s:
+            yield s
+    app.dependency_overrides[get_session] = _ov
+    c = TestClient(app)
+    hdr = {k: {"Authorization": f"Bearer {create_access_token(v)}"} for k, v in uids.items()}
+    return c, hdr
+
+
+def _parent_referencing(sid):
+    return {"signal": {"op": "ts_delta", "params": {"window": 20},
+                       "inputs": {"signal": {"op": "data", "params": {"ref": "Close"}}}},
+            "universe": {"kind": "list", "symbols": [f"strat:{sid}"]},
+            "position": {"direction": "long", "sizing": {"mode": "equal_weight"},
+                         "entry": {"mode": "scheduled", "rebalance": "monthly", "top_n": 1}},
+            "simulation": {"initial_capital": 1e7}}
+
+
+def test_strategy_composition_via_route():
+    """저장 전략을 strat:<id>로 합성 자산화 — F3류 전략-of-전략 HTTP 경로."""
+    c, hdr = _compose_client()
+    sid = c.post("/strategies", headers=hdr["u1"],
+                 json={"definition": _factor_body(), "run_mode": "draft", "engine": "ir"}).json()["id"]
+    r = c.post("/ir/strategy", headers=hdr["u1"], json=_parent_referencing(sid))
+    assert r.status_code == 200 and r.json().get("success"), r.text
+
+
+def test_composition_blocks_cross_user_reference():
+    """타 유저 전략을 strat:로 참조 불가(privacy 경계) — resolver가 None 반환 → 실패."""
+    c, hdr = _compose_client()
+    sid = c.post("/strategies", headers=hdr["u1"],
+                 json={"definition": _factor_body(), "run_mode": "draft", "engine": "ir"}).json()["id"]
+    r = c.post("/ir/strategy", headers=hdr["u2"], json=_parent_referencing(sid))   # u2가 u1 전략 참조
+    assert not r.json().get("success")
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

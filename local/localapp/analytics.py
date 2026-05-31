@@ -69,6 +69,7 @@ def strategy_pnl_summary(window_days: int = 30) -> dict:
     # 전략·종목별 매수 큐 (FIFO)
     buys: dict[tuple[str, str], list[dict]] = defaultdict(list)
     realized: list[dict] = []      # [{strategy, symbol, sell_ts, pnl}]
+    traded_by_strategy: dict[str, float] = defaultdict(float)  # 거래된 금액(총 체결대금·집계)
 
     for raw in lines:
         if not raw.strip():
@@ -85,6 +86,7 @@ def strategy_pnl_summary(window_days: int = 30) -> dict:
         px = float(o.get("fill_price", 0) or 0)
         if qty <= 0 or px <= 0:
             continue
+        traded_by_strategy[strat] += px * qty   # 거래된 금액 — 매수·매도 체결대금 합(집계만, raw 체결은 로컬 전용)
         key = (strat, symbol)
         if o.get("side") == "buy":
             buys[key].append({"qty": qty, "price": px, "ts": o.get("ts", "")})
@@ -141,6 +143,7 @@ def strategy_pnl_summary(window_days: int = 30) -> dict:
             "trades": v["trades"],
             "win_rate": round(v["wins"] / v["trades"] * 100, 2) if v["trades"] else 0.0,
             "pnl": round(v["pnl"], 0),
+            "traded_amount": round(traded_by_strategy.get(strat, 0.0), 0),  # 거래된 금액(집계)
             "today_pnl": round(v["today_pnl"], 0),
             "week_pnl": round(v["week_pnl"], 0),
             "month_pnl": round(v["month_pnl"], 0),

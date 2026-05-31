@@ -128,7 +128,7 @@ export default function StrategyDetail() {
         <LegacyConfigTab onRemove={remove} />
       ))}
       {tab === "versions" && (
-        <VersionsTab versions={versions} onRestore={restoreVersion} />
+        <VersionsTab versions={versions} backtests={backtests} onRestore={restoreVersion} />
       )}
       {tab === "stats" && <StatsTab stats={stats} strategy={strategy} />}
       {tab === "backtests" && <BacktestsTab backtests={backtests} />}
@@ -262,35 +262,51 @@ function LegacyConfigTab({ onRemove }: { onRemove: () => void }) {
 
 // ── 탭 2: 버전 ────────────────────────────────────────────────────────────────
 
-function VersionsTab({ versions, onRestore }: {
+function VersionsTab({ versions, backtests, onRestore }: {
   versions: StrategyVersionRow[];
+  backtests: BacktestRunSummary[];
   onRestore: (versionNo: number) => void;
 }) {
   if (versions.length === 0) {
     return <p className="muted">아직 저장된 버전이 없습니다.</p>;
   }
+  // 버전별 백테스트 수익률 — version_no 매칭, 같은 버전 다회면 가장 최근 실행.
+  const retByVersion = new Map<number, number | null>();
+  for (const b of [...backtests].sort((a, z) => (a.created_at < z.created_at ? -1 : 1))) {
+    if (b.version_no != null) retByVersion.set(b.version_no, b.metrics?.total_return ?? null);
+  }
   return (
     <div className="strategy-detail-body">
       <p className="muted small">
         매 저장마다 자동 스냅샷. 최대 50건 또는 30일까지 보관 — 그 이전 버전은 자동 회전.
+        각 버전의 백테스트 수익률을 함께 표시합니다.
       </p>
       <div className="version-list">
-        {versions.map((v) => (
-          <div key={v.version_no} className="version-row">
-            <div className="version-no">v{v.version_no}</div>
-            <div className="version-meta">
-              <div className="version-name">{v.name}</div>
-              <div className="muted small">
-                {dateOnly(v.created_at)} · {labelReason(v.created_reason)}
+        {versions.map((v) => {
+          const ret = retByVersion.get(v.version_no);
+          return (
+            <div key={v.version_no} className="version-row">
+              <div className="version-no">v{v.version_no}</div>
+              <div className="version-meta">
+                <div className="version-name">{v.name}</div>
+                <div className="muted small">
+                  {dateOnly(v.created_at)} · {labelReason(v.created_reason)}
+                </div>
+              </div>
+              <div className="version-actions">
+                {ret != null && (
+                  <span className={"sc-stat " + (ret >= 0 ? "pos" : "neg")}
+                        title="이 버전으로 실행한 가장 최근 백테스트 누적수익률">
+                    백테스트 {ret >= 0 ? "+" : ""}{ret.toFixed(1)}%
+                  </span>
+                )}
+                <button className="ghost sm" onClick={() => onRestore(v.version_no)}>
+                  이 버전 적용
+                </button>
               </div>
             </div>
-            <div className="version-actions">
-              <button className="ghost sm" onClick={() => onRestore(v.version_no)}>
-                이 버전으로 복원
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -328,8 +344,11 @@ function StatsTab({ stats, strategy }: {
         <StatBox label="누적 P&L" value={krw(stats.pnl_total)}
                  cls={(stats.pnl_total ?? 0) >= 0 ? "pos" : "neg"}
                  sub={stats.pnl_pct != null ? pct(stats.pnl_pct) : ""} />
+        <StatBox label="거래된 금액"
+                 value={stats.traded_amount != null ? krw(stats.traded_amount) : "—"}
+                 sub="총 체결대금(누적)" />
         <StatBox label="승률"
-                 value={stats.win_rate != null ? pct(stats.win_rate * 100, false) : "—"}
+                 value={stats.win_rate != null ? pct(stats.win_rate, false) : "—"}
                  sub={stats.n_trades ? `거래 ${stats.n_trades}건` : ""} />
         <StatBox label="현재 보유"
                  value={stats.n_positions > 0 ? `${stats.n_positions}종목` : "없음"} />

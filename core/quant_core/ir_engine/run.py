@@ -20,7 +20,8 @@ from ..blocks import EvalContext, evaluate, referenced_symbols
 from ..blocks.catalog import get, has
 from ..blocks.node import Node
 from .compare import (
-    compare_partition, summarize_events, two_sample_test, walk_forward_consistency,
+    compare_partition, distribution, one_sample_test, summarize_events,
+    two_sample_test, walk_forward_consistency,
 )
 from .spec import StrategyIR
 from .sweep import (
@@ -116,7 +117,9 @@ def _universe_symbols(strategy: StrategyIR, dataset: dict) -> list[str]:
             macro = set()
     out = []
     for s, df in dataset.items():
-        if s in macro or df is None or df.empty:
+        # strat: 합성 자산은 시장 종목이 아님 — all/screener 광역 스캔에서 제외
+        # (명시 list 유니버스·데이터 참조로만 진입). 그 외 macro·빈 프레임 제외.
+        if s in macro or s.startswith("strat:") or df is None or df.empty:
             continue
         if {"Open", "Close"}.issubset(df.columns):
             out.append(s)
@@ -143,6 +146,12 @@ def run_sweep(strategy: StrategyIR, dataset: dict) -> dict:
     if err is not None:
         return _empty(err)
     sw = strategy.sweep
+    # 분석 대상 일반화 — target!=return이면 측정 대상이 수익률이 아니라 신호값/관계.
+    # axis와 직교한 전용 경로로 분기(읽기층만, 신호 대수 무관).
+    if sw.target == "signal":
+        return _run_signal_study(strategy, dataset)
+    if sw.target == "relation":
+        return _run_ic_study(strategy, dataset)
     if sw.axis == "none":
         return run_strategy_ir(strategy, dataset)
 
@@ -221,19 +230,111 @@ def run_period_split(strategy: StrategyIR, dataset: dict) -> dict:
     if not res.get("success"):
         return res
     rets = daily_returns(res["equity"])
-    mode = strategy.simulation.period_split
-    n = 2 if mode == "oos" else 4
-    folds = [f for f in np.array_split(rets.to_numpy(), n) if len(f) > 0]
-    buckets = {}
-    for i, f in enumerate(folds):
-        if mode == "oos":
-            label = "인샘플" if i == 0 else "아웃샘플"
-        else:
-            label = f"구간{i + 1}"
-        buckets[label] = summarize_returns(pd.Series(f))
+    sim = strategy.simulation
+    buckets: dict = {}
+    if sim.split_dates:
+        # 명시 날짜 경계 — 지정 시점으로 분할(세그먼트 라벨=실제 기간 span). 학습/검증을
+        # 등분이 아닌 사용자 지정 시점으로 가른다(예: ["2018-01-01"] → 2010-17 / 2018-25).
+        cuts = sorted(pd.Timestamp(d) for d in sim.split_dates)
+        seg = np.zeros(len(rets), dtype=int)
+        for c in cuts:
+            seg += (rets.index >= c).astype(int)
+        n_seg = 0
+        for sid in sorted(set(seg.tolist())):
+            grp = rets[seg == sid]
+            if not len(grp):
+                continue
+            buckets[f"{grp.index[0].date()}~{grp.index[-1].date()}"] = summarize_returns(grp)
+            n_seg += 1
+        consistency = walk_forward_consistency(rets, n_folds=max(n_seg, 1))
+    else:
+        mode = sim.period_split
+        n = 2 if mode == "oos" else 4
+        folds = [f for f in np.array_split(rets.to_numpy(), n) if len(f) > 0]
+        for i, f in enumerate(folds):
+            label = ("인샘플" if i == 0 else "아웃샘플") if mode == "oos" else f"구간{i + 1}"
+            buckets[label] = summarize_returns(pd.Series(f))
+        consistency = walk_forward_consistency(rets, n_folds=n)
     return {"success": True, "axis": "period_split", "buckets": buckets,
-            "consistency": walk_forward_consistency(rets, n_folds=n),
-            "metrics": res["metrics"]}
+            "consistency": consistency, "metrics": res["metrics"]}
+
+
+# ── 신호값 분석 (target=signal) — 수익률이 아닌 신호 자체의 분포 ───────────────
+
+def _run_signal_study(strategy: StrategyIR, dataset: dict) -> dict:
+    """임의 score 노드의 *값* 분포를 (선택)국면 라벨별로 — 신호 자체를 연구한다.
+
+    "반감기가 변동성 레짐별로 다른가(MR3)", "BTC-주식 상관이 긴축기에 1로 수렴하나(CR2)"
+    처럼 손익이 아니라 신호값의 분포·왜도가 답인 질문용. 분포는 비율 스케일(pct=False).
+    """
+    syms = _universe_symbols(strategy, dataset)
+    if not syms:
+        return _empty("분석 유니버스에 종목이 없습니다.")
+    node = strategy.sweep.target_node
+    if node is None:
+        return _empty("분석 노드(target_node)가 없습니다.")
+    ctx = EvalContext.from_dataset(_scoped(dataset, syms, node, strategy.sweep.label))
+    panel = evaluate(node, ctx)
+    if not isinstance(panel, pd.DataFrame):
+        return _empty("분석 노드가 패널(시계열)을 산출하지 않습니다.")
+    pv = panel.to_numpy(dtype=float)
+    overall = distribution(pd.Series(pv.ravel()), pct=False)
+    by_regime = None
+    if strategy.sweep.label is not None:
+        lp = evaluate(strategy.sweep.label, ctx)
+        if isinstance(lp, pd.DataFrame):
+            lv = lp.reindex(index=panel.index, columns=panel.columns).to_numpy(dtype=float)
+            mask = np.isfinite(pv) & np.isfinite(lv)
+            parts = {str(r): pd.Series(pv[mask & (lv == r)])
+                     for r in np.unique(lv[mask])}
+            parts = {k: v for k, v in parts.items() if len(v)}
+            by_regime = compare_partition(parts, pct=False) if parts else None
+    return {"success": True, "axis": "signal",
+            "overall": overall, "by_regime": by_regime}
+
+
+# ── 횡단 IC 분석 (target=relation) — factor ↔ forward수익 예측력 ────────────────
+
+def _run_ic_study(strategy: StrategyIR, dataset: dict) -> dict:
+    """factor[t]와 forward수익[t→t+w]의 횡단 순위상관(IC) 시계열 — 예측력·팩터 타이밍.
+
+    "이 팩터가 다음 달 수익을 횡단으로 설명하나(IC>0, F1)", "IC가 국면으로 예측되나
+    (factor timing)"에 답한다. forward수익은 미래참조라 *분석 전용*(거래 신호 아님) —
+    이벤트 스터디와 동일한 연구 목적 전향 측정. IC = 매 거래일 횡단 Spearman(순위 상관).
+    """
+    syms = _universe_symbols(strategy, dataset)
+    if len(syms) < 2:
+        return _empty("IC 분석은 종목이 2개 이상이어야 합니다.")
+    node = strategy.sweep.target_node
+    if node is None:
+        return _empty("분석 노드(target_node)가 없습니다.")
+    windows = strategy.sweep.windows or [21]
+    ctx = EvalContext.from_dataset(_scoped(dataset, syms, node, strategy.sweep.label))
+    factor = evaluate(node, ctx)
+    if not isinstance(factor, pd.DataFrame):
+        return _empty("팩터 노드가 패널(시계열)을 산출하지 않습니다.")
+    close = pd.DataFrame({s: dataset[s]["Close"] for s in syms
+                          if s in dataset and "Close" in dataset[s].columns}).reindex(factor.index)
+    fr = factor.rank(axis=1)                       # 횡단 순위(Spearman용)
+    label_series = None
+    if strategy.sweep.label is not None:
+        lp = evaluate(strategy.sweep.label, ctx)
+        if isinstance(lp, pd.DataFrame) and len(lp.columns):
+            label_series = lp[lp.columns[0]]        # 국면은 시장 전역(브로드캐스트) 가정
+    by_window: dict = {}
+    for w in windows:
+        fwd = close.shift(-int(w)) / close - 1.0    # forward수익(미래참조, 분석 전용)
+        ic = fr.corrwith(fwd.rank(axis=1), axis=1).dropna()   # 날짜별 횡단 순위상관
+        summ = one_sample_test(ic, pct=False)       # 평균 IC≠0 유의성(스케일 불변)
+        summ["ir"] = (float(ic.mean() / ic.std())
+                      if len(ic) > 1 and ic.std() and ic.std() > 0 else np.nan)
+        block = {"overall": summ}
+        if label_series is not None:
+            parts = partition_by_label(ic, label_series.reindex(ic.index))
+            block["by_regime"] = compare_partition(parts, pct=False) if parts else None
+        by_window[str(w)] = block
+    return {"success": True, "axis": "relation", "relation": "ic",
+            "windows": [str(w) for w in windows], "by_window": by_window}
 
 
 # ── 이벤트 스터디 (비전 §4 시간축) ────────────────────────────────────────────

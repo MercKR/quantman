@@ -175,6 +175,7 @@ export interface StrategyStats {
   days_live: number | null;
   pnl_total: number | null;
   pnl_pct: number | null;
+  traded_amount: number | null;     // 거래된 금액 (총 체결대금, KRW)
   win_rate: number | null;
   n_trades: number | null;
   n_positions: number;
@@ -276,10 +277,15 @@ export interface IrStrategyDef {
     commission?: number | null; slippage?: number | null; sell_tax?: number | null;
     currency?: string; leverage?: number;
     short_borrow_pct?: number | null; funding_cost_pct?: number | null; rfr_pct?: number | null;
+    maintenance_margin_pct?: number | null;    // 레버리지 마진콜 유지증거금률(%)
     start?: string | null; end?: string | null; period_split?: string;
+    split_dates?: string[];                    // G6 — 명시 분할 시점(워크포워드)
   };
   sweep: {
     axis: "none" | "condition" | "parameter" | "asset" | "time";
+    target?: "return" | "signal" | "relation"; // G7·G2 — 분석 대상
+    target_node?: IrNode | null;               // signal/relation 분석 노드
+    relation_kind?: string;
     label?: IrNode | null;
     param_grid?: { path: string; values: (number | string)[] }[];
     assets?: string[];
@@ -308,13 +314,34 @@ export interface IrPairTest {
   n_a?: number; n_b?: number;
 }
 
+// 신호값 분포 (target=signal) — 비율 스케일(pct=false). 분위수·왜도/첨도·부트스트랩 CI.
+export interface IrDistribution {
+  n: number; mean?: number; std?: number; skew?: number; kurtosis?: number;
+  quantiles?: { q05?: number; q10?: number; q25?: number; q50?: number;
+                q75?: number; q90?: number; q95?: number };
+  bootstrap_ci?: { low?: number; high?: number };
+}
+// 국면별 분포 비교 (compare_partition) — 신호값 분석의 by_regime 형태.
+export interface IrPartition {
+  by_label: Record<string, IrDistribution>;
+  pairwise: Record<string, IrPairTest>;
+}
+// 횡단 IC 통계 (target=relation) — one_sample_test + IR(정보비율).
+export interface IrICStat {
+  n: number; mean?: number; t_stat?: number; p_value?: number;
+  prob_positive?: number; ir?: number;
+}
+
 // StrategyIR 백테스트 결과 — 단일(equity/metrics)·펼침(axis/buckets)·이벤트(time) 통합.
 export interface IrStrategyResult extends BacktestResult {
   warnings?: IrIssue[];
   issues?: IrIssue[];
-  axis?: "condition" | "parameter" | "asset" | "time" | "period_split";
+  axis?: "condition" | "parameter" | "asset" | "time" | "period_split" | "signal" | "relation";
   buckets?: Record<string, IrSweepBucket>;
-  overall?: IrSweepBucket | Record<string, IrEventStat>;
+  overall?: IrSweepBucket | Record<string, IrEventStat> | IrDistribution;
+  // target=relation(IC) — 윈도우별 IC 통계 + (선택)국면별
+  relation?: string;
+  by_window?: Record<string, { overall: IrICStat; by_regime?: IrPartition | null }>;
   // parameter축 격자 메타 (다축 Cartesian) — 갭 B
   axes?: { path: string; values: (number | string)[] }[];
   // period_split 일관성

@@ -29,20 +29,37 @@ function categoryFor(cat: string): string {
   return cat;
 }
 
-export default function MultiSymbolPicker({ symbols, value, onChange, inline, scope = "tradable" }: {
+export default function MultiSymbolPicker({ symbols, value, onChange, inline, scope = "tradable", strategies }: {
   symbols: SymbolInfo[];
-  value: string;                   // 콤마 분리 — "005930,000660"
+  value: string;                   // 콤마 분리 — "005930,000660" (전략 조합 시 "strat:5" 포함)
   onChange: (v: string) => void;
   /** inline=true: "+ 종목 추가" 버튼 없이 종목 리스트 항상 노출 (모달 등 큰 영역 전용). */
   inline?: boolean;
   /** 노출 범위 — tradable: 실거래 가능 종목(매수 대상용) · backtest: 백테스트 데이터 보유 종목(연구소용). */
   scope?: "tradable" | "backtest";
+  /** "내 전략" 탭 — 저장 전략을 strat:<id> 합성 자산으로 선택(전략 조합 G3). 미지정 시 탭 숨김. */
+  strategies?: { id: number; name: string; run_mode?: string }[];
 }) {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss<HTMLDivElement>(open, setOpen);
 
   const selected = value.split(",").map((s) => s.trim()).filter(Boolean);
   const list = symbols.filter((s) => (scope === "backtest" ? s.has_backtest_data : s.tradable));
+
+  // "내 전략" 합성 자산(strat:<id>) — 저장 전략을 유니버스 자산으로(조합 폐쇄성). 시장 탭과 별도.
+  const stratItems = (strategies ?? []).map((s) => ({
+    key: `strat:${s.id}`,
+    label: s.name,
+    cat: "내 전략",
+    badge: s.run_mode === "live" ? "실전" : s.run_mode === "paper" ? "모의" : "초안",
+  }));
+  const stratLabel = new Map(stratItems.map((it) => [it.key, it.label]));
+  const tabOrder = stratItems.length ? ["내 전략", ...TRADABLE_TAB_ORDER] : TRADABLE_TAB_ORDER;
+  const labelFor = (sym: string): string => {
+    if (stratLabel.has(sym)) return stratLabel.get(sym)!;
+    const info = list.find((s) => s.symbol === sym);
+    return info?.name ? `${sym} ${info.name}` : sym;
+  };
 
   // 다중선택 — 팝오버를 닫지 않고 토글. 연속으로 여러 종목 체크 가능.
   function toggle(sym: string) {
@@ -56,15 +73,18 @@ export default function MultiSymbolPicker({ symbols, value, onChange, inline, sc
     onChange(selected.filter((s) => s !== sym).join(","));
   }
 
-  // 선택된 종목도 리스트에 유지 — 체크 해제로 빼낼 수 있게.
-  const items = list.map((s) => ({
-    key: s.symbol,
-    label: s.name ? `${s.symbol} ${s.name}` : s.symbol,
-    cat: categoryFor(s.category),
-    badge: scope === "backtest"
-      ? (s.tradable === false ? "실거래 불가" : undefined)   // 백테스트는 되나 자동매매 대상 아님(지수·매크로 등)
-      : (s.has_backtest_data === false ? "백테스트 불가" : undefined),
-  }));
+  // 선택된 종목도 리스트에 유지 — 체크 해제로 빼낼 수 있게. "내 전략"은 맨 앞 탭.
+  const items = [
+    ...stratItems,
+    ...list.map((s) => ({
+      key: s.symbol,
+      label: s.name ? `${s.symbol} ${s.name}` : s.symbol,
+      cat: categoryFor(s.category),
+      badge: scope === "backtest"
+        ? (s.tradable === false ? "실거래 불가" : undefined)   // 백테스트는 되나 자동매매 대상 아님(지수·매크로 등)
+        : (s.has_backtest_data === false ? "백테스트 불가" : undefined),
+    })),
+  ];
 
   // Inline 모드 — chips 영역 + 종목 리스트 항상 노출. "+ 종목 추가" 버튼 없음.
   if (inline) {
@@ -75,8 +95,7 @@ export default function MultiSymbolPicker({ symbols, value, onChange, inline, sc
             <span className="muted small">아직 선택된 종목이 없습니다.</span>
           )}
           {selected.map((sym) => {
-            const info = list.find((s) => s.symbol === sym);
-            const label = info?.name ? `${sym} ${info.name}` : sym;
+            const label = labelFor(sym);
             return (
               <span key={sym} className="multi-chip">
                 {label}
@@ -90,7 +109,7 @@ export default function MultiSymbolPicker({ symbols, value, onChange, inline, sc
         <div className="multi-inline-list">
           <TabbedSymbolList
             items={items}
-            order={TRADABLE_TAB_ORDER}
+            order={tabOrder}
             placeholder="종목명 또는 코드 검색…"
             multiSelect
             selectedKeys={selected}
@@ -132,7 +151,7 @@ export default function MultiSymbolPicker({ symbols, value, onChange, inline, sc
         <div className="popover popover-wide multi-popover">
           <TabbedSymbolList
             items={items}
-            order={TRADABLE_TAB_ORDER}
+            order={tabOrder}
             placeholder="종목명 또는 코드 검색…"
             multiSelect
             selectedKeys={selected}

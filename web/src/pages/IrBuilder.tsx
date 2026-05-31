@@ -5,7 +5,8 @@ import SentenceTree, { type Catalog } from "../components/SentenceTree";
 import EquityChart from "../components/EquityChart";
 import MultiSymbolPicker from "../components/MultiSymbolPicker";
 import type {
-  IndicatorInfo, IrBlockSpec, IrEventStat, IrNode, IrStrategyDef, IrStrategyResult, SymbolInfo,
+  IndicatorInfo, IrBlockSpec, IrDistribution, IrEventStat, IrICStat, IrNode, IrPartition,
+  IrStrategyDef, IrStrategyResult, StrategyRow, SymbolInfo,
 } from "../types";
 
 /**
@@ -40,7 +41,7 @@ const DIRECTION_OPTS: [string, string][] = [
 ];
 const REBALANCE_OPTS: [string, string][] = [
   ["daily", "매일"], ["weekly", "매주"], ["monthly", "매월"],
-  ["quarterly", "분기"], ["annual", "매년"],
+  ["quarterly", "분기"], ["annual", "매년"], ["every_n_days", "N일마다"],
 ];
 function fmt(v: number | null | undefined, suffix: string): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -67,11 +68,15 @@ function numOrEmpty(v: number | null | undefined): number | "" {
   return v === null || v === undefined ? "" : v;
 }
 
-type SweepAxis = "none" | "condition" | "parameter" | "asset" | "time";
+// 분석 유형 — 펼침 축(condition/parameter/asset/time) + 신호값(signal)·IC(relation)·기간분할(period).
+// 평면 단일 드롭다운으로 노출. signal/relation은 sweep.target, period는 simulation.period_split로 매핑.
+type AnalysisType = "none" | "condition" | "parameter" | "asset" | "time"
+  | "signal" | "relation" | "period";
 
 export default function IrBuilder() {
   const [catalogList, setCatalogList] = useState<IrBlockSpec[]>([]);
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
+  const [strategies, setStrategies] = useState<StrategyRow[]>([]);   // "내 전략" 탭(전략 조합 자산)
   const [indicatorCatalog, setIndicatorCatalog] = useState<IndicatorInfo[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [validation, setValidation] = useState<IrValidation | null>(null);
@@ -93,6 +98,7 @@ export default function IrBuilder() {
   const [amountPct, setAmountPct] = useState<number | "">("");   // pct_cash: 종목당 자본%
   const [amountKrw, setAmountKrw] = useState<number | "">("");   // fixed_amount: 종목당 금액
   const [rebalance, setRebalance] = useState("monthly");
+  const [everyNDays, setEveryNDays] = useState<number | "">(10);   // rebalance=every_n_days
   // 청산 — 채운 규칙 OR 결합(이벤트·정기 모두 적용)
   const [useExitCond, setUseExitCond] = useState(false);
   const [holdDays, setHoldDays] = useState<number | "">("");
@@ -102,8 +108,10 @@ export default function IrBuilder() {
   const [trailAtr, setTrailAtr] = useState<number | "">("");
   const [exitCond, setExitCond] = useState<IrNode | null>(null);
 
-  // 펼침
-  const [sweepAxis, setSweepAxis] = useState<SweepAxis>("none");
+  // 분석 (펼침 + 신호값/IC/기간분할 통합)
+  const [sweepAxis, setSweepAxis] = useState<AnalysisType>("none");
+  const [targetNode, setTargetNode] = useState<IrNode | null>(null);   // signal/relation 분석 노드
+  const [splitDates, setSplitDates] = useState("");                    // period: 분할 시점(쉼표 ISO)
   // 파라미터 격자 — 축 1개=1D, 2개+=Cartesian (예: commission×slippage 민감도)
   const [paramAxes, setParamAxes] = useState<{ path: string; values: string }[]>(
     [{ path: "position.entry.top_n", values: "10, 20, 30" }]);
@@ -111,6 +119,7 @@ export default function IrBuilder() {
   const [sweepLabel, setSweepLabel] = useState<IrNode | null>(null);
   const [sweepWindows, setSweepWindows] = useState("5, 10, 20");
   const [eventBasis, setEventBasis] = useState("close");   // close|intraday|excess
+  const [sweepEvent, setSweepEvent] = useState<IrNode | null>(null);  // time축 별도 이벤트 조건(선택)
 
   // 유니버스 — 스크리너: 단일 선별 조건(필터+횡단순위를 자유 조합한 condition)
   const [useScreener, setUseScreener] = useState(false);
@@ -131,6 +140,7 @@ export default function IrBuilder() {
   const [shortBorrow, setShortBorrow] = useState<number | "">("");
   const [funding, setFunding] = useState<number | "">("");
   const [rfr, setRfr] = useState<number | "">("");
+  const [maintMargin, setMaintMargin] = useState<number | "">("");   // 유지증거금률(%) — 마진콜
   // 포지션 세부·오버레이 (A6)
   const [maxPositionPct, setMaxPositionPct] = useState<number | "">("");
   const [volWindow, setVolWindow] = useState(20);
@@ -157,11 +167,12 @@ export default function IrBuilder() {
     () => new Map(catalogList.map((b) => [b.op, b])), [catalogList]);
 
   useEffect(() => {
-    Promise.all([api.irCatalog(), api.symbols()])
-      .then(([cat, sym]) => {
+    Promise.all([api.irCatalog(), api.symbols(), api.listStrategies().catch(() => [])])
+      .then(([cat, sym, strats]) => {
         setCatalogList(cat.blocks);
         setSymbols(sym.symbols);
         setIndicatorCatalog(sym.indicator_catalog ?? []);
+        setStrategies(strats as StrategyRow[]);
       })
       .catch((e) => setLoadErr(e.message ?? String(e)));
   }, []);
@@ -231,6 +242,7 @@ export default function IrBuilder() {
     const en = p.entry ?? ({} as IrStrategyDef["position"]["entry"]);
     setEntryMode(en.mode ?? "on_signal");
     setRebalance(en.rebalance ?? "monthly");
+    setEveryNDays(numOrEmpty(en.every_n_days) === "" ? 10 : numOrEmpty(en.every_n_days));
     setRefill(en.refill ?? "cash");
     setTopN(numOrEmpty(en.top_n));
     setTopPct(numOrEmpty(en.top_pct));
@@ -265,9 +277,16 @@ export default function IrBuilder() {
     setShortBorrow(numOrEmpty(sim.short_borrow_pct));
     setFunding(numOrEmpty(sim.funding_cost_pct));
     setRfr(numOrEmpty(sim.rfr_pct));
-    // 펼침
+    setMaintMargin(numOrEmpty(sim.maintenance_margin_pct));
+    // 분석 (펼침 + 신호값/IC/기간분할) — target·period를 평면 analysisType로 역매핑.
     const sw = def.sweep ?? { axis: "none" };
-    setSweepAxis(sw.axis ?? "none");
+    const tgt = sw.target ?? "return";
+    const hasPeriod = (sim.period_split && sim.period_split !== "single")
+      || (sim.split_dates?.length ?? 0) > 0;
+    setSweepAxis(tgt === "signal" ? "signal" : tgt === "relation" ? "relation"
+      : hasPeriod ? "period" : (sw.axis ?? "none"));
+    setTargetNode(sw.target_node ?? null);
+    setSplitDates((sim.split_dates ?? []).join(", "));
     if (sw.param_grid?.length) {
       setParamAxes(sw.param_grid.map((ax) => ({
         path: ax.path, values: (ax.values ?? []).join(", "),
@@ -275,6 +294,7 @@ export default function IrBuilder() {
     }
     setSweepAssets((sw.assets ?? []).join(", "));
     setSweepLabel(sw.label ?? null);
+    setSweepEvent(sw.event ?? null);
     if (sw.windows?.length) setSweepWindows(sw.windows.join(", "));
     setEventBasis(sw.event_basis ?? "close");
   }
@@ -291,15 +311,21 @@ export default function IrBuilder() {
     const syms = universeSymbols.split(",").map((s) => s.trim()).filter(Boolean);
     const sweep = buildSweep();
     const sim: Record<string, unknown> = {
-      initial_capital: capital, delay, fill, leverage, period_split: periodSplit,
+      initial_capital: capital, delay, fill, leverage,
+      // 기간분할은 분석 유형이 'period'일 때만 — 그 외엔 single(엔진 라우팅·검증 일관).
+      period_split: sweepAxis === "period" ? (periodSplit === "single" ? "oos" : periodSplit) : "single",
       start: startDate || null, end: endDate || null,
     };
+    if (sweepAxis === "period" && splitDates.trim()) {
+      sim.split_dates = splitDates.split(",").map((s) => s.trim()).filter(Boolean);
+    }
     if (commission !== "") sim.commission = commission;
     if (slippage !== "") sim.slippage = slippage;
     if (sellTax !== "") sim.sell_tax = sellTax;
     if (shortBorrow !== "") sim.short_borrow_pct = shortBorrow;
     if (funding !== "") sim.funding_cost_pct = funding;
     if (rfr !== "") sim.rfr_pct = rfr;
+    if (maintMargin !== "") sim.maintenance_margin_pct = maintMargin;
     const overlays: Record<string, unknown> = {};
     if (volTarget !== "") overlays.vol_target = volTarget;
     if (turnoverDamp !== "") overlays.turnover_damp = turnoverDamp;
@@ -336,6 +362,9 @@ export default function IrBuilder() {
       entry.top_n = topN === "" ? null : topN;
       entry.top_pct = topPct === "" ? null : topPct;
       entry.threshold = threshold === "" ? null : threshold;
+      if (entryMode === "scheduled" && rebalance === "every_n_days") {
+        entry.every_n_days = everyNDays === "" ? null : everyNDays;
+      }
     }
 
     // ── 청산 (이벤트·정기 공통 — 채운 규칙 OR 결합) ──
@@ -375,13 +404,25 @@ export default function IrBuilder() {
     }
     if (sweepAxis === "time") {
       return {
-        axis: "time", label: sweepLabel, event_basis: eventBasis,
-        windows: sweepWindows.split(",").map((x) => Number(x.trim()))
-          .filter((n) => !Number.isNaN(n)),
+        axis: "time", label: sweepLabel, event: sweepEvent, event_basis: eventBasis,
+        windows: parseWindows(),
       };
     }
     if (sweepAxis === "condition") return { axis: "condition", label: sweepLabel };
-    return { axis: "none" };
+    // 신호값 분포 — 임의 score 노드의 값 분포를 (선택)국면별로. axis=none.
+    if (sweepAxis === "signal") {
+      return { axis: "none", target: "signal", target_node: targetNode, label: sweepLabel };
+    }
+    // 횡단 IC — factor와 forward수익의 예측력. windows=forward 일수.
+    if (sweepAxis === "relation") {
+      return { axis: "none", target: "relation", target_node: targetNode,
+               label: sweepLabel, windows: parseWindows() };
+    }
+    return { axis: "none" };   // none·period(기간분할은 simulation.period_split로 처리)
+  }
+
+  function parseWindows(): number[] {
+    return sweepWindows.split(",").map((x) => Number(x.trim())).filter((n) => !Number.isNaN(n));
   }
 
   async function run() {
@@ -469,9 +510,12 @@ export default function IrBuilder() {
           <div style={{ marginBottom: 10 }}>
             <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>대상 종목</div>
             <MultiSymbolPicker symbols={symbols} value={universeSymbols}
-                               onChange={setUniverseSymbols} scope="backtest" />
+                               onChange={setUniverseSymbols} scope="backtest"
+                               strategies={strategies.filter(
+                                 (s) => s.engine !== "operand" && String(s.id) !== editId)} />
             <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
               비우면 전체 종목이 유니버스가 됩니다. 백테스트 데이터 보유 {dataSymbols.length.toLocaleString()}개에서 선택 ·
+              "내 전략" 탭에서 저장한 전략을 자산으로 골라 전략끼리 조합할 수 있습니다 ·
               "실거래 불가" 배지는 백테스트 전용(지수·매크로 등, 자동매매 대상 아님).
             </p>
           </div>
@@ -547,6 +591,12 @@ export default function IrBuilder() {
               <select value={rebalance} onChange={(e) => setRebalance(e.target.value)}>
                 {REBALANCE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
+            </label>
+          )}
+          {entryMode === "scheduled" && rebalance === "every_n_days" && (
+            <label className="lab-field">N일 간격
+              <input type="number" value={everyNDays} min={1} placeholder="예: 10"
+                     onChange={(e) => setEveryNDays(e.target.value === "" ? "" : Number(e.target.value))} />
             </label>
           )}
           {entryMode !== "on_signal" && (
@@ -712,12 +762,9 @@ export default function IrBuilder() {
             <input type="number" step={0.5} value={leverage}
                    onChange={(e) => setLeverage(Number(e.target.value))} />
           </label>
-          <label className="lab-field">기간분할
-            <select value={periodSplit} onChange={(e) => setPeriodSplit(e.target.value)}>
-              <option value="single">없음</option>
-              <option value="walk_forward">워크포워드</option>
-              <option value="oos">인/아웃샘플</option>
-            </select>
+          <label className="lab-field">유지증거금률(%)
+            <input type="number" step={5} value={maintMargin} placeholder="없음(마진콜 끄기)"
+                   onChange={(e) => setMaintMargin(e.target.value === "" ? "" : Number(e.target.value))} />
           </label>
         </div>
         {leverage > 1 && (
@@ -756,17 +803,20 @@ export default function IrBuilder() {
         </div>
       </div>
 
-      {/* 펼침 */}
+      {/* 분석 (펼침 + 신호값·IC·기간분할 통합) */}
       <div className="panel">
-        <div className="panel-title">펼침 (비교 분석)</div>
+        <div className="panel-title">분석</div>
         <div className="lab-row">
-          <label className="lab-field">축
-            <select value={sweepAxis} onChange={(e) => setSweepAxis(e.target.value as SweepAxis)}>
-              <option value="none">없음 (1회)</option>
-              <option value="parameter">파라미터 그리드</option>
+          <label className="lab-field">분석 유형
+            <select value={sweepAxis} onChange={(e) => setSweepAxis(e.target.value as AnalysisType)}>
+              <option value="none">없음 (1회 백테스트)</option>
+              <option value="condition">국면별 비교</option>
+              <option value="parameter">파라미터 민감도</option>
               <option value="asset">종목별</option>
-              <option value="condition">국면별</option>
               <option value="time">이벤트 분석</option>
+              <option value="signal">신호값 분포</option>
+              <option value="relation">팩터 IC (예측력)</option>
+              <option value="period">기간 분할 / 워크포워드</option>
             </select>
           </label>
           {sweepAxis === "asset" && (
@@ -776,17 +826,34 @@ export default function IrBuilder() {
             </label>
           )}
           {sweepAxis === "time" && (
+            <label className="lab-field">수익 기준
+              <select value={eventBasis} onChange={(e) => setEventBasis(e.target.value)}>
+                <option value="close">종가→종가</option>
+                <option value="intraday">시가→종가(당일반등)</option>
+                <option value="excess">시장초과(2종목+)</option>
+              </select>
+            </label>
+          )}
+          {(sweepAxis === "time" || sweepAxis === "relation") && (
+            <label className="lab-field">
+              {sweepAxis === "relation" ? "예측 horizon (일, 쉼표)" : "forward 윈도우 (일, 쉼표)"}
+              <input type="text" value={sweepWindows} placeholder="5, 10, 20" style={{ minWidth: 160 }}
+                     onChange={(e) => setSweepWindows(e.target.value)} />
+            </label>
+          )}
+          {sweepAxis === "period" && (
             <>
-              <label className="lab-field">수익 기준
-                <select value={eventBasis} onChange={(e) => setEventBasis(e.target.value)}>
-                  <option value="close">종가→종가</option>
-                  <option value="intraday">시가→종가(당일반등)</option>
-                  <option value="excess">시장초과(2종목+)</option>
+              <label className="lab-field">분할 방식
+                <select value={periodSplit === "single" ? "oos" : periodSplit}
+                        onChange={(e) => setPeriodSplit(e.target.value)}>
+                  <option value="oos">인/아웃샘플</option>
+                  <option value="walk_forward">워크포워드</option>
+                  <option value="kfold">K-폴드</option>
                 </select>
               </label>
-              <label className="lab-field">forward 윈도우 (일, 쉼표)
-                <input type="text" value={sweepWindows} placeholder="5, 10, 20" style={{ minWidth: 160 }}
-                       onChange={(e) => setSweepWindows(e.target.value)} />
+              <label className="lab-field">분할 시점 (선택 · 쉼표 ISO)
+                <input type="text" value={splitDates} placeholder="2018-01-01" style={{ minWidth: 200 }}
+                       onChange={(e) => setSplitDates(e.target.value)} />
               </label>
             </>
           )}
@@ -823,16 +890,53 @@ export default function IrBuilder() {
         )}
         {sweepAxis === "time" && (
           <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-            이벤트 = 위 신호가 참인 날. 각 이벤트 후 윈도우별 수익 분포·유의성을 분석합니다(P&L 아님).
+            이벤트 후 윈도우별 수익 분포·유의성을 분석합니다(P&L 아님).
             국면 블록을 넣으면 이벤트 시점 국면별로 나눠 비교합니다(선택).
           </p>
         )}
-        {(sweepAxis === "condition" || sweepAxis === "time") && (
+        {sweepAxis === "time" && (
           <div style={{ marginTop: 10 }}>
             <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
-              {sweepAxis === "time"
-                ? "국면 라벨 블록 (선택 — 예: 실현변동성 구간분할)"
-                : "국면 라벨 블록 (예: VIX 구간분할)"}</div>
+              이벤트 조건 (선택 — 비우면 위 신호가 참인 날을 이벤트로 사용)</div>
+            <SentenceTree node={sweepEvent} catalog={catalog} symbols={symbols}
+                       selfIndicators={selfIndicators} requiredType="condition"
+                       onChange={setSweepEvent} />
+          </div>
+        )}
+        {sweepAxis === "signal" && (
+          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            손익이 아니라 <b>신호 자체의 값 분포</b>를 봅니다(예: 반감기가 변동성 레짐별로 다른가).
+            국면 블록을 넣으면 국면별 분포를 비교합니다(선택).
+          </p>
+        )}
+        {sweepAxis === "relation" && (
+          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            팩터가 <b>다음 N일 수익을 횡단으로 예측</b>하는지(IC). 종목 2개 이상 필요.
+            국면 블록을 넣으면 IC가 국면별로 다른지(팩터 타이밍) 봅니다(선택).
+          </p>
+        )}
+        {sweepAxis === "period" && (
+          <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            전략을 기간으로 나눠 일관성을 봅니다. <b>분할 시점</b>을 비우면 균등 분할,
+            채우면 그 시점으로 가릅니다(예: 2018-01-01 → 학습 2010-17 / 검증 2018-).
+          </p>
+        )}
+        {(sweepAxis === "signal" || sweepAxis === "relation") && (
+          <div style={{ marginTop: 10 }}>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
+              {sweepAxis === "signal" ? "분석할 신호 (이 값의 분포를 봅니다)"
+                : "팩터 (forward 수익과의 횡단 IC를 봅니다)"}</div>
+            <SentenceTree node={targetNode} catalog={catalog} symbols={symbols}
+                       selfIndicators={selfIndicators} requiredType={["condition", "score"]}
+                       onChange={setTargetNode} />
+          </div>
+        )}
+        {(sweepAxis === "condition" || sweepAxis === "time"
+          || sweepAxis === "signal" || sweepAxis === "relation") && (
+          <div style={{ marginTop: 10 }}>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
+              {sweepAxis === "condition" ? "국면 라벨 블록 (예: VIX 구간분할)"
+                : "국면 라벨 블록 (선택 — 예: 실현변동성 구간분할)"}</div>
             <SentenceTree node={sweepLabel} catalog={catalog} symbols={symbols}
                        selfIndicators={selfIndicators} requiredType="label"
                        onChange={setSweepLabel} />
@@ -898,6 +1002,14 @@ function ResultPanel({ result }: { result: IrStrategyResult }) {
   // 이벤트 스터디 결과 (A2)
   if (result.axis === "time") {
     return <EventStudyPanel result={result} />;
+  }
+  // 신호값 분포 (target=signal)
+  if (result.axis === "signal") {
+    return <SignalStudyPanel result={result} />;
+  }
+  // 횡단 IC (target=relation)
+  if (result.axis === "relation") {
+    return <ICStudyPanel result={result} />;
   }
 
   // 펼침 결과 — 버킷 표
@@ -972,6 +1084,91 @@ function ResultPanel({ result }: { result: IrStrategyResult }) {
           <EquityChart equity={result.equity} benchmark={result.benchmark} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function SignalStudyPanel({ result }: { result: IrStrategyResult }) {
+  const dist = (result.overall ?? {}) as IrDistribution;
+  const reg = result.by_regime as unknown as IrPartition | null | undefined;
+  const q = dist.quantiles ?? {};
+  return (
+    <div className="panel">
+      <div className="panel-title">신호값 분포</div>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        신호 자체의 값 분포(손익 아님) · 표본 {dist.n ?? 0}개. 국면 블록을 넣으면 국면별로 비교됩니다.
+      </p>
+      <div className="stat-grid">
+        <div className="stat"><div className="label">평균</div><div className="value">{fmt(dist.mean, "")}</div></div>
+        <div className="stat"><div className="label">표준편차</div><div className="value">{fmt(dist.std, "")}</div></div>
+        <div className="stat"><div className="label">중앙값</div><div className="value">{fmt(q.q50, "")}</div></div>
+        <div className="stat"><div className="label">하위5%</div><div className="value neg">{fmt(q.q05, "")}</div></div>
+        <div className="stat"><div className="label">상위5%</div><div className="value pos">{fmt(q.q95, "")}</div></div>
+        <div className="stat"><div className="label">왜도</div><div className="value">{fmt(dist.skew, "")}</div></div>
+        <div className="stat"><div className="label">첨도</div><div className="value">{fmt(dist.kurtosis, "")}</div></div>
+      </div>
+      {reg?.by_label && Object.keys(reg.by_label).length ? (
+        <>
+          <div className="panel-title" style={{ marginTop: 18, fontSize: 14 }}>국면별 분포</div>
+          <table className="sweep-table">
+            <thead><tr><th>국면</th><th>표본</th><th>평균</th><th>중앙값</th>
+              <th>하위5%</th><th>상위5%</th><th>왜도</th></tr></thead>
+            <tbody>
+              {Object.entries(reg.by_label).map(([k, d]) => (
+                <tr key={k}>
+                  <td>{k}</td><td>{d.n ?? "—"}</td>
+                  <td>{fmt(d.mean, "")}</td><td>{fmt(d.quantiles?.q50, "")}</td>
+                  <td className="neg">{fmt(d.quantiles?.q05, "")}</td>
+                  <td className="pos">{fmt(d.quantiles?.q95, "")}</td>
+                  <td>{fmt(d.skew, "")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {reg.pairwise && Object.keys(reg.pairwise).length ? (
+            <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+              국면 차이(2표본 t): {Object.entries(reg.pairwise).map(([k, v]) =>
+                `${k} → p=${v.p_value != null ? v.p_value.toFixed(4) : "—"}`
+                + (v.p_value != null && v.p_value < 0.05 ? " (유의)" : "")).join(" · ")}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function ICStudyPanel({ result }: { result: IrStrategyResult }) {
+  const windows = result.windows ?? [];
+  const byWindow = result.by_window ?? {};
+  return (
+    <div className="panel">
+      <div className="panel-title">팩터 IC — forward 수익 예측력</div>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        매 거래일 횡단 순위상관(IC). 평균 IC가 0보다 유의하면 예측력 있음(분석 전용 — 미래참조).
+        IR = 평균IC ÷ IC표준편차. p&lt;0.05면 유의.
+      </p>
+      <table className="sweep-table">
+        <thead><tr><th>예측 horizon(일)</th><th>표본</th><th>평균 IC</th><th>IR</th>
+          <th>t</th><th>양(+)확률(%)</th><th>p-value</th></tr></thead>
+        <tbody>
+          {windows.map((w) => {
+            const o = byWindow[w]?.overall ?? ({} as IrICStat);
+            return (
+              <tr key={w}>
+                <td>{w}</td><td>{o.n ?? "—"}</td>
+                <td className={(o.mean ?? 0) >= 0 ? "pos" : "neg"}>
+                  {o.mean != null ? o.mean.toFixed(4) : "—"}</td>
+                <td>{o.ir != null ? o.ir.toFixed(3) : "—"}</td>
+                <td>{o.t_stat != null ? o.t_stat.toFixed(2) : "—"}</td>
+                <td>{fmt(o.prob_positive, "")}</td>
+                <td className={o.p_value != null && o.p_value < 0.05 ? "pos" : ""}>
+                  {o.p_value != null ? o.p_value.toFixed(4) : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

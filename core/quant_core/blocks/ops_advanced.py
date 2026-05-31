@@ -30,7 +30,11 @@ def _ev_ts_corr(resolved, params, ctx):
 
 
 def _ev_ts_regression(resolved, params, ctx):
-    """롤링 선형적합 — output=beta(민감도) 또는 residual(고유 움직임)."""
+    """롤링 선형적합 — output=beta(민감도)·residual(고유 움직임)·r2(적합 직선성).
+
+    r2 = cov²/(var_x·var_y) = 결정계수[0,1]. bar_index를 x로 쓰면 추세의 직선성(추세강도
+    필터 — slope×r2). beta=기울기, r2=매끄러움. 추세추종 알파가 추세 직선성에 종속되는지.
+    """
     y, x = resolved["y"], resolved["x"]
     w = int(params.get("window", 20))
     kind = params.get("output", "beta")
@@ -45,6 +49,9 @@ def _ev_ts_regression(resolved, params, ctx):
         beta = cov / var
         if kind == "beta":
             res[col] = beta
+        elif kind == "r2":
+            var_y = yc.rolling(w).var().replace(0, np.nan)
+            res[col] = (cov ** 2) / (var * var_y)
         else:  # residual = y - (alpha + beta*x), alpha = mean_y - beta*mean_x
             alpha = yc.rolling(w).mean() - beta * xc.rolling(w).mean()
             res[col] = yc - (alpha + beta * xc)
@@ -192,6 +199,16 @@ def _ev_calendar(resolved, params, ctx):
     return pd.DataFrame({sym: s for sym in ctx.symbols}, index=idx)
 
 
+def _ev_bar_index(resolved, params, ctx):
+    """경과 영업일 램프(0..N-1)를 전 종목에 동일 부여 — 입력 없는 잎(calendar와 동형).
+
+    선형회귀의 시간축 x로 쓴다: ts_regression(가격, bar_index)의 beta=일당 추세 기울기,
+    r2=추세 직선성. 롤링 윈도 내에선 등간격 정수 램프라 beta·r2가 오프셋 불변(정상)."""
+    idx = ctx.master_idx
+    s = pd.Series(np.arange(len(idx), dtype=float), index=idx)
+    return pd.DataFrame({sym: s for sym in ctx.symbols}, index=idx)
+
+
 # ── 축4: per-symbol 정적 분류 라벨 + 멤버십 조건 (섹터 필터·슬리브 구분) ────────
 
 def _ev_attribute(resolved, params, ctx):
@@ -254,6 +271,8 @@ register(BlockDef("ts_halflife", ValueType.SCORE, _ev_ts_halflife,
 register(BlockDef("calendar", ValueType.LABEL, _ev_calendar,
                   param_defaults={"unit": "weekday"},
                   doc="달력 라벨(요일·월·월중주차)"))
+register(BlockDef("bar_index", ValueType.SCORE, _ev_bar_index,
+                  doc="경과 영업일 램프(추세 회귀의 시간축 x)"))
 register(BlockDef("attribute", ValueType.LABEL, _ev_attribute,
                   param_defaults={"attr": "Industry"},
                   doc="종목 정적 분류 라벨(섹터·업종)"))

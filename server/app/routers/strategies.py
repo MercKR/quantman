@@ -319,7 +319,7 @@ def get_stats(
         .order_by(SyncSnapshot.received_at.desc())
     ).first()
 
-    pnl_total = pnl_pct = win_rate = None
+    pnl_total = pnl_pct = win_rate = traded_amount = None
     n_trades = 0
     n_positions = 0
     last_snapshot_at = None
@@ -328,10 +328,12 @@ def get_stats(
         payload = snap.payload or {}
         by_strat = (payload.get("strategy_pnl") or {}).get("by_strategy") or []
         for s in by_strat:
-            if s.get("strategy_name") == row.name:
+            # 로컬 analytics는 전략명을 "strategy" 키로 담는다 — 과거 "strategy_name" 혼용 대비 양쪽 허용.
+            if (s.get("strategy_name") or s.get("strategy")) == row.name:
                 pnl_total = s.get("pnl")
                 win_rate = s.get("win_rate")
                 n_trades = int(s.get("trades") or 0)
+                traded_amount = s.get("traded_amount")
                 break
         positions = payload.get("positions") or []
         n_positions = sum(1 for p in positions
@@ -346,7 +348,7 @@ def get_stats(
         live_started_at=row.live_started_at,
         days_paper=_days_between(row.paper_started_at, now),
         days_live=_days_between(row.live_started_at, now),
-        pnl_total=pnl_total, pnl_pct=pnl_pct,
+        pnl_total=pnl_total, pnl_pct=pnl_pct, traded_amount=traded_amount,
         win_rate=win_rate, n_trades=n_trades,
         n_positions=n_positions, last_snapshot_at=last_snapshot_at)
 

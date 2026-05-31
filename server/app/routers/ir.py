@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ValidationError
 from sqlmodel import Session, select
@@ -118,6 +120,34 @@ def _persist_ir_backtest(session: Session, user, body: dict, payload: dict) -> N
     session.commit()
 
 
+def _make_strategy_resolver(session: Session, user: Optional[User]):
+    """strat:<id>[@<버전>] → 저장 전략 definition(자식 spec). 전략 조합(G3) resolver.
+
+    **본인 소유 전략만** 참조 가능(strat.user_id != user.id → None) — 타 유저 전략을
+    합성 자산으로 끌어오는 것을 차단(privacy 경계). 버전 미지정 시 현재 정의.
+    """
+    if user is None:
+        return None
+
+    def resolve(token: str):
+        sid_str, _, vno_str = str(token).partition("@")
+        if not sid_str.isdigit():
+            return None
+        strat = session.get(Strategy, int(sid_str))
+        if strat is None or strat.user_id != user.id:
+            return None
+        if vno_str:
+            if not vno_str.isdigit():
+                return None
+            ver = session.exec(select(StrategyVersion).where(
+                StrategyVersion.strategy_id == int(sid_str),
+                StrategyVersion.version_no == int(vno_str))).first()
+            return ver.definition if ver else None
+        return strat.definition or None
+
+    return resolve
+
+
 @router.post("/strategy")
 def ir_strategy(body: dict, user: User = Depends(get_current_user),
                 session: Session = Depends(get_session)):
@@ -131,14 +161,15 @@ def ir_strategy(body: dict, user: User = Depends(get_current_user),
     # strict=true(body)면 편향형 경고를 거부로 승격(실전 자금 투입 前 게이트).
     res = strategy_from_spec(
         body, dataset, valid_refs=available_refs(dataset),
-        manifest=get_manifest(), strict=bool(body.get("strict", False)))
+        manifest=get_manifest(), strict=bool(body.get("strict", False)),
+        strategy_resolver=_make_strategy_resolver(session, user))
     if not res.get("success"):
         return {"success": False, "error": res.get("error"),
                 "issues": res.get("issues", [])}
     if res.get("axis"):   # 펼침 resultset (equity Series는 JSON 비호환이라 제외)
         out = {"success": True, "axis": res["axis"], "warnings": res.get("warnings", [])}
         for k in ("buckets", "overall", "axes", "metrics", "compare", "consistency",
-                  "windows", "by_regime", "n_events", "basis"):
+                  "windows", "by_regime", "n_events", "basis", "by_window", "relation"):
             if k in res and res[k] is not None:
                 out[k] = res[k]
         return clean_json(out)   # NaN/inf→None (allow_nan=False JSONResponse 호환)

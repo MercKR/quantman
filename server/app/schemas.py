@@ -108,6 +108,7 @@ class StrategyStatsOut(BaseModel):
     days_live: Optional[int] = None
     pnl_total: Optional[float] = None              # 누적 손익 (KRW)
     pnl_pct: Optional[float] = None                # 누적 손익률 (%)
+    traded_amount: Optional[float] = None          # 거래된 금액 (총 체결대금, KRW) — 집계만
     win_rate: Optional[float] = None
     n_trades: Optional[int] = None
     n_positions: int = 0                            # 현재 보유 종목 수
