@@ -24,7 +24,6 @@ from pydantic import BaseModel, Field
 from quant_core.oil_futures import (
     CostModel,
     ExitRules,
-    Side,
     generate_signals,
     grid_search,
     prepare_wti,
@@ -61,9 +60,12 @@ def _df() -> pd.DataFrame:
     if _WTI_CACHE["version"] != v:
         ds = get_raw_dataset()
         raw = ds.get("원유선물")
-        if raw is None or raw.empty:
+        df = prepare_wti(raw) if raw is not None and not raw.empty else None
+        # 미수집(시리즈 부재) + 정제 후 전부 탈락(예: 전 구간 비양수) 둘 다 503.
+        # version을 갱신하지 않아 빈 프레임을 유효 캐시로 굳히지 않는다.
+        if df is None or df.empty:
             raise HTTPException(status_code=503, detail="원유 데이터 미수집 — 데이터 수집 후 이용 가능")
-        _WTI_CACHE["df"] = prepare_wti(raw)
+        _WTI_CACHE["df"] = df
         _WTI_CACHE["version"] = v
     return _WTI_CACHE["df"]
 
