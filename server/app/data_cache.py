@@ -18,9 +18,13 @@ import time
 import pandas as pd
 import quant_core as qc
 from quant_core import data_fetcher
+from quant_core.indicators import FUND_INDICATOR_COLS, compute_columns
 
 _lock = threading.Lock()
 _dataset: dict[str, pd.DataFrame] | None = None
+# 원시 OHLCV 캐시(지표 계산 0) — 컬럼 프로젝션의 공유 입력. full _dataset(45컬럼,
+# ~9.4GB) 대신 raw(~1.3GB)만 상주시키고 get_projected가 필요 지표만 그때그때 계산한다.
+_raw: dict[str, pd.DataFrame] | None = None
 _manifest = None        # DataManifest — 실측 메타(무결성 게이트 입력). dataset과 수명 동일.
 # 경량 심볼 인덱스(parquet 메타만, 지표계산 없음) — /symbols·참조검증용. 컴퓨티드
 # dataset(8.5분)과 분리해 종목 목록 응답이 지표계산에 묶이지 않게 한다.
@@ -35,8 +39,9 @@ _CHECK_INTERVAL = 10.0          # 세대 확인 최소 간격(초) — 읽기당
 
 def _clear_locked() -> None:
     """캐시 폐기 + 파생 캐시 키(_version) bump. 호출자가 _lock 보유 가정."""
-    global _dataset, _manifest, _symbol_index, _version, _built_generation
+    global _dataset, _raw, _manifest, _symbol_index, _version, _built_generation
     _dataset = None
+    _raw = None
     _manifest = None
     _symbol_index = None
     _version += 1
@@ -47,7 +52,8 @@ def _maybe_reload() -> None:
     """디스크 데이터 세대가 빌드 시점과 다르면 캐시 폐기(throttled). manage·백필·cron
     (별도 프로세스)이나 수동 변경이 바꾼 데이터를 라이브 서버가 자가 감지해 리로드한다."""
     global _last_check
-    if _dataset is None and _manifest is None and _symbol_index is None:
+    if (_dataset is None and _raw is None and _manifest is None
+            and _symbol_index is None):
         return                  # 빌드된 캐시 없음 — 검증 불필요
     now = time.monotonic()
     if now - _last_check < _CHECK_INTERVAL:
@@ -70,6 +76,47 @@ def get_dataset() -> dict[str, pd.DataFrame]:
                 _built_generation = data_fetcher.data_generation()
                 _dataset = qc.load_dataset(with_indicators=True)
     return _dataset
+
+
+def get_raw_dataset() -> dict[str, pd.DataFrame]:
+    """원시 OHLCV dict(지표 계산 0) — 컬럼 프로젝션의 공유 입력.
+
+    full compute_all(45컬럼, ~9.4GB) 대신 raw(~1.3GB)만 상주시킨다. 소비처는
+    get_projected로 전략이 실제 참조하는 지표만 그때그때 계산한다(메모리 근본 절감).
+    dataset과 같은 세대 마커(_built_generation)로 데이터 변경 시 함께 무효화된다.
+    """
+    global _raw, _built_generation
+    _maybe_reload()
+    if _raw is None:
+        with _lock:
+            if _raw is None:
+                if _built_generation is None:
+                    _built_generation = data_fetcher.data_generation()
+                _raw = qc.load_dataset(with_indicators=False)
+    return _raw
+
+
+def get_projected(columns, symbols=None) -> dict[str, pd.DataFrame]:
+    """요청 지표 컬럼만 계산한 dataset(컬럼 프로젝션). symbols=None이면 전 유니버스.
+
+    raw 공유 캐시에서 compute_columns로 그때그때 계산하며 **상주시키지 않는다**(호출자가
+    쓰고 버림 → 피크 메모리 = raw + 진행 중 1건). 반환값의 요청 컬럼은 compute_all(전체)과
+    **byte 동일**(quant_core.compute_columns의 순수성 — test_compute_columns·골든 불변식).
+    fund 지표가 요청되면 펀더멘털을 1회 로드해 attach(아니면 로드 안 함 → 가벼움).
+    """
+    raw = get_raw_dataset()
+    cols = set(columns)
+    want_fund = bool(cols & set(FUND_INDICATOR_COLS))
+    funds = data_fetcher.load_fund_all() if want_fund else {}
+    keys = list(raw.keys()) if symbols is None else [s for s in symbols if s in raw]
+    out: dict[str, pd.DataFrame] = {}
+    for s in keys:
+        df = raw[s]
+        if df is None or df.empty:
+            continue
+        fd = funds.get(s) if want_fund else None
+        out[s] = compute_columns(df, cols, fd if (fd is not None and not fd.empty) else None)
+    return out
 
 
 def get_manifest():

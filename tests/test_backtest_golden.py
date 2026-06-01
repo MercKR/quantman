@@ -26,9 +26,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
 
-from quant_core.indicators import compute_all  # noqa: E402
+from quant_core.indicators import compute_all, compute_columns  # noqa: E402
 from quant_core.ir_engine import (  # noqa: E402
-    StrategyIR, needed_symbols, strategy_from_spec,
+    StrategyIR, needed_columns, needed_symbols, strategy_from_spec,
 )
 
 
@@ -57,18 +57,20 @@ def _make_raw(sym_seed: int, drift: float, vol: float) -> pd.DataFrame:
     }, index=idx)
 
 
-def _build_universe() -> dict[str, pd.DataFrame]:
-    """전 유니버스(8종목) — raw OHLCV에 compute_all로 지표 부착. load_dataset과 동형."""
+def _build_raw() -> dict[str, pd.DataFrame]:
+    """전 유니버스(8종목) raw OHLCV — 종목별 다른 추세/변동성(seeded)."""
     specs = [  # (seed, drift%, vol%) — 다양한 추세/변동성
         (1, 0.06, 1.1), (2, 0.03, 1.4), (3, 0.10, 0.9), (4, -0.02, 1.6),
         (5, 0.04, 1.0), (6, 0.08, 1.3), (7, 0.01, 0.8), (8, -0.05, 1.8),
     ]
-    raw = {sym: _make_raw(seed, d, v) for sym, (seed, d, v) in zip(_SYMBOLS, specs)}
-    return {sym: compute_all(df) for sym, df in raw.items()}
+    return {sym: _make_raw(seed, d, v) for sym, (seed, d, v) in zip(_SYMBOLS, specs)}
 
 
 # 모듈 1회 빌드(빠름) — 모든 테스트가 공유하는 불변 입력.
-_FULL = _build_universe()
+# _RAW_UNI: 지표 부착 전 raw(컬럼 프로젝션 테스트가 compute_columns 입력으로 사용).
+# _FULL: compute_all로 전체 지표 부착(load_dataset과 동형) — 골든·차등의 기준.
+_RAW_UNI = _build_raw()
+_FULL = {sym: compute_all(df) for sym, df in _RAW_UNI.items()}
 
 
 # ── 노드 dict 빌더(통과 중인 test_data_layer 형태와 동일) ─────────────────────
@@ -249,6 +251,55 @@ def test_needed_symbols_includes_external_refs():
         "position": {"entry": {"mode": "on_signal"}, "exit": {"hold_days": 5}},
     }
     assert needed_symbols(StrategyIR.model_validate(spec)) == {"AAA", "VIX"}
+
+
+# ── 4. 컬럼 프로젝션 불변 — 참조 지표만 계산해도 백테스트 결과 동일(엔진 끝까지) ──
+# compute_columns(needed_columns)로 만든 부분-컬럼 dataset이 compute_all(전체)와
+# **동일 metrics**를 내는지 엔진 경로 전체로 검증. 차등(스코핑)의 컬럼 버전 —
+# 메모리 9.4GB→~2GB 최적화의 핵심 불변식. atr_14 등 암묵 의존 누락도 여기서 잡힌다.
+
+def _project_universe(cols) -> dict:
+    """전 유니버스를 raw에서 compute_columns(cols)로 재구성(프로젝션된 dataset)."""
+    return {s: compute_columns(_RAW_UNI[s], cols) for s in _RAW_UNI}
+
+
+@pytest.mark.parametrize("name", list(STRATEGIES))
+def test_column_projection_invariance(name):
+    spec = STRATEGIES[name]
+    cols = needed_columns(StrategyIR.model_validate(spec))
+    assert cols is not None, f"{name}: 골든 전략은 컬럼 결정 가능해야 함"
+    proj = _project_universe(cols)
+    full_m = _run(spec, _FULL)        # 전체 45컬럼
+    proj_m = _run(spec, proj)         # 참조 컬럼만
+    for k in _METRIC_KEYS:
+        assert _close(full_m.get(k), proj_m.get(k), rel=1e-9), (
+            f"{name}: 컬럼 프로젝션으로 지표 '{k}'가 달라짐 — "
+            f"전체={full_m.get(k)!r} vs 프로젝션={proj_m.get(k)!r} "
+            f"(needed_columns={sorted(cols)}). 누락된 암묵 의존 컬럼이 있을 수 있음.")
+
+
+def test_column_projection_atr_trailing():
+    """ATR 트레일링(엔진이 atr_14를 데이터-ref 밖에서 직접 읽음)의 암묵 의존을
+    needed_columns가 포착하고, 프로젝션 결과가 전체와 동일한지 검증."""
+    spec = {
+        "name": "RSI 진입 + ATR 트레일링",
+        "universe": {"kind": "single", "symbols": ["AAA"]},
+        "signal": _cmp(_d("__SELF__.rsi_14"), "<", _c(45.0)),
+        "position": {"entry": {"mode": "on_signal"},
+                     "exit": {"trail_atr_mult": 3.0}},
+        "simulation": {"initial_capital": 1e7},
+    }
+    cols = needed_columns(StrategyIR.model_validate(spec))
+    assert cols is not None and "atr_14" in cols, (
+        f"ATR 트레일링인데 needed_columns에 atr_14 없음: {cols}")
+    assert "rsi_14" in cols, "신호의 rsi_14도 포함돼야 함"
+    proj = _project_universe(cols)
+    full_m = _run(spec, _FULL)
+    proj_m = _run(spec, proj)
+    for k in _METRIC_KEYS:
+        assert _close(full_m.get(k), proj_m.get(k), rel=1e-9), (
+            f"ATR 트레일링: 프로젝션으로 '{k}' 달라짐 — "
+            f"전체={full_m.get(k)!r} vs 프로젝션={proj_m.get(k)!r}")
 
 
 if __name__ == "__main__":

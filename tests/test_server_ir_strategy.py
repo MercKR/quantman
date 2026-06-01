@@ -35,9 +35,13 @@ def _multi():
 
 @pytest.fixture(autouse=True)
 def _patch(monkeypatch):
+    # all/screener는 컬럼 프로젝션(get_projected) 경로 — 합성 dataset 반환.
+    monkeypatch.setattr(ir.data_cache, "get_projected",
+                        lambda columns, symbols=None: _multi())
+    # strat: 조합 등 결정 불가 폴백 경로(get_dataset)도 동일 합성 dataset.
     monkeypatch.setattr(ir, "get_dataset", _multi)
     # 게이트는 test_data_layer에서 검증 — 여기선 실행 경로만 보므로 manifest 생략(None=게이트 skip).
-    monkeypatch.setattr(ir, "get_manifest", lambda: None)
+    monkeypatch.setattr(ir, "build_dataset_manifest", lambda *a, **k: None)
 
 
 def _factor_body(top_n=1, direction="long", sweep=None):

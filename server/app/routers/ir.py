@@ -14,11 +14,12 @@ from sqlmodel import Session, select
 
 import quant_core as qc
 from quant_core.blocks import DatasetMeta, available_refs, catalog_spec
-from quant_core.ir_engine import (StrategyIR, backtest_from_spec,
+from quant_core.blocks.node import Node, referenced_symbols
+from quant_core.ir_engine import (StrategyIR, backtest_from_spec, needed_columns,
                                   needed_symbols, strategy_from_spec, validate_strategy)
 
 from .. import data_cache
-from ..data_cache import get_dataset, get_manifest
+from ..data_cache import get_dataset
 from ..data_manifest import build_dataset_manifest
 from ..db import get_session
 from ..deps import get_current_user
@@ -78,9 +79,21 @@ def ir_validate(body: dict, user: User = Depends(get_current_user)):
 
 @router.post("/backtest")
 def ir_backtest(body: IrBacktestIn, user: User = Depends(get_current_user)):
-    """블록 IR 전략을 백테스트. 검증 실패 시 issues, 성공 시 결과+무결성 경고."""
-    dataset = get_dataset()
+    """블록 IR 전략을 백테스트. 검증 실패 시 issues, 성공 시 결과+무결성 경고.
+
+    단일 trade_symbol 거래 — 필요 종목(거래종목 ∪ buy/sell이 참조한 외부심볼)만
+    부분집합 로드한다(전 유니버스 빌드 우회). buy/sell 파싱 실패는 needed를 좁히지
+    못할 뿐이며, 검증은 backtest_from_spec이 동일하게 수행해 같은 에러를 반환한다.
+    """
     spec = body.model_dump(exclude_none=True)
+    needed = {body.trade_symbol}
+    for nd in (body.buy, body.sell):
+        if nd:
+            try:
+                needed |= referenced_symbols(Node.model_validate(nd))
+            except Exception:                       # noqa: BLE001 — 검증은 backtest_from_spec이 수행
+                pass
+    dataset = qc.load_dataset_for(needed)
     res = backtest_from_spec(
         spec, dataset,
         valid_refs=available_refs(dataset),
@@ -157,20 +170,26 @@ def ir_strategy(body: dict, user: User = Depends(get_current_user),
     sweep.axis != none이면 펼침 resultset(버킷), 아니면 1회 백테스트 결과.
     저장된 전략(body.strategy_id) 백테스트면 BacktestRun으로 내역 저장.
     """
-    # 부분집합 로드 — single/list는 필요 종목만(load_dataset_for, ~0.1초) 읽어 전 유니버스
-    # (~8.5분) 빌드를 건너뛴다. all/screener는 횡단 랭킹이라 전 유니버스가 필요(get_dataset).
-    # 무결성 매니페스트도 부분집합으로 빌드 — single/list 게이트 판정은 전체 매니페스트와
-    # 동일(생존편향 D-surv는 universe=all 전용). 파싱 실패는 needed=None→전체 경로로 두면
-    # strategy_from_spec이 동일 에러를 반환(중복 검증 회피).
+    # 부분집합 로드 — 두 축으로 전 유니버스 45컬럼(~9.4GB) 빌드를 우회한다:
+    #   · single/list: 필요 종목만(load_dataset_for, ~0.1초). 종목 수가 적어 컬럼은 전체여도 가벼움.
+    #   · all/screener: 횡단 랭킹이라 전 종목이 필요하지만 **참조 지표 컬럼만**(get_projected,
+    #     컬럼 프로젝션) 계산 → ~9.4GB→~2GB. 값은 compute_all과 byte 동일(골든 프로젝션 불변식).
+    #   · strat: 조합 등 결정 불가 → 안전하게 전체(get_dataset). 드묾.
+    # 무결성 매니페스트는 그 dataset으로 빌드 — 게이트 판정은 동일(생존편향 D-surv는 universe=all 전용).
+    # 파싱 실패는 needed=cols=None→전체 경로로 두면 strategy_from_spec이 동일 에러를 반환(중복 검증 회피).
     try:
-        needed = needed_symbols(StrategyIR.model_validate(body))
+        _sir = StrategyIR.model_validate(body)
+        needed = needed_symbols(_sir)
+        cols = needed_columns(_sir)
     except ValidationError:
-        needed = None
-    if needed is None:
-        dataset, manifest = get_dataset(), get_manifest()
-    else:
+        needed = cols = None
+    if needed is not None:               # single/list — 필요 종목만
         dataset = qc.load_dataset_for(needed)
-        manifest = build_dataset_manifest(dataset, version=data_cache.get_version())
+    elif cols is not None:               # all/screener — 전 종목 × 참조 컬럼만(프로젝션)
+        dataset = data_cache.get_projected(cols, symbols=None)
+    else:                                # strat: 조합 등 — 안전하게 전체
+        dataset = get_dataset()
+    manifest = build_dataset_manifest(dataset, version=data_cache.get_version())
     # 무결성 4액션 게이트 가동 — manifest(실측) vs DataSpec(요구). meta는 manifest에서 도출.
     # strict=true(body)면 편향형 경고를 거부로 승격(실전 자금 투입 前 게이트).
     res = strategy_from_spec(

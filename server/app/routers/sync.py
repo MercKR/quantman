@@ -549,7 +549,9 @@ def sync_complete(
     def warmup_cache():
         try:
             _log.info("🚀 백그라운드 데이터셋 캐시 워밍업(Warm-up) 시작...")
-            data_cache.get_dataset()
+            # raw OHLCV 공유 캐시만 워밍(전 유니버스 45컬럼 9.4GB 빌드 회피). 백테스트·preview는
+            # 이 raw에서 참조 컬럼만 그때그때 프로젝션하므로 raw 워밍으로 콜드스타트가 해소된다.
+            data_cache.get_raw_dataset()
             _log.info("✅ 백그라운드 데이터셋 캐시 워밍업 완료. 이제 즉시 웹에서 백테스트 가능합니다.")
         except Exception as e:
             _log.error("❌ 백그라운드 데이터셋 캐시 워밍업 실패: %s", e)

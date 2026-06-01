@@ -17,9 +17,10 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from quant_core import market_calendar as _mc
+from quant_core.ir_engine import StrategyIR, needed_columns, needed_symbols
 from sqlmodel import Session, select
 
-from .data_cache import get_dataset
+from .data_cache import get_dataset, get_projected
 from .db import engine
 from . import kis_master_cache
 from .models import Strategy, SyncSnapshot, User, UserSettings
@@ -326,6 +327,37 @@ def _evaluate_exits(positions: list[dict], dataset: dict,
     return candidates
 
 
+def _preview_dataset(strats: list, held_symbols: set) -> dict:
+    """유저 전략들이 참조하는 컬럼·종목만 프로젝션한 dataset — 전 유니버스 45컬럼
+    (~9.4GB) 빌드를 회피한다(preview cron OOM의 직접 원인이었던 경로).
+
+    · 어떤 전략이든 컬럼 결정 불가(strat: 조합 등) → 전체(get_dataset) 안전 폴백(드묾).
+    · all/screener 전략이 하나라도 있으면 전 종목 × 참조컬럼 프로젝션.
+    · 전부 single/list면 그 종목들 ∪ 보유종목만 프로젝션.
+    보유종목 Close(청산 미리보기)는 OHLCV라 프로젝션에도 항상 포함된다.
+    """
+    union_cols: set = set()
+    union_syms: set = set(held_symbols)
+    full_universe = False
+    for s in strats:
+        try:
+            sir = StrategyIR.model_validate(dict(s.definition or {}))
+        except Exception:                            # noqa: BLE001 — 파싱 실패는 평가 단계가 skip
+            continue
+        cols = needed_columns(sir)
+        if cols is None:
+            return get_dataset()                     # 결정 불가 → 전체(안전, 드묾)
+        union_cols |= cols
+        syms = needed_symbols(sir)
+        if syms is None:
+            full_universe = True
+        else:
+            union_syms |= syms
+    if full_universe:
+        return get_projected(union_cols, symbols=None)
+    return get_projected(union_cols, symbols=union_syms)
+
+
 def build_user_preview(session: Session, user_id: int,
                         data_source: str) -> dict:
     """사용자 1명에 대한 next-day preview 생성.
@@ -335,7 +367,6 @@ def build_user_preview(session: Session, user_id: int,
         user_id: 사용자 ID
         data_source: cron 식별자 ('dataset_global', 'krx_2nd', 등)
     """
-    dataset = get_dataset()
     snapshot = _latest_snapshot(session, user_id)
     if snapshot is None or not snapshot.payload:
         return {
@@ -355,22 +386,23 @@ def build_user_preview(session: Session, user_id: int,
     master_list = kis_master_cache.get_master_list()
     master_by_code = {m["symbol"]: m for m in master_list}
 
-    # 전략별 매수 평가
+    # 전략별 매수 평가 — IR 단일 체제(레거시 operand 행은 skip).
     strats = session.exec(
         select(Strategy).where(
             Strategy.user_id == user_id,
             Strategy.run_mode.in_(("paper", "live"))
         )
     ).all()
+    ir_strats = [s for s in strats if getattr(s, "engine", "operand") == "ir"]
+
+    # 데이터셋 — 이 유저 전략들이 실제 쓰는 컬럼·종목만(컬럼 프로젝션). 전 유니버스 빌드 회피.
+    dataset = _preview_dataset(ir_strats, held_symbols)
 
     by_strategy = []
     total_buy_amount = 0
     n_buy_candidates = 0
 
-    for s in strats:
-        # IR 단일 체제 — operand 전략은 더 이상 생성 불가. 혹시 남은 레거시 행은 skip.
-        if getattr(s, "engine", "operand") != "ir":
-            continue
+    for s in ir_strats:
         strat_def = dict(s.definition or {})
         strat_def["_id"] = s.id
         result = _evaluate_ir_strategy(strat_def, dataset, cash, held_symbols, master_by_code)

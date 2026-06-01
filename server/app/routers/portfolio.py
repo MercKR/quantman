@@ -12,7 +12,6 @@ from sqlmodel import Session, select
 
 import quant_core as qc
 
-from ..data_cache import get_dataset
 from ..db import get_session
 from ..deps import get_current_user
 from ..models import SyncSnapshot, User
@@ -40,7 +39,9 @@ def portfolio_risk(window: int = 60,
     if not positions:
         return {"positions": [], "matrix": [], "sectors": []}
 
-    data = get_dataset()
+    # 보유 종목 Close만 필요(상관계수·평가금액) — 보유분만 부분집합 로드(전 유니버스 빌드 회피).
+    held = [p.get("symbol") for p in positions if p.get("symbol")]
+    data = qc.load_dataset_for(held, with_indicators=False)
     valid: list[tuple[str, list[float], float]] = []
     # (symbol, ret_window, eval_value)
     for p in positions:

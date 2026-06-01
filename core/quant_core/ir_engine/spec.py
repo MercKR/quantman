@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from ..blocks.catalog import get, has
 from ..blocks.integrity import DatasetMeta, integrity_issues
-from ..blocks.node import Node, referenced_symbols
+from ..blocks.node import Node, referenced_columns, referenced_symbols
 from ..blocks.validate import (SEV_ERROR, SEV_INTEGRITY_WARN, Issue, has_market_source,
                                meaningfulness_issues, prioritize, validate)
 
@@ -418,3 +418,38 @@ def needed_symbols(s: StrategyIR) -> Optional[set[str]]:
     if any(str(x).startswith("strat:") for x in syms):
         return None
     return syms
+
+
+def needed_columns(s: StrategyIR) -> Optional[set[str]]:
+    """전략이 참조하는 지표 컬럼 집합 — 컬럼 프로젝션(compute_columns)용. None=전 컬럼 필요.
+
+    명시 참조(신호·매도조건·그룹라벨·스크리너조건·펼침 노드) ∪ 암묵 의존. 엔진이
+    데이터-ref 밖에서 직접 읽는 컬럼은 **atr_14(ATR 트레일링 스톱)** 뿐임을 확인했다
+    (engine.py·backtest.py). 사이징 변동성은 Close에서 즉석 계산이라 저장 컬럼 의존 없음.
+
+    이 집합을 compute_columns(df, cols)에 주면 그 지표만 계산 — 값은 compute_all과
+    byte 동일(각 add_*가 순수, test_backtest_golden의 프로젝션 불변식이 보장).
+    strat:<id> 조합은 자식이 임의 지표를 쓸 수 있어 None(전체)로 안전 폴백.
+    """
+    if any(str(x).startswith("strat:") for x in s.universe.symbols):
+        return None
+    nodes = [s.signal, s.position.exit.condition, s.position.overlays.group_label,
+             s.sweep.label, s.sweep.event, s.sweep.target_node]
+    # 스크리너 선별 조건도 참조 컬럼(후보를 이 조건으로 거른다).
+    if s.universe.kind == "screener" and s.universe.screener:
+        cond = s.universe.screener.get("condition")
+        if cond is not None:
+            try:
+                nodes.append(Node.model_validate(cond))
+            except Exception:                    # noqa: BLE001 — 잘못된 트리면 안전하게 전체
+                return None
+    cols: set[str] = set()
+    for nd in nodes:
+        if nd is not None:
+            if any(str(x).startswith("strat:") for x in referenced_symbols(nd)):
+                return None
+            cols |= referenced_columns(nd)
+    # 암묵 의존 — ATR 트레일링은 엔진이 atr_14를 직접 읽는다(데이터-ref 아님).
+    if s.position.exit.trail_atr_mult is not None:
+        cols.add("atr_14")
+    return cols

@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 
-from ..data_cache import get_dataset
+import quant_core as qc
+
 from ..deps import get_current_user
 from ..models import User
 
@@ -38,7 +39,10 @@ def _resolve(data: dict, names: list[str]) -> str | None:
 
 @router.get("/context")
 def market_context(user: User = Depends(get_current_user)):
-    data = get_dataset()
+    # 지수·VIX·환율 ~6종목의 Close만 필요 — 후보 키만 부분집합 로드(전 유니버스 빌드 회피).
+    # 지표 계산 불요(raw OHLCV로 충분). 없는 후보는 load_dataset_for가 조용히 skip.
+    cands = [n for _, names in _MARKET_SYMBOLS for n in names]
+    data = qc.load_dataset_for(cands, with_indicators=False)
     indicators = []
     for label, cands in _MARKET_SYMBOLS:
         key = _resolve(data, cands)

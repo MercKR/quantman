@@ -75,3 +75,23 @@ def referenced_symbols(node: Node) -> set[str]:
     for child in node.inputs.values():
         out |= referenced_symbols(child)
     return out
+
+
+def referenced_columns(node: Node) -> set[str]:
+    """트리에서 참조된 데이터 컬럼명 집합 — 심볼 prefix 제거.
+
+    "Close"·"__SELF__.rsi_14"·"VIX.Close" → {"Close", "rsi_14"}. 컬럼 프로젝션
+    (compute_columns)이 "이 전략이 실제 쓰는 지표만" 계산할 때 입력으로 쓴다.
+    OHLCV·매크로 컬럼명이 섞여도 무해(compute_columns가 지표 아닌 이름은 무시 —
+    이미 df에 존재하거나 계산 대상이 아님).
+    """
+    out: set[str] = set()
+    if node.op == OP_DATA:
+        ref = node.params.get("ref")
+        if isinstance(ref, str) and ref:
+            col = ref.split(".", 1)[1] if "." in ref else ref
+            if col:
+                out.add(col)
+    for child in node.inputs.values():
+        out |= referenced_columns(child)
+    return out

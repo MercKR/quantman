@@ -19,9 +19,10 @@ import threading
 from datetime import datetime, timezone
 
 import pandas as pd
+import quant_core as qc
 from quant_core import data_fetcher
 
-from . import data_cache, kis_master_cache
+from . import kis_master_cache
 
 log = logging.getLogger("app.us_metrics")
 
@@ -93,7 +94,13 @@ def build_metrics(dataset: dict | None = None,
 
     dataset/caps 미지정 시 서버 캐시에서 로드(테스트 주입용 인자).
     """
-    ds = dataset if dataset is not None else data_cache.get_dataset()
+    # S&P500(~500종목)만 순회하므로 전 유니버스(~15,819×45컬럼, 9.4GB) 빌드 대신
+    # S&P500 코드만 부분집합 로드(지표 포함 — _TECH_FIELDS surface용). 주1회 cron이라 가벼움.
+    if dataset is not None:
+        ds = dataset
+    else:
+        _codes = [(c.get("symbol") or "").replace(".", "-") for c in data_fetcher.load_sp500()]
+        ds = qc.load_dataset_for([c for c in _codes if c])
     caps = caps if caps is not None else _load_caps()
 
     master = {m["symbol"]: m for m in kis_master_cache.get_master_list()}

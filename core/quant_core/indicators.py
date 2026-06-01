@@ -408,6 +408,71 @@ def compute_all(df: pd.DataFrame, fund_df: Optional[pd.DataFrame] = None) -> pd.
     return df
 
 
+# ── 컬럼 프로젝션 (선택적 지표 계산) ──────────────────────────────────────────
+# 각 add_*가 만드는 출력 컬럼 맵 — compute_columns가 "요청 컬럼 → 필요한 producer"만
+# 골라 실행하기 위함. all/스크리너 백테스트가 참조하는 지표만 계산해 메모리/시간을 줄인다
+# (전 유니버스 45컬럼 동시 상주 ≈ 9.4GB → 참조 2~3컬럼만이면 ~1.5-2GB).
+#
+# 불변성 근거: 각 add_*는 OHLCV(+하드의존 rsi_14)의 순수 함수다. 소프트 의존
+# (zscore→log_return_1d, momentum→pct_change_252d)은 그 컬럼이 없으면 **동일 공식으로
+# 자가계산**한다 → 일부만 실행해도 요청 컬럼 값은 compute_all과 byte 동일.
+# 순서는 compute_all과 동일(rsi가 rsi_divergence보다 선행). test_compute_columns가 고정.
+_PRODUCERS: list[tuple] = [
+    (add_returns,          ("price_level", "pct_change_1d", "pct_change_5d",
+                            "pct_change_20d", "pct_change_252d", "log_return_1d"), ()),
+    (add_ma_deviation,     ("ma_dev_20d", "ma_dev_60d", "ma_dev_200d"), ()),
+    (add_ma_cross,         ("ma_gap_20_60",), ()),
+    (add_bb_width,         ("bb_width", "bb_pct"), ()),
+    (add_rsi,              ("rsi_14",), ()),
+    (add_rsi_divergence,   ("rsi_bear_div",), ("rsi_14",)),   # 하드 의존: rsi_14 선행
+    (add_atr,              ("atr_14", "atr_14_pct"), ()),
+    (add_realized_vol,     ("realized_vol_5d", "realized_vol_20d", "realized_vol_60d"), ()),
+    (add_zscore,           ("zscore_20d", "zscore_60d"), ()),       # 소프트: log_return_1d
+    (add_volume_ratio,     ("volume_ratio",), ()),
+    (add_adv,              ("adv_20d",), ()),
+    (add_high_deviation,   ("high_dev_20d",), ()),
+    (add_consecutive_days, ("streak",), ()),
+    (add_momentum_12_1m,   ("momentum_12_1m",), ()),              # 소프트: pct_change_252d
+]
+_COL_TO_PRODUCER_IDX: dict[str, int] = {
+    c: i for i, (_, cols, _) in enumerate(_PRODUCERS) for c in cols}
+
+
+def compute_columns(df: pd.DataFrame, columns,
+                    fund_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """요청한 지표 컬럼만 계산해 부착(컬럼 프로젝션). OHLCV는 항상 보존.
+
+    compute_all(45컬럼 전부)의 부분집합 버전. 반환 DataFrame의 **요청 컬럼 값은
+    compute_all과 byte 동일**(각 add_*가 OHLCV의 순수 함수이고 소프트 의존은 자가복구).
+    요청 컬럼이 다른 producer를 하드 의존하면(rsi_bear_div→rsi_14) 그 컬럼도 함께 생성된다.
+    OHLCV·매크로 등 지표 아닌 참조는 무시(이미 df에 있거나 계산 대상 아님).
+    """
+    wanted = set(columns)
+    need_idx: set[int] = set()
+    for c in wanted:
+        i = _COL_TO_PRODUCER_IDX.get(c)
+        if i is not None:
+            need_idx.add(i)
+    # 하드 의존 전이 폐쇄 (rsi_bear_div → rsi_14 등)
+    changed = True
+    while changed:
+        changed = False
+        for i in list(need_idx):
+            for dep in _PRODUCERS[i][2]:
+                j = _COL_TO_PRODUCER_IDX.get(dep)
+                if j is not None and j not in need_idx:
+                    need_idx.add(j)
+                    changed = True
+    out = df.copy()
+    for i, (fn, _cols, _deps) in enumerate(_PRODUCERS):   # compute_all과 동일 순서
+        if i in need_idx:
+            out = fn(out)
+    # 펀더멘털 컬럼이 하나라도 요청되면 add_fundamentals 1회(Close+fund_df의 순수 함수)
+    if (wanted & set(FUND_INDICATOR_COLS)) and fund_df is not None and not fund_df.empty:
+        out = add_fundamentals(out, fund_df)
+    return out
+
+
 def get_indicator_columns() -> list[str]:
     """가격 기반 지표 컬럼 목록 (항상 존재)."""
     return list(BASE_INDICATOR_COLS)
