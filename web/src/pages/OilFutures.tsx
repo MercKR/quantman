@@ -36,13 +36,6 @@ import {
   type OilWalkForward,
 } from "../api";
 
-// 임계값 grid — $10 단위 (Railway 무료 티어 메모리 호환). $1 단위는
-// 488 셀 컴퓨팅 시 OOM 발생, 추후 캐시 layer 추가 후 복원 예정.
-const DEFAULT_SHORTS = [80, 90, 100, 110, 120, 130, 140, 150];
-const DEFAULT_LONGS = [10, 20, 30, 40, 50, 60];
-// Horizon (영업일 보유 기간) — 365일까지 확장 (장기 평균회귀 패턴 검증용)
-const DEFAULT_HORIZONS = [20, 40, 60, 120, 180, 240, 365];
-
 // 색 스케일: 음수→빨강, 양수→녹색.
 // low_sample이면 채도·명도 낮춰서 회색쪽으로 블렌드(원본 부호는 유지).
 function heatColor(v: number, max: number, lowSample: boolean): string {
@@ -188,22 +181,20 @@ export default function OilFutures() {
   }, [grid, hideLowSample, sortKey, sortDir]);
 
   const heatmaps = useMemo(() => {
-    if (!grid) return { short: [], long: [], max: 1 };
-    // low_sample 포함해서 스케일 — 색 보존 위해 (단 채도는 낮춤)
+    if (!grid) return { short: [], long: [], horizons: [] as number[], max: 1 };
     const max = Math.max(1, ...grid.map((c) => Math.abs(c.net_pnl_usd)));
-    const short = DEFAULT_SHORTS.map((th) => ({
-      threshold: th,
-      cells: DEFAULT_HORIZONS.map((h) =>
-        grid.find((c) => c.side === "short" && c.threshold === th && c.horizon === h),
-      ),
-    }));
-    const long = DEFAULT_LONGS.map((th) => ({
-      threshold: th,
-      cells: DEFAULT_HORIZONS.map((h) =>
-        grid.find((c) => c.side === "long" && c.threshold === th && c.horizon === h),
-      ),
-    }));
-    return { short, long, max };
+    const horizons = [...new Set(grid.map((c) => c.horizon))].sort((a, b) => a - b);
+    const byKey = new Map(grid.map((c) => [`${c.side}|${c.threshold}|${c.horizon}`, c] as const));
+    const build = (side: "short" | "long") => {
+      const ths = [...new Set(grid.filter((c) => c.side === side).map((c) => c.threshold))]
+        .sort((a, b) => a - b);
+      return ths.map((th) => {
+        const cells = horizons.map((h) => byKey.get(`${side}|${th}|${h}`));
+        const n = Math.max(0, ...cells.map((c) => c?.n_trades ?? 0));
+        return { threshold: th, n, cells };
+      });
+    };
+    return { short: build("short"), long: build("long"), horizons, max };
   }, [grid]);
 
   function runWalkForward() {
@@ -316,6 +307,7 @@ export default function OilFutures() {
               ? "Short — $80~$150 (위로 첫 터치)"
               : "Long — $10~$60 (아래로 첫 터치)"}
             rows={heatmapSide === "short" ? heatmaps.short : heatmaps.long}
+            horizons={heatmaps.horizons}
             max={heatmaps.max}
             selected={selected}
             onSelect={setSelected}
@@ -750,10 +742,11 @@ function SortableTh({
 
 // ── 히트맵 블록 ────────────────────────────────────────────────────
 function HeatmapBlock({
-  title, rows, max, selected, onSelect,
+  title, rows, horizons, max, selected, onSelect,
 }: {
   title: string;
-  rows: { threshold: number; cells: (OilGridCell | undefined)[] }[];
+  rows: { threshold: number; n: number; cells: (OilGridCell | undefined)[] }[];
+  horizons: number[];
   max: number;
   selected: OilGridCell | null;
   onSelect: (c: OilGridCell) => void;
@@ -766,7 +759,7 @@ function HeatmapBlock({
           <thead>
             <tr>
               <th></th>
-              {DEFAULT_HORIZONS.map((h) => (
+              {horizons.map((h) => (
                 <th key={h}>{h}일</th>
               ))}
             </tr>
@@ -774,7 +767,7 @@ function HeatmapBlock({
           <tbody>
             {rows.map((row) => (
               <tr key={row.threshold}>
-                <th>${row.threshold}</th>
+                <th>${row.threshold} <span className="heat-n">(n={row.n})</span></th>
                 {row.cells.map((c, i) => {
                   if (!c) return <td key={i} />;
                   const isSel =

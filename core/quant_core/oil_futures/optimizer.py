@@ -32,10 +32,13 @@ def grid_search(
     long_thresholds: Iterable[float],
     horizons: Iterable[int],
     cost: CostModel = CostModel(),
+    light: bool = False,
 ) -> list[GridCell]:
     """모든 (side, threshold, horizon) 조합 백테스트.
 
     같은 threshold 의 신호 리스트는 horizon별로 재사용 (성능).
+    light=True: run_backtest fast-path 사용 — summarize()가 안 읽는 per-trade
+    MAE/MFE 와 portfolio MTM 계산을 건너뛴다 (grid 산출 지표는 불변).
     """
     cells: list[GridCell] = []
     horizons = list(horizons)
@@ -43,13 +46,13 @@ def grid_search(
     for th in short_thresholds:
         sigs = generate_signals(df, short_thresholds=[th])
         for h in horizons:
-            bt = run_backtest(df, sigs, horizon_days=int(h), cost=cost)
+            bt = run_backtest(df, sigs, horizon_days=int(h), cost=cost, light=light)
             cells.append(GridCell(Side.SHORT, float(th), int(h), summarize(bt)))
 
     for th in long_thresholds:
         sigs = generate_signals(df, long_thresholds=[th])
         for h in horizons:
-            bt = run_backtest(df, sigs, horizon_days=int(h), cost=cost)
+            bt = run_backtest(df, sigs, horizon_days=int(h), cost=cost, light=light)
             cells.append(GridCell(Side.LONG, float(th), int(h), summarize(bt)))
 
     return cells

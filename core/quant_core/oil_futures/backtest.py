@@ -136,6 +136,7 @@ def run_backtest(
     cost: CostModel = CostModel(),
     exits: ExitRules = ExitRules(),
     roll: RollModel = RollModel(),
+    light: bool = False,
 ) -> BacktestResult:
     """신호 리스트에 horizon_days 보유 정책 적용 → BacktestResult.
 
@@ -144,6 +145,12 @@ def run_backtest(
 
     exits.stop_loss_pct / take_profit_pct 지정 시 horizon 전에 조기 청산.
     roll.roll_cost_pct > 0 시: 보유 중 통과한 만기 횟수만큼 롤 비용을 차감 (A-2).
+
+    light=True: grid_search 전용 fast-path. summarize()가 읽지 않는 두 가지
+    무거운 계산을 건너뛴다 — (1) per-trade 장중 MAE/MFE held-window max/min,
+    (2) O(n_dates × n_trades) portfolio mark-to-market 곡선·MDD.
+    그 외(진입/청산 인덱스·SL/TP 스캔·슬리피지·gross/net·return·롤오버·realized
+    equity_curve)는 light=False 와 완전히 동일하다.
     """
     if horizon_days < 1:
         raise ValueError(f"horizon_days >= 1 이어야 함 (입력: {horizon_days})")
@@ -220,18 +227,23 @@ def run_backtest(
 
         exit_row = df.iloc[exit_i]
 
-        # MAE/MFE: 실제 보유 구간(entry~exit) 장중 high/low 기준
-        held = df.iloc[entry_i : exit_i + 1]
-        held_high = float(held["high"].max())
-        held_low = float(held["low"].min())
-        if sig.side == Side.LONG:
-            mfe_price = held_high - entry_price
-            mae_price = held_low - entry_price
+        # MAE/MFE: 실제 보유 구간(entry~exit) 장중 high/low 기준.
+        # light=True 면 held-window slice + max/min 을 통째로 생략 (제거 대상 비용).
+        if light:
+            mae_usd = 0.0
+            mfe_usd = 0.0
         else:
-            mfe_price = entry_price - held_low
-            mae_price = entry_price - held_high
-        mfe_usd = max(0.0, mfe_price) * WTI_MULTIPLIER
-        mae_usd = min(0.0, mae_price) * WTI_MULTIPLIER
+            held = df.iloc[entry_i : exit_i + 1]
+            held_high = float(held["high"].max())
+            held_low = float(held["low"].min())
+            if sig.side == Side.LONG:
+                mfe_price = held_high - entry_price
+                mae_price = held_low - entry_price
+            else:
+                mfe_price = entry_price - held_low
+                mae_price = entry_price - held_high
+            mfe_usd = max(0.0, mfe_price) * WTI_MULTIPLIER
+            mae_usd = min(0.0, mae_price) * WTI_MULTIPLIER
 
         # 슬리피지
         if sig.side == Side.LONG:
@@ -295,8 +307,12 @@ def run_backtest(
         equity = pd.Series(dtype=float)
 
     # Portfolio mark-to-market equity (시가평가)
-    # 매 영업일: 종료된 trade의 realized PnL 누적 + 열려있는 trade의 미실현 P&L 합
-    portfolio_curve, portfolio_mdd = _compute_portfolio_mtm(df, trades, cost)
+    # 매 영업일: 종료된 trade의 realized PnL 누적 + 열려있는 trade의 미실현 P&L 합.
+    # light=True 면 summarize()가 읽지 않는 이 O(n_dates × n_trades) 곡선을 생략.
+    if light:
+        portfolio_curve, portfolio_mdd = pd.Series(dtype=float), 0.0
+    else:
+        portfolio_curve, portfolio_mdd = _compute_portfolio_mtm(df, trades, cost)
 
     return BacktestResult(
         trades=trades,

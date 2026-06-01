@@ -434,6 +434,8 @@ async def lifespan(app: FastAPI):
                      daemon=True, name="bundle-initial").start()
     _log.info("미국 시가총액 초기 fetch thread 시작")
     threading.Thread(target=_initial_us_market_caps, daemon=True).start()
+    _log.info("원유 grid 워머 thread 시작")
+    oil_futures.start_grid_warmer()
 
     # ── 매일 정기 갱신 (Phase 31 — 외부 publish 시각에 맞춰 재배치) ──────────
     # 각 cron은 _run_with_retry로 감싸 실패 시 backoff[5,15,30,60,120]분 재시도.

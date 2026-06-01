@@ -201,6 +201,50 @@ def test_grid_search_covers_all_combos(small_df: pd.DataFrame) -> None:
     assert set(df_out["horizon"].unique()) == {2, 3}
 
 
+def test_light_mode_matches_summary_and_skips_heavy(small_df: pd.DataFrame) -> None:
+    """light=True 가 summarize() 핵심 지표를 light=False 와 동일하게 내야 하고,
+    per-trade MAE/MFE 와 portfolio MTM 만 건너뛴다.
+
+    fixture: 80 임계에서 short cross 가 2회 발화하는 8일치 (entry+horizon 모두 인바운드).
+    """
+    df = pd.DataFrame({
+        "date":  pd.date_range("2024-01-01", periods=8, freq="B"),
+        # i=1 high=81 ≥80>71 → fire; i=2~3 <80 으로 후퇴; i=4 high=82 ≥80>74 → fire
+        "open":  [70, 80, 76, 73, 81, 78, 75, 74],
+        "high":  [71, 81, 77, 74, 82, 79, 76, 75],
+        "low":   [69, 78, 73, 70, 77, 74, 71, 72],
+        "close": [70, 79, 75, 72, 80, 76, 73, 73],
+        "volume": [1000] * 8,
+    })
+    sigs = generate_signals(df, short_thresholds=[80])
+    short_sigs = [s for s in sigs if s.side == Side.SHORT]
+    assert len(short_sigs) == 2  # 두 번 발화 확인
+
+    heavy = run_backtest(df, sigs, horizon_days=2, cost=CostModel(0, 0), light=False)
+    fast = run_backtest(df, sigs, horizon_days=2, cost=CostModel(0, 0), light=True)
+    assert len(heavy.trades) >= 2
+    assert len(fast.trades) == len(heavy.trades)
+
+    sh = summarize(heavy)
+    sf = summarize(fast)
+    # 정수 지표 — 정확히 같아야
+    assert sf.n_trades == sh.n_trades
+    # float 지표 — approx 동일
+    assert sf.win_rate == pytest.approx(sh.win_rate)
+    assert sf.avg_return == pytest.approx(sh.avg_return)
+    assert sf.sharpe_annualized == pytest.approx(sh.sharpe_annualized)
+    assert sf.max_drawdown_usd == pytest.approx(sh.max_drawdown_usd)
+    assert sf.total_net_pnl_usd == pytest.approx(sh.total_net_pnl_usd)
+    assert sf.profit_factor == pytest.approx(sh.profit_factor)
+    assert sf.gross_profit_usd == pytest.approx(sh.gross_profit_usd)
+    assert sf.gross_loss_usd == pytest.approx(sh.gross_loss_usd)
+
+    # light 가 건너뛰는 것: per-trade MAE/MFE 와 portfolio MTM
+    assert all(t.mae_usd == 0.0 and t.mfe_usd == 0.0 for t in fast.trades)
+    assert fast.portfolio_equity_curve.empty
+    assert fast.portfolio_mdd_usd == 0.0
+
+
 def test_walk_forward_train_test_split(small_df: pd.DataFrame) -> None:
     """train(0~7) 안에 signal@i=2 + horizon=2 → entry i=3, exit i=5 (모두 train).
     test(8~9)는 데이터 부족해서 OOS는 거래 없을 수 있음 — 그것도 정상.

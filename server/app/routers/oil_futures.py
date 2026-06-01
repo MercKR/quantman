@@ -18,6 +18,9 @@ quant_core.oil_futures 모듈을 HTTP로 노출. 인증 필요 — 로그인 게
 from __future__ import annotations
 
 import gc
+import logging
+import threading
+import time
 from typing import Literal, Optional
 
 import pandas as pd
@@ -39,20 +42,28 @@ from quant_core.oil_futures import (
 from ..data_cache import get_raw_dataset, get_version
 from ..deps import get_current_user
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter(
     prefix="/oil-futures",
     tags=["oil-futures"],
     dependencies=[Depends(get_current_user)],
 )
 
-# 임계값 grid — Railway 무료 티어 메모리 한계로 $10 단위 사용 ($1 단위는
-# OOM 발생: 488 셀 × 5759행 백테스트 = 메모리 압박). 사용자가 ?shorts=...
-# 명시 시 임의 범위 가능. 추후 결과 캐시 layer 추가 후 $1 재시도 예정.
+# 워크포워드 grid — $10 단위 coarse. 과적합 검증(in/out-of-sample 분할)은
+# 조밀할 필요 없고, 조밀하면 best 선택이 noise를 줍는다 → coarse가 올바르다.
+# 사용자가 ?shorts=... 명시 시 임의 범위 가능.
 DEFAULT_SHORTS = [80, 90, 100, 110, 120, 130, 140, 150]
 DEFAULT_LONGS = [10, 20, 30, 40, 50, 60]
 # Horizon (영업일 기준 보유 기간): 단기~장기 비교
 # 365일 = 약 1.5 캘린더 년 (영업일 ≈ 252일/년)
 DEFAULT_HORIZONS = [20, 40, 60, 120, 180, 240, 365]
+
+# 히트맵 grid — $1 단위. 854셀이라 라이브 요청-시점 계산은 비싸고(로컬 ~21s) OOM 위험 →
+# light 모드(grid가 안 쓰는 MAE/MFE·portfolio MTM 생략) + 백그라운드 워머가 데이터 버전당
+# 1회 미리 계산해 버전키 캐시에 적재한다. 사용자는 항상 캐시 히트(즉시).
+GRID_SHORTS = list(range(80, 151))   # $80~$150
+GRID_LONGS = list(range(10, 61))     # $10~$60
 
 
 _WTI_CACHE: dict = {"version": None, "df": None}
@@ -266,59 +277,90 @@ def prices(start: Optional[str] = None, end: Optional[str] = None):
 
 
 # 결과 캐시 — 같은 파라미터 재계산 방지로 메모리 안정화 (Railway 무료 티어 보호).
-# 키: (shorts, longs, horizons, commission, slippage) 튜플.
-_GRID_CACHE: dict[tuple, list[dict]] = {}
+# 키: (데이터버전, shorts, longs, horizons, commission, slippage) 튜플.
+_GRID_CACHE: dict[tuple, list[GridCellOut]] = {}   # 키에 데이터 버전 포함
+_grid_lock = threading.Lock()
+
+
+def _ensure_grid_cached(s: tuple, l: tuple, h: tuple,
+                        commission: float, slippage_ticks: int) -> list[GridCellOut]:
+    """주어진 grid 파라미터 결과를 (데이터버전, 파라미터)로 캐시. 워머·요청 공용.
+
+    _df()를 먼저 호출해 데이터 리로드(일갱신)를 정착시킨 뒤 버전을 읽는다.
+    데이터 미수집이면 _df()가 HTTPException(503)을 올린다(호출자 처리).
+    """
+    df = _df()
+    version = get_version()
+    key = (version, s, l, h, commission, slippage_ticks)
+    cached = _GRID_CACHE.get(key)
+    if cached is not None:
+        return cached
+    with _grid_lock:
+        cached = _GRID_CACHE.get(key)
+        if cached is not None:
+            return cached
+        cells = grid_search(df, s, l, h, CostModel(commission, slippage_ticks), light=True)
+        out = [
+            GridCellOut(
+                side=c.side.value,
+                threshold=c.threshold,
+                horizon=c.horizon_days,
+                n_trades=c.summary.n_trades,
+                win_rate=c.summary.win_rate,
+                avg_return=c.summary.avg_return,
+                sharpe=c.summary.sharpe_annualized,
+                mdd_usd=c.summary.max_drawdown_usd,
+                gross_profit_usd=c.summary.gross_profit_usd,
+                gross_loss_usd=c.summary.gross_loss_usd,
+                net_pnl_usd=c.summary.total_net_pnl_usd,
+                profit_factor=_pf(c.summary.profit_factor),
+                low_sample=c.summary.low_sample,
+            )
+            for c in cells
+        ]
+        # 중간 cells (BacktestResult 다수 포함) 즉시 해제 → 메모리 회수
+        del cells
+        gc.collect()
+        # 캐시 크기 제한 — 4가지 변형까지만 유지
+        if len(_GRID_CACHE) >= 4:
+            _GRID_CACHE.pop(next(iter(_GRID_CACHE)))
+        _GRID_CACHE[key] = out
+        return out
 
 
 @router.get("/grid", response_model=list[GridCellOut])
-def grid(
-    shorts: str = "",
-    longs: str = "",
-    horizons: str = "",
-    commission: float = 2.5,
-    slippage_ticks: int = 1,
-):
-    """모든 (side, threshold, horizon) 조합 백테스트.
+def grid(shorts: str = "", longs: str = "", horizons: str = "",
+         commission: float = 2.5, slippage_ticks: int = 1):
+    """모든 (side, threshold, horizon) 조합 백테스트 (히트맵·표용).
 
-    파라미터 미지정 시 엑셀 원본과 동일한 기본 범위.
-    결과는 메모리에 캐시 — 같은 파라미터 재호출 시 즉시 응답.
+    파라미터 미지정 시 $1 단위 기본 grid. 결과는 (데이터버전,파라미터) 캐시 —
+    백그라운드 워머가 기본 grid를 미리 데워둔다.
     """
-    df = _df()
-    s = tuple(_parse_csv_floats(shorts) or DEFAULT_SHORTS)
-    l = tuple(_parse_csv_floats(longs) or DEFAULT_LONGS)
+    s = tuple(_parse_csv_floats(shorts) or GRID_SHORTS)
+    l = tuple(_parse_csv_floats(longs) or GRID_LONGS)
     h = tuple(_parse_csv_ints(horizons) or DEFAULT_HORIZONS)
-    key = (s, l, h, commission, slippage_ticks)
-    if key in _GRID_CACHE:
-        return _GRID_CACHE[key]
+    return _ensure_grid_cached(s, l, h, commission, slippage_ticks)
 
-    cells = grid_search(df, s, l, h, CostModel(commission, slippage_ticks))
-    out = [
-        GridCellOut(
-            side=c.side.value,
-            threshold=c.threshold,
-            horizon=c.horizon_days,
-            n_trades=c.summary.n_trades,
-            win_rate=c.summary.win_rate,
-            avg_return=c.summary.avg_return,
-            sharpe=c.summary.sharpe_annualized,
-            mdd_usd=c.summary.max_drawdown_usd,
-            gross_profit_usd=c.summary.gross_profit_usd,
-            gross_loss_usd=c.summary.gross_loss_usd,
-            net_pnl_usd=c.summary.total_net_pnl_usd,
-            profit_factor=_pf(c.summary.profit_factor),
-            low_sample=c.summary.low_sample,
-        )
-        for c in cells
-    ]
-    # 중간 cells (BacktestResult 다수 포함) 즉시 해제 → 메모리 회수
-    del cells
-    gc.collect()
 
-    # 캐시 크기 제한 — 4가지 변형까지만 유지
-    if len(_GRID_CACHE) >= 4:
-        _GRID_CACHE.pop(next(iter(_GRID_CACHE)))
-    _GRID_CACHE[key] = out
-    return out
+def _warmer_loop() -> None:
+    """기본 $1 grid를 백그라운드로 미리 계산·캐시. 데이터 버전 변경 시 재워밍.
+    데이터 미준비(503)면 자주 재시도, 워밍 성공 후엔 느슨히 재확인."""
+    first = True
+    while True:
+        try:
+            _ensure_grid_cached(tuple(GRID_SHORTS), tuple(GRID_LONGS),
+                                tuple(DEFAULT_HORIZONS), 2.5, 1)
+            first = False
+        except HTTPException:
+            pass  # 데이터 미수집(503) — 다음 틱에 재시도
+        except Exception:
+            _log.warning("oil grid 워밍 실패 — 온디맨드로 계산됨", exc_info=True)
+            first = False
+        time.sleep(20 if first else 300)
+
+
+def start_grid_warmer() -> None:
+    threading.Thread(target=_warmer_loop, daemon=True, name="oil-grid-warm").start()
 
 
 @router.get("/signals", response_model=list[SignalEvent])
