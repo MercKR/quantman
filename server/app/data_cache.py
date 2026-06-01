@@ -119,18 +119,6 @@ def get_projected(columns, symbols=None) -> dict[str, pd.DataFrame]:
     return out
 
 
-def get_manifest():
-    """현재 dataset의 DataManifest(실측 메타). 무결성 게이트가 요구↔실측 비교에 사용."""
-    global _manifest
-    _maybe_reload()
-    if _manifest is None:
-        with _lock:
-            if _manifest is None:
-                from .data_manifest import build_dataset_manifest
-                _manifest = build_dataset_manifest(get_dataset(), version=_version)
-    return _manifest
-
-
 def get_symbol_index() -> dict[str, dict]:
     """경량 심볼 인덱스 {sym: {rows, has_ohlc}} — parquet 메타만, 지표계산 없음.
 

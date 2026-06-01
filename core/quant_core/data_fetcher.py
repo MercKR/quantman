@@ -422,11 +422,21 @@ def load_managed_overseas() -> list[dict]:
 
 
 def save_managed_overseas(stocks: list[dict]) -> None:
-    """on-demand 해외 종목 목록 저장. code 기준 dedupe."""
+    """on-demand 해외 종목 목록 저장. code 기준 dedupe + yfinance 미수집 티커 제외.
+
+    KIS 미국 마스터엔 우선주·유닛·클래스주가 '/' 표기(JPM/D·RAC/UN)로 섞여 들어오는데
+    yfinance는 '/'를 쓰지 않아(클래스주=BRK-B, 우선주=JPM-PD) **항상 fetch 실패**한다
+    (실측: '/' 티커 457개 중 parquet 생성 0개). 이들을 두면 매 수집마다 "Failed to get
+    ticker" 폭주 + Yahoo throttle + 로그 500/sec 초과만 유발하므로 **유일한 write 경로인
+    여기서 원천 차단**한다 — 기존 항목도 다음 저장(시드 cron) 때 함께 정리된다. 정당한
+    클래스주는 _seed_sp500_overseas가 대시 형식(BRK-B)으로 별도 보존(code dedupe로 중복 제거).
+    """
     seen, uniq = set(), []
     for s in stocks:
         c = s.get("code", "").strip()
-        if c and c not in seen:
+        if not c or "/" in c:           # 빈 코드·yfinance 미수집('/') 제외
+            continue
+        if c not in seen:
             seen.add(c)
             uniq.append({"code": c, "name": s.get("name", "")})
     MANAGED_OVERSEAS_PATH.write_text(

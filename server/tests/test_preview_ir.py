@@ -132,6 +132,10 @@ def _seed_db():
 
 def test_build_user_preview_dispatches_ir(monkeypatch):
     eng, uid = _seed_db()
+    # build_user_preview는 컬럼 프로젝션(_preview_dataset→get_projected)을 쓴다.
+    # 합성 dataset을 양 경로(프로젝션·strat: 폴백)에 주입한다.
+    monkeypatch.setattr(preview_engine, "get_projected",
+                        lambda columns, symbols=None: _DATASET)
     monkeypatch.setattr(preview_engine, "get_dataset", lambda: _DATASET)
     monkeypatch.setattr(preview_engine.kis_master_cache, "get_master_list", lambda: [])
     with Session(eng) as session:
@@ -159,6 +163,10 @@ def test_build_user_preview_skips_operand(monkeypatch):
         s.add(SyncSnapshot(user_id=uid, device_id=1,
                            payload={"balance": {"cash": 10_000_000}, "positions": []}))
         s.commit()
+    # build_user_preview는 컬럼 프로젝션(_preview_dataset→get_projected)을 쓴다.
+    # 합성 dataset을 양 경로(프로젝션·strat: 폴백)에 주입한다.
+    monkeypatch.setattr(preview_engine, "get_projected",
+                        lambda columns, symbols=None: _DATASET)
     monkeypatch.setattr(preview_engine, "get_dataset", lambda: _DATASET)
     monkeypatch.setattr(preview_engine.kis_master_cache, "get_master_list", lambda: [])
     with Session(eng) as session:
