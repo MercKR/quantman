@@ -45,7 +45,7 @@ def generate_signals(
 ) -> list[Signal]:
     """일봉 DataFrame → 신호 리스트.
 
-    df는 date ASC 정렬된 OHLC + close 컬럼을 가져야 한다 (load_wti 결과 호환).
+    df는 date ASC 정렬된 OHLC + close 컬럼을 가져야 한다 (prepare_wti 결과 호환).
     빈 임계값 리스트는 그 방향 신호를 만들지 않는다.
     """
     short_thresholds = list(short_thresholds)

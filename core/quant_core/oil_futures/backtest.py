@@ -139,7 +139,7 @@ def run_backtest(
 ) -> BacktestResult:
     """신호 리스트에 horizon_days 보유 정책 적용 → BacktestResult.
 
-    df는 load_wti 출력 호환 (date ASC, OHLCV).
+    df는 prepare_wti 출력 호환 (date ASC, OHLCV).
     horizon_days 후 데이터가 부족한 신호는 거래로 잡지 않는다 (미실현 포지션).
 
     exits.stop_loss_pct / take_profit_pct 지정 시 horizon 전에 조기 청산.

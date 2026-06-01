@@ -1,10 +1,10 @@
-"""WTI 원유선물 분석 모듈 (Phase 1: 백테스트 엔진 + CLI).
+"""WTI 원유선물 분석 모듈 (백테스트 엔진).
 
 사용 예:
     from quant_core.oil_futures import (
-        load_wti, generate_signals, run_backtest, summarize, grid_search,
+        prepare_wti, generate_signals, run_backtest, summarize, grid_search,
     )
-    df = load_wti()
+    df = prepare_wti(raw_ohlcv)   # raw_ohlcv = 데이터 캐시의 '원유선물' 프레임
     sigs = generate_signals(df, short_thresholds=[80, 90], long_thresholds=[40, 50])
     result = run_backtest(df, sigs, horizon_days=60)
     print(summarize(result))
@@ -16,7 +16,7 @@
 - 비용: 계약당 수수료 + 진입/청산 슬리피지 (CostModel 외부 주입).
 - 위험지표: win_rate 외 Sharpe, MDD, profit factor, sample size 동시 산출.
 """
-from .data import load_wti
+from .data import prepare_wti
 from .signals import Signal, Side, generate_signals
 from .backtest import (
     Trade,
@@ -39,7 +39,7 @@ from .optimizer import (
 )
 
 __all__ = [
-    "load_wti",
+    "prepare_wti",
     "Signal", "Side", "generate_signals",
     "Trade", "BacktestResult", "CostModel", "ExitRules", "RollModel",
     "WTI_TICK", "WTI_MULTIPLIER", "run_backtest", "wti_expiry_dates",
