@@ -130,6 +130,10 @@ export default function IrBuilder() {
   // 시뮬레이션 (A5)
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  // <input type="date">는 placeholder 미지원 → 비었고 비포커스면 text로 렌더해 "전체 기간"
+  // 힌트를 보이고, 포커스 시 date로 전환해 달력 선택기를 쓴다(다른 선택 항목 placeholder와 일관).
+  const [startFocus, setStartFocus] = useState(false);
+  const [endFocus, setEndFocus] = useState(false);
   const [delay, setDelay] = useState(1);
   const [fill, setFill] = useState("next_open");
   const [leverage, setLeverage] = useState(1);
@@ -830,10 +834,16 @@ export default function IrBuilder() {
         <div className="panel-title">시뮬레이션</div>
         <div className="lab-row">
           <label className="lab-field">시작일
-            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            <input type={startDate || startFocus ? "date" : "text"} value={startDate}
+                   placeholder="처음부터(전체)"
+                   onFocus={() => setStartFocus(true)} onBlur={() => setStartFocus(false)}
+                   onChange={(e) => setStartDate(e.target.value)} />
           </label>
           <label className="lab-field">종료일
-            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            <input type={endDate || endFocus ? "date" : "text"} value={endDate}
+                   placeholder="최근까지(전체)"
+                   onFocus={() => setEndFocus(true)} onBlur={() => setEndFocus(false)}
+                   onChange={(e) => setEndDate(e.target.value)} />
           </label>
           <label className="lab-field">체결지연(일)
             <input type="number" value={delay} onChange={(e) => setDelay(Number(e.target.value))} />
@@ -864,15 +874,15 @@ export default function IrBuilder() {
           비용 (비우면 시장 기본값) — 수수료·슬리피지·매도세는 비율(0.0005=5bp), 차입·펀딩·무위험은 연율%</div>
         <div className="lab-row">
           <label className="lab-field">수수료
-            <input type="number" step={0.0001} value={commission} placeholder="기본"
+            <input type="number" step={0.0001} value={commission} placeholder="기본 0.0003"
                    onChange={(e) => setCommission(e.target.value === "" ? "" : Number(e.target.value))} />
           </label>
           <label className="lab-field">슬리피지
-            <input type="number" step={0.0001} value={slippage} placeholder="기본"
+            <input type="number" step={0.0001} value={slippage} placeholder="기본 0.001"
                    onChange={(e) => setSlippage(e.target.value === "" ? "" : Number(e.target.value))} />
           </label>
           <label className="lab-field">매도세
-            <input type="number" step={0.0001} value={sellTax} placeholder="기본"
+            <input type="number" step={0.0001} value={sellTax} placeholder="기본 0.0023"
                    onChange={(e) => setSellTax(e.target.value === "" ? "" : Number(e.target.value))} />
           </label>
           <label className="lab-field">숏 차입(연%)

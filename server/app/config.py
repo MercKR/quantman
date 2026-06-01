@@ -52,9 +52,11 @@ class Settings:
     ).split(",")
 
     # NL→IR 컴파일러 (자연어 전략 설명 → StrategyIR). 키 미설정 시 /ir/compile가
-    # 503을 명확히 반환(다른 기능엔 영향 없음). 모델은 env로 교체 가능(최신 Sonnet 권장).
+    # 503을 명확히 반환(다른 기능엔 영향 없음). 모델은 env로 교체 가능.
+    # 기본 Haiku 4.5 — Sonnet의 ⅓ 가격($1/$5). 관용구 쿡북 + 검증 피드백 안전망 덕에 archetype
+    # 평가에서 Sonnet과 동급(12/12, WTI 양방향 포함). compile-stats로 품질 감시·필요시 env 롤백.
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-    NL_COMPILE_MODEL: str = os.getenv("QP_NL_COMPILE_MODEL", "claude-sonnet-4-6")
+    NL_COMPILE_MODEL: str = os.getenv("QP_NL_COMPILE_MODEL", "claude-haiku-4-5-20251001")
 
 
 settings = Settings()

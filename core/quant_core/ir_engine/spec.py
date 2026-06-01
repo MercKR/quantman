@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import types
+import typing
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -180,6 +182,79 @@ class StrategyIR(BaseModel):
     position: PositionSpec = Field(default_factory=PositionSpec)
     simulation: SimSpec = Field(default_factory=SimSpec)
     sweep: SweepSpec = Field(default_factory=SweepSpec)
+
+
+# ── 스키마 인트로스펙션 (LLM 교정 피드백용) ──────────────────────────────────────
+# 검증 에러를 "fixable"하게 만들기 위해, 에러 위치(loc)의 모델 계약(필드 모양)을 스키마에서
+# 자동 파생한다. 케이스별 하드코딩이 아니라 StrategyIR 모델을 걸어가며 그 자리의 필수·옵션
+# 필드와 타입을 추출 → NL→IR 컴파일러 repair 루프가 그대로 인용해 LLM이 고칠 수 있게 한다.
+
+def _unwrap_optional(ann):
+    """Optional[X]/Union[...]에서 None을 빼고 대표 타입(BaseModel 우선)을 고른다."""
+    origin = typing.get_origin(ann)
+    if origin is typing.Union or origin is getattr(types, "UnionType", None):
+        args = [a for a in typing.get_args(ann) if a is not type(None)]
+        for a in args:
+            if isinstance(a, type) and issubclass(a, BaseModel):
+                return a
+        return args[0] if args else ann
+    return ann
+
+
+def _type_label(ann) -> str:
+    """타입 주석을 짧은 표기로(str·int·number·bool·list[...]·a|b·ModelName)."""
+    ann = _unwrap_optional(ann)
+    origin = typing.get_origin(ann)
+    if origin is typing.Literal:
+        return "|".join(str(v) for v in typing.get_args(ann))
+    if origin in (list, tuple, set):
+        args = typing.get_args(ann)
+        return f"list[{_type_label(args[0])}]" if args else "list"
+    if origin is dict:
+        return "object"
+    if isinstance(ann, type):
+        return {str: "str", int: "int", float: "number", bool: "bool"}.get(ann, ann.__name__)
+    return str(ann)
+
+
+def _model_at(loc: tuple) -> Optional[type]:
+    """StrategyIR 기준 loc(점경로 튜플)이 가리키는 위치의 컨테이너 BaseModel을 반환(아니면 None).
+    BaseModel 필드·list 원소·Union을 따라 내려간다."""
+    cur: object = StrategyIR
+    for key in loc:
+        cur = _unwrap_optional(cur)
+        origin = typing.get_origin(cur)
+        if isinstance(cur, type) and issubclass(cur, BaseModel):
+            fi = cur.model_fields.get(str(key))
+            if fi is None:
+                return None
+            cur = fi.annotation
+        elif origin in (list, tuple, set):
+            args = typing.get_args(cur)
+            cur = args[0] if args else None
+        elif origin is dict:
+            args = typing.get_args(cur)
+            cur = args[1] if len(args) == 2 else None
+        else:
+            return None
+        if cur is None:
+            return None
+    cur = _unwrap_optional(cur)
+    return cur if isinstance(cur, type) and issubclass(cur, BaseModel) else None
+
+
+def field_contract(loc) -> Optional[str]:
+    """loc 위치 모델의 계약을 한 줄로(LLM 교정 힌트).
+
+    예: field_contract(("sweep","param_grid",0)) → "ParamAxis = { path: str(필수), values: list }".
+    누락·타입 오류 시 _validate가 이 컨테이너 계약을 에러 메시지에 덧붙여 LLM이 모양을 고치게 한다.
+    """
+    model = _model_at(tuple(loc))
+    if model is None:
+        return None
+    fields = [f"{n}: {_type_label(fi.annotation)}{'(필수)' if fi.is_required() else ''}"
+              for n, fi in model.model_fields.items()]
+    return f"{model.__name__} = {{ " + ", ".join(fields) + " }"
 
 
 # ── 정합성 검증 ───────────────────────────────────────────────────────────────

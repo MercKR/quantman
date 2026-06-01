@@ -15,7 +15,8 @@ from sqlmodel import Session, select
 
 import quant_core as qc
 from quant_core.blocks import catalog_spec
-from quant_core.ir_engine import StrategyIR, capability_spec, validate_strategy
+from quant_core.ir_engine import (StrategyIR, capability_spec, field_contract,
+                                   validate_strategy)
 
 from ..db import get_session
 from ..deps import get_current_user
@@ -23,6 +24,28 @@ from ..ir_compiler import compile_nl
 from ..models import CompileLog, TradableSymbol, User
 
 router = APIRouter(prefix="/ir", tags=["ir"])
+
+
+def _schema_issues(e: ValidationError) -> list[dict]:
+    """Pydantic 스키마 오류를 'fixable'한 이슈 목록으로 — 모든 에러를 위치(loc) + 그 자리
+    스키마 계약(field_contract)과 함께 반환한다. 첫 에러만/위치 없이 주면 repair 루프가
+    어디를 고칠지 몰라 수렴 못 한다(실측: param_grid 항목 모양 오류가 "Field required·
+    path=root"로만 와서 LLM이 2회 다 실패). repair 루프가 이 path·message를 그대로 인용한다."""
+    issues: list[dict] = []
+    for er in e.errors()[:12]:            # 폭주 상한(다축 격자 등은 에러 수십 개 가능)
+        loc = er.get("loc", ())
+        contract = field_contract(loc[:-1] if loc else ())   # 그 자리 컨테이너 계약
+        hint = f" — 올바른 형식: {contract}" if contract else ""
+        ctx = er.get("ctx") or {}
+        if ctx.get("expected"):           # enum/리터럴 허용값
+            hint += f" (허용: {ctx['expected']})"
+        issues.append({"rule": "schema", "severity": 30, "is_error": True,
+                       "message": f"정의 형식 오류: {er.get('msg', '')}{hint}",
+                       "path": ".".join(str(x) for x in loc) or "root"})
+    if not issues:
+        issues = [{"rule": "schema", "severity": 30, "is_error": True,
+                   "message": f"정의 형식 오류: {e}", "path": "root"}]
+    return issues
 
 
 class IrCompileIn(BaseModel):
@@ -63,9 +86,7 @@ def ir_compile(body: IrCompileIn, user: User = Depends(get_current_user),
         try:
             s = StrategyIR.model_validate(strat)
         except ValidationError as e:
-            msg = e.errors()[0]["msg"] if e.errors() else str(e)
-            return ([{"rule": "schema", "severity": 30, "is_error": True,
-                      "message": f"정의 형식 오류: {msg}", "path": "root"}], False)
+            return (_schema_issues(e), False)
         out = [{"rule": i.rule, "severity": i.severity, "is_error": i.is_error,
                 "message": i.message, "path": i.path}
                for i in validate_strategy(s, valid_refs=valid_refs)]

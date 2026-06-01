@@ -63,6 +63,30 @@ _FEWSHOT = [
             "expressible": True,
         },
     },
+    {
+        "nl": "KODEX200을 종가가 N일 이동평균 위로 올라오면 매수, 이동평균 기간(10·20·60)과 보유일(20·40)을 바꿔가며 성과를 한눈에 비교",
+        "out": {
+            "intent_summary": "KODEX200(069500) 단일. 종가가 N일 이동평균 상향 돌파 시 매수. 이동평균 기간과 보유일을 격자로 펼쳐 성과 비교.",
+            "strategy_archetype": "파라미터 펼침(민감도)",
+            "mapping_rationale": "단일→universe.single. 'N일선 위로 올라오면 매수'=신호 compare(종가>ts_mean(종가,N))+entry.on_signal. '바꿔가며 한눈에 비교'=sweep.axis=parameter. 두 변수→param_grid 두 축. **각 축은 {path:점경로, values:[값들]}** — 항목을 이름으로 감싸지 않는다. 신호의 기간은 ts_mean 블록의 window 경로, 보유일은 position.exit.hold_days 경로. 2축이면 데카르트곱.",
+            "strategy": {
+                "name": "KODEX200 이동평균 돌파 민감도",
+                "universe": {"kind": "single", "symbols": ["069500"]},
+                "signal": {"op": "compare", "params": {"op": ">"}, "inputs": {
+                    "left": {"op": "data", "params": {"ref": "__SELF__.Close"}},
+                    "right": {"op": "ts_mean", "params": {"window": 20}, "inputs": {
+                        "signal": {"op": "data", "params": {"ref": "__SELF__.Close"}}}}}},
+                "position": {"direction": "long", "sizing": {"mode": "equal_weight"},
+                             "entry": {"mode": "on_signal"}, "exit": {"hold_days": 20}},
+                "simulation": {"initial_capital": 10000000, "fill": "next_open"},
+                "sweep": {"axis": "parameter", "param_grid": [
+                    {"path": "signal.inputs.right.params.window", "values": [10, 20, 60]},
+                    {"path": "position.exit.hold_days", "values": [20, 40]}]},
+            },
+            "assumptions": ["이동평균 기간 N을 [10,20,60], 보유일을 [20,40]으로 격자 해석"],
+            "expressible": True,
+        },
+    },
 ]
 
 
@@ -158,17 +182,39 @@ StrategyIR = {{
 (S&P500, 나스닥100선물, 코스피200선물, 원유선물, 금선물 등). 모르면 사용자가 쓴 명칭 그대로.
 </reference_data>
 
+<idioms>
+원자(블록)만으로는 안 보이는 **검증된 합성 레시피**. 의도가 아래 패턴에 해당하면 그대로 따르고,
+이 목록을 먼저 대조한 뒤에야 '표현 불가'나 '단순화'를 판단한다(원자는 있어도 합성을 못 찾으면 안 됨).
+
+1. [조건 기반 롱/숏/중립] "A 규칙이면 롱, (다른) B 규칙이면 숏, 아니면 미보유"처럼 롱·숏에 *서로 다른 조건*.
+   → long_short는 단일 score의 부호로 방향을 가르므로, select로 **부호 점수**를 만든다:
+     signal = select(cond=A, a=const(1), b=select(cond=B, a=const(-1), b=const(0)))
+     position.direction="long_short", entry.mode="scheduled"(rebalance="daily"), entry.threshold=0.
+   부호>0=롱·<0=숏·=0=미보유(중립밴드 자동). A·B 안의 임계 const를 param_grid 두 축으로 독립 스윕 가능.
+   (※ on_signal+condition은 단방향 전용. 서로 다른 조건의 양방향은 반드시 이 부호점수+long_short 경로.)
+2. [시계열 모멘텀(TSMOM) 롱숏] "추세가 양이면 롱, 음이면 숏" → signal=score(예: ts_delta(Close,N)),
+   direction="long_short", entry.threshold=0. 부호가 곧 방향(중립=정확히 0).
+3. [정기 리밸런스 팩터(횡단)] "매월/매주 ___ 상위 N(또는 X%) 보유" → universe=all|screener,
+   signal=score(팩터), entry.mode="scheduled"+rebalance, top_n 또는 top_pct. 롱숏이면 부호/순위로 양다리.
+4. [국면별 비교] "상승장/하락장 등 국면에 따라 신호·성과가 어떻게 다른가" → 신호 대수는 그대로 두고
+   sweep.target="signal"(또는 "relation") + label 블록(국면 라벨)으로 분리. axis는 바꾸지 않는다.
+5. [조건 지속/최근 발생] "N일 연속 충족"·"최근 M일 내 발생" → condition을 modifier 블록으로 감싼다.
+</idioms>
+
 <process>
 emit_strategy를 호출하되, 인자 필드를 반드시 아래 순서로 채워 추론한다(순서가 곧 사고 과정):
 1. intent_summary: 입력을 '무엇을·언제·어떻게 사고팔까'의 평문 전략으로 한두 문장 재진술.
    ⚠ 입력이 상품의 작동원리·수식·메커니즘 설명이어도, 그것을 '그 상품을 복제하는 매매 주문'으로
       환원한다(예: 레버리지 ETF의 일일 리밸런싱 수식 → "노출을 순자산의 2배로 매일 유지").
 2. strategy_archetype: 이벤트룰 / 정기리밸런싱팩터 / 상수레버리지·상시보유 / 스크리너선별 / 롱숏 등.
-3. mapping_rationale: intent의 각 요소를 <capabilities>의 어느 구성요소로 매핑했는지 근거.
-   ⚠ expressible=false라고 결론짓기 전에 반드시 <capabilities>의 '쓰임'과 대조한다.
+3. mapping_rationale: intent의 각 요소를 <capabilities>·<idioms>의 어느 것으로 매핑했는지 근거.
+   ⚠ expressible=false 또는 *단순화*(한쪽 다리 드롭 등)를 결론짓기 전에 반드시 <idioms> 쿡북과
+   <capabilities> '쓰임'을 대조한다. 특히 양방향(롱/숏)·중립밴드·국면조건부는 <idioms>에 합성 레시피가
+   있으므로 단방향으로 축소하지 말 것.
 4. strategy: 위 매핑을 StrategyIR JSON으로.
-5. assumptions: 모호하게 해석한 부분(한국어 문장들).
-6. expressible: <capabilities> 조합으로도 표현할 매핑 경로가 없을 때만 false(이때 strategy는 {{}}).
+5. assumptions: 모호하게 해석한 부분 + **결과에 영향 주는 단순화·생략을 반드시 명시**(예: 한쪽 다리 드롭,
+   임계 임의 선정, 이벤트→레벨 근사). 조용히 줄이지 말고 그 사실을 한 줄로 적는다.
+6. expressible: <capabilities>·<idioms> 조합으로도 매핑 경로가 없을 때만 false(이때 strategy는 {{}}).
    매핑 경로가 하나라도 있으면 반드시 true. (안전망: 검증기가 잘못된 IR을 거르고 유저가 최종 확인하므로,
    "근사 가능하면" 표현을 시도하라 — 섣불리 표현불가로 포기하지 말 것.)
 </process>
