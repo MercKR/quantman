@@ -2206,3 +2206,396 @@ thead th { color: var(--muted); font-weight: 600; }
 .sweep-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .sweep-table td.pos { color: var(--up); font-weight: 600; }
 .sweep-table td.neg { color: var(--down); font-weight: 600; }
+
+/* ─── Oil Futures 대시보드 (Phase 2) ──────────────────────────────── */
+.oil-page { max-width: 1200px; margin: 0 auto; }
+
+/* 헤더 — 전문 분석툴 스타일 (eyebrow 라벨 + 제목 + 우측 실시간가) */
+.oil-header { margin-bottom: 22px; }
+.oil-title-row {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.oil-eyebrow {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+  color: var(--accent-strong); margin-bottom: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.oil-header h1 {
+  margin: 0 0 6px; font-size: 24px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--text);
+}
+.oil-source-note {
+  margin: 2px 0 0; font-size: 12px; color: var(--muted);
+}
+.oil-header p { margin: 0; font-size: 13px; }
+
+/* 헤더 우측 현재가 태그 (일배치 종가) */
+.live-price {
+  text-align: right;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 14px;
+  min-width: 160px;
+}
+.live-price-main {
+  display: flex; align-items: baseline; gap: 8px; justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+.live-price-val {
+  font-size: 22px; font-weight: 700; color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.live-price-chg { font-size: 13px; font-weight: 600; }
+.live-price-chg.pos { color: var(--green); }
+.live-price-chg.neg { color: var(--red); }
+.live-price-src {
+  font-size: 10px; color: var(--muted); margin-top: 3px;
+  display: flex; align-items: center; gap: 5px; justify-content: flex-end;
+}
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%; display: inline-block;
+}
+.live-dot.live { background: var(--green); box-shadow: 0 0 0 2px var(--green-soft); }
+.live-dot.delayed { background: #c9a227; }
+
+/* 전문 분석툴 스타일 섹션 헤더 (Bloomberg/TradingView 참고):
+   좌측 accent 바 + 영문/한글 혼합 라벨 + tabular 숫자. */
+.section-title {
+  font-size: 13.5px;
+  margin: 0 0 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  padding: 6px 0 6px 12px;
+  border-left: 3px solid var(--accent);
+  display: flex; align-items: center; gap: 8px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+.title-tag {
+  font-size: 11px; font-weight: 600;
+  color: var(--accent-strong); background: var(--accent-soft);
+  padding: 2px 8px; border-radius: 999px; letter-spacing: 0.02em;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* 메타 — 실시간가 delta + 소스 라벨 */
+.meta-delta { font-size: 13px; font-weight: 600; margin-left: 8px; }
+.meta-delta.pos { color: var(--green); }
+.meta-delta.neg { color: var(--red); }
+.meta-source { font-size: 10px; color: var(--muted); margin-top: 3px; }
+.meta-sub-inline { font-size: 13px; font-weight: 400; color: var(--muted); }
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+.meta-value { font-size: 18px; font-weight: 600; margin-top: 4px; }
+
+.heatmap-wrap {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 760px) {
+  .heatmap-wrap { grid-template-columns: 1fr; }
+}
+.heatmap-block { min-width: 0; }
+.heatmap-title { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.heatmap-table { width: 100%; border-collapse: separate; border-spacing: 2px; }
+.heatmap-table th {
+  font-size: 11px; color: var(--muted); padding: 4px; font-weight: 500;
+}
+.heatmap-table th:first-child { width: 50px; }
+.heatmap-table td {
+  text-align: center;
+  border-radius: 4px;
+  padding: 4px 2px;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  transition: outline-color 0.1s;
+}
+.heat-cell { display: flex; flex-direction: column; align-items: center; }
+
+.oil-toolbar {
+  display: flex; gap: 16px; align-items: center; margin-bottom: 12px;
+  flex-wrap: wrap; font-size: 13px;
+}
+.oil-toolbar select, .oil-toolbar input[type=date] {
+  padding: 4px 8px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.oil-toolbar button {
+  padding: 6px 14px; background: var(--accent); color: #fff;
+  border: none; border-radius: 4px; cursor: pointer;
+}
+.oil-toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.table-scroll { overflow-x: auto; }
+.oil-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.oil-table th, .oil-table td {
+  padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--border);
+}
+.oil-table th { font-weight: 600; color: var(--muted); text-align: right; }
+.oil-table th:first-child, .oil-table td:first-child { text-align: left; }
+.oil-table tbody tr { cursor: pointer; }
+.oil-table tbody tr:hover { background: rgba(255,255,255,0.04); }
+.oil-table tr.selected-row { background: rgba(108, 156, 233, 0.15); }
+.oil-table .short { color: var(--red); font-weight: 600; }
+.oil-table .long { color: var(--green); font-weight: 600; }
+.oil-table .pos { color: var(--green); }
+.oil-table .neg { color: var(--red); }
+
+.bt-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+.metric-card {
+  background: rgba(255,255,255,0.03);
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.metric-value {
+  font-size: 18px; font-weight: 600; margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.warn-banner {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: rgba(230, 194, 89, 0.12);
+  border: 1px solid rgba(230, 194, 89, 0.4);
+  border-radius: 6px;
+  color: #e6c259;
+  font-size: 13px;
+}
+
+.wf-view { display: flex; flex-direction: column; gap: 12px; }
+.wf-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .wf-row { grid-template-columns: 1fr; } }
+.wf-block {
+  padding: 12px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+.summary-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 6px 16px; margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.summary-grid .muted { font-size: 11px; }
+.wf-badge {
+  padding: 10px 14px;
+  border-radius: 6px;
+  text-align: center;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+/* ─── Oil Futures 보강 (sticky + 뱃지 + 정렬) ─────────────────────── */
+
+/* sticky 헤더 — 표를 감싸는 컨테이너에 max-height + overflow 필요 */
+.sticky-table {
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.sticky-table table { margin: 0; }
+.sticky-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);             /* 프로젝트 라이트 테마와 동일 (#faf9f6) */
+  color: var(--muted);
+  box-shadow: 0 1px 0 var(--border);
+}
+/* 첫 번째 컬럼도 가로 스크롤 시 고정 */
+.sticky-table tbody td:first-child,
+.sticky-table tbody th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+.sticky-table thead th:first-child {
+  z-index: 3;   /* 코너: 헤더 행 + 첫 열 둘 다 고정이라 우선순위 ↑ */
+}
+.sticky-table tbody tr.selected-row td:first-child,
+.sticky-table tbody tr.selected-row th:first-child {
+  background: rgba(108, 156, 233, 0.10);
+}
+.sticky-table tbody tr:hover td:first-child,
+.sticky-table tbody tr:hover th:first-child {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+/* 날짜 컬럼은 한 줄로 (줄바꿈 방지) */
+.oil-table td, .oil-table th { white-space: nowrap; }
+
+/* 정렬 가능 헤더 */
+.oil-table th.sortable:hover { color: var(--text); }
+.oil-table th.sortable.active { color: #6c9ce9; }
+.oil-table .sort-arrow {
+  font-size: 10px;
+  opacity: 0.5;
+  margin-left: 2px;
+}
+.oil-table th.sortable.active .sort-arrow { opacity: 1; }
+
+/* BUY / SELL 뱃지 */
+.bs-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  font-family: ui-monospace, monospace;
+}
+.bs-buy {
+  background: rgba(98, 200, 132, 0.18);
+  color: #62c884;
+  border: 1px solid rgba(98, 200, 132, 0.4);
+}
+.bs-sell {
+  background: rgba(217, 98, 101, 0.18);
+  color: #d96265;
+  border: 1px solid rgba(217, 98, 101, 0.4);
+}
+
+/* ─── 추가 분석 섹션 (MAE/MFE / streak / seasonality) ─────────────── */
+.bt-subgrid { margin-top: 16px; }
+.subgrid-title {
+  font-size: 13px; font-weight: 600;
+  margin-bottom: 8px; color: var(--text);
+  padding-top: 8px; border-top: 1px dashed var(--border);
+}
+.metric-sub {
+  margin-top: 4px; font-size: 10px; color: var(--muted);
+  line-height: 1.3;
+}
+
+.season-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+@media (max-width: 760px) { .season-grid { grid-template-columns: 1fr; } }
+.season-tables {
+  margin-top: 16px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+@media (max-width: 760px) { .season-tables { grid-template-columns: 1fr; } }
+
+/* SL/TP toolbar */
+.sltp-toolbar {
+  background: rgba(108, 156, 233, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+.sltp-toolbar input[type=number] {
+  padding: 4px 8px;
+  background: #fff;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* Exit reason 뱃지 — horizon 추가 */
+.bs-horizon {
+  background: rgba(150, 150, 150, 0.15);
+  color: #666;
+  border: 1px solid rgba(150, 150, 150, 0.4);
+}
+
+.exit-summary {
+  margin-top: 10px;
+  display: flex; flex-wrap: wrap; gap: 16px;
+  font-size: 13px; padding: 8px 12px;
+  background: rgba(0,0,0,0.03); border-radius: 6px;
+}
+
+/* 차트 커스텀 tooltip */
+.chart-tooltip {
+  background: rgba(255,255,255,0.98);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  min-width: 140px;
+}
+
+/* $1 단위 히트맵 — 셀 압축 (더 촘촘하게) */
+.heatmap-table td { padding: 2px 1px; min-width: 36px; }
+.heatmap-table th { padding: 2px 4px; font-size: 10px; }
+.heatmap-table th:first-child { width: 38px; min-width: 38px; }
+.heat-cell > div:first-child { font-size: 10px !important; line-height: 1.15; }
+.heat-cell > div:nth-child(2) { font-size: 9px !important; line-height: 1.1; opacity: 0.85; }
+/* 히트맵 컨테이너 높이 늘려서 스크롤 여유 */
+.heatmap-block .sticky-table { max-height: 540px; }
+
+/* 히트맵 사이드 선택 라디오 */
+.oil-radio-group {
+  display: inline-flex;
+  gap: 0;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.oil-radio-group label {
+  padding: 8px 18px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  transition: background 0.15s, color 0.15s;
+}
+.oil-radio-group label:last-child { border-right: none; }
+.oil-radio-group label:hover { background: rgba(0,0,0,0.04); }
+.oil-radio-group label.active {
+  background: var(--accent, #6c9ce9);
+  color: #fff;
+  font-weight: 600;
+}
+.oil-radio-group input[type=radio] {
+  display: none;   /* 라디오 자체는 숨기고 label 스타일링으로 토글 보이기 */
+}
+
+/* 만기 롤오버 비용 시뮬레이터 툴바 */
+.roll-toolbar {
+  background: rgba(201, 162, 39, 0.07);
+  border: 1px solid rgba(201, 162, 39, 0.25);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 8px;
+}
+
+/* 메타 — 가격 단위(/배럴) + 기간 한 줄 표기 */
+.meta-unit { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+.meta-value-range {
+  white-space: nowrap;       /* 한 줄 강제 */
+  font-size: 15px;           /* 기본 meta-value보다 축소해 한 줄에 맞춤 */
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 롤 비용 빠른 입력 버튼 + 도움말 */
+.roll-quick { display: inline-flex; gap: 6px; }
+.roll-quick .ghost { padding: 3px 8px; font-size: 11px; }
+.roll-help { font-size: 11px; line-height: 1.5; margin-top: 6px; flex-basis: 100%; }

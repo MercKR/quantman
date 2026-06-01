@@ -283,3 +283,220 @@ export function detectOS(): "mac" | "windows" | "other" {
   if (/Windows/.test(ua)) return "windows";
   return "other";
 }
+
+// ─── Oil Futures (WTI) 분석 ──────────────────────────────────────────
+// quant_core.oil_futures 백엔드(/oil-futures/*) 호출 + 응답 타입.
+
+export type OilSide = "short" | "long";
+
+export interface OilDataInfo {
+  n_rows: number;
+  start_date: string;
+  end_date: string;
+  price_min: number;
+  price_max: number;
+}
+
+export interface OilLatestPrice {
+  price: number;
+  change: number | null;
+  change_pct: number | null;   // 소수 (예: -0.0173)
+  source: string;              // "yahoo-cl=f" (일배치 마지막 종가)
+  delayed: boolean;
+  fetched_at: string;
+}
+
+export interface OilPricePoint {
+  date: string;
+  close: number;
+  high: number;
+  low: number;
+}
+
+export interface OilGridCell {
+  side: OilSide;
+  threshold: number;
+  horizon: number;
+  n_trades: number;
+  win_rate: number;
+  avg_return: number;
+  sharpe: number;
+  mdd_usd: number;
+  gross_profit_usd: number;   // 이긴 거래 합 (양수)
+  gross_loss_usd: number;     // 진 거래 합 (음수)
+  net_pnl_usd: number;
+  profit_factor: number | null;   // null = 손실 0건 (∞)
+  low_sample: boolean;
+}
+
+export interface OilSignal {
+  date: string;
+  side: OilSide;
+  threshold: number;
+  entry_ref_close: number;
+}
+
+export interface OilSummary {
+  n_trades: number;
+  win_rate: number;
+  avg_return: number;
+  avg_win: number;
+  avg_loss: number;
+  profit_factor: number | null;
+  sharpe: number;
+  mdd_usd: number;
+  gross_profit_usd: number;
+  gross_loss_usd: number;
+  net_pnl_usd: number;
+  // 🅐 MAE/MFE
+  worst_mae_usd: number;
+  avg_mae_usd: number;
+  avg_mfe_usd: number;
+  // 🅑 streak
+  max_win_streak: number;
+  max_loss_streak: number;
+  // 선물 만기 롤오버
+  total_rollovers: number;
+  total_roll_cost_usd: number;
+  low_sample: boolean;
+}
+
+export interface OilTrade {
+  signal_date: string;
+  side: OilSide;
+  threshold: number;
+  entry_date: string;
+  entry_price: number;
+  exit_date: string;
+  exit_price: number;
+  horizon_days: number;
+  return_pct: number;
+  net_pnl_usd: number;
+  mae_usd: number;   // 🅐 보유 중 최악 평가손실 (음수)
+  mfe_usd: number;   // 🅐 보유 중 최고 평가이익 (양수)
+  exit_reason: "horizon" | "stop_loss" | "take_profit";
+  num_rollovers: number;     // 보유 중 만기 통과(강제 롤오버) 횟수
+  roll_cost_usd: number;     // 롤 비용 (음수 또는 0)
+}
+
+// 🅒 Seasonality
+export interface OilSeasonCell {
+  key: number;
+  name: string;
+  n_days: number;
+  avg_return: number;
+  win_rate: number;
+}
+
+export interface OilSeasonality {
+  monthly: OilSeasonCell[];
+  weekday: OilSeasonCell[];
+}
+
+export interface OilEquityPoint {
+  date: string;
+  cumulative_usd: number;
+}
+
+export interface OilBacktest {
+  summary: OilSummary;
+  trades: OilTrade[];
+  equity_curve: OilEquityPoint[];                  // realized
+  portfolio_equity_curve: OilEquityPoint[];        // 🅓 시가평가 (mark-to-market)
+  portfolio_mdd_usd: number;                       // 🅓 시가평가 MDD
+}
+
+// 🅔 Macro context (VIX, DXY)
+export interface OilMacroRegimeCell {
+  bucket: string;
+  n_days: number;
+  wti_avg_return: number;
+  wti_win_rate: number;
+}
+export interface OilMacroCorrelation {
+  pair: string;
+  pearson: number;
+}
+export interface OilMacroContext {
+  available: boolean;
+  coverage_days: number;
+  correlations: OilMacroCorrelation[];
+  vix_regime: OilMacroRegimeCell[];
+  dxy_regime: OilMacroRegimeCell[];
+}
+
+export interface OilWalkForward {
+  train_start: string;
+  train_end: string;
+  test_start: string;
+  test_end: string;
+  best_in_sample: {
+    side: OilSide;
+    threshold: number;
+    horizon: number;
+    summary: OilSummary;
+  };
+  out_of_sample: OilSummary;
+}
+
+export const oilApi = {
+  dataInfo: () => req<OilDataInfo>("/oil-futures/data-info"),
+  latestPrice: () => req<OilLatestPrice>("/oil-futures/latest-price"),
+  prices: (start?: string, end?: string) => {
+    const qs = new URLSearchParams();
+    if (start) qs.set("start", start);
+    if (end) qs.set("end", end);
+    const q = qs.toString();
+    return req<OilPricePoint[]>("/oil-futures/prices" + (q ? "?" + q : ""));
+  },
+  grid: (opts: {
+    shorts?: number[];
+    longs?: number[];
+    horizons?: number[];
+    commission?: number;
+    slippage_ticks?: number;
+  } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.shorts?.length) qs.set("shorts", opts.shorts.join(","));
+    if (opts.longs?.length) qs.set("longs", opts.longs.join(","));
+    if (opts.horizons?.length) qs.set("horizons", opts.horizons.join(","));
+    if (opts.commission !== undefined) qs.set("commission", String(opts.commission));
+    if (opts.slippage_ticks !== undefined)
+      qs.set("slippage_ticks", String(opts.slippage_ticks));
+    const q = qs.toString();
+    return req<OilGridCell[]>("/oil-futures/grid" + (q ? "?" + q : ""));
+  },
+  signals: (type: OilSide, threshold: number, since?: string) => {
+    const qs = new URLSearchParams({ type, threshold: String(threshold) });
+    if (since) qs.set("since", since);
+    return req<OilSignal[]>("/oil-futures/signals?" + qs.toString());
+  },
+  backtest: (body: {
+    side: OilSide;
+    threshold: number;
+    horizon_days: number;
+    commission?: number;
+    slippage_ticks?: number;
+    stop_loss_pct?: number | null;       // 🅒 SL/TP 시뮬레이터
+    take_profit_pct?: number | null;
+    roll_cost_pct?: number;              // 선물 만기 롤오버 비용 (%/회, 소수)
+  }) =>
+    req<OilBacktest>("/oil-futures/backtest", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  walkforward: (body: {
+    shorts?: number[];
+    longs?: number[];
+    horizons?: number[];
+    split_date: string;
+    commission?: number;
+    slippage_ticks?: number;
+  }) =>
+    req<OilWalkForward>("/oil-futures/walkforward", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  seasonality: () => req<OilSeasonality>("/oil-futures/seasonality"),
+  macroContext: () => req<OilMacroContext>("/oil-futures/macro-context"),
+};
