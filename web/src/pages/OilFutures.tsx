@@ -271,7 +271,7 @@ export default function OilFutures() {
               <div className="meta-value meta-value-range">{info.start_date} ~ {info.end_date}</div></div>
             <div><div className="muted">영업일</div>
               <div className="meta-value">D+{info.n_rows.toLocaleString()} <span className="meta-sub-inline">(~{Math.round(info.n_rows / 252)}년)</span></div></div>
-            <div><div className="muted">가격 범위 (23년)</div>
+            <div><div className="muted">가격 범위 (~{Math.round(info.n_rows / 252)}년)</div>
               <div className="meta-value">${info.price_min.toFixed(2)} ~ ${info.price_max.toFixed(2)}</div></div>
           </div>
         )}
