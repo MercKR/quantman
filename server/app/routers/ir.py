@@ -14,11 +14,12 @@ from sqlmodel import Session, select
 
 import quant_core as qc
 from quant_core.blocks import DatasetMeta, available_refs, catalog_spec
-from quant_core.ir_engine import (StrategyIR, backtest_from_spec, strategy_from_spec,
-                                  validate_strategy)
+from quant_core.ir_engine import (StrategyIR, backtest_from_spec,
+                                  needed_symbols, strategy_from_spec, validate_strategy)
 
 from .. import data_cache
 from ..data_cache import get_dataset, get_manifest
+from ..data_manifest import build_dataset_manifest
 from ..db import get_session
 from ..deps import get_current_user
 from ..models import BacktestRun, Strategy, StrategyVersion, User
@@ -156,12 +157,25 @@ def ir_strategy(body: dict, user: User = Depends(get_current_user),
     sweep.axis != none이면 펼침 resultset(버킷), 아니면 1회 백테스트 결과.
     저장된 전략(body.strategy_id) 백테스트면 BacktestRun으로 내역 저장.
     """
-    dataset = get_dataset()
+    # 부분집합 로드 — single/list는 필요 종목만(load_dataset_for, ~0.1초) 읽어 전 유니버스
+    # (~8.5분) 빌드를 건너뛴다. all/screener는 횡단 랭킹이라 전 유니버스가 필요(get_dataset).
+    # 무결성 매니페스트도 부분집합으로 빌드 — single/list 게이트 판정은 전체 매니페스트와
+    # 동일(생존편향 D-surv는 universe=all 전용). 파싱 실패는 needed=None→전체 경로로 두면
+    # strategy_from_spec이 동일 에러를 반환(중복 검증 회피).
+    try:
+        needed = needed_symbols(StrategyIR.model_validate(body))
+    except ValidationError:
+        needed = None
+    if needed is None:
+        dataset, manifest = get_dataset(), get_manifest()
+    else:
+        dataset = qc.load_dataset_for(needed)
+        manifest = build_dataset_manifest(dataset, version=data_cache.get_version())
     # 무결성 4액션 게이트 가동 — manifest(실측) vs DataSpec(요구). meta는 manifest에서 도출.
     # strict=true(body)면 편향형 경고를 거부로 승격(실전 자금 투입 前 게이트).
     res = strategy_from_spec(
         body, dataset, valid_refs=available_refs(dataset),
-        manifest=get_manifest(), strict=bool(body.get("strict", False)),
+        manifest=manifest, strict=bool(body.get("strict", False)),
         strategy_resolver=_make_strategy_resolver(session, user))
     if not res.get("success"):
         return {"success": False, "error": res.get("error"),
