@@ -19,7 +19,7 @@ import yfinance as yf
 import FinanceDataReader as fdr
 
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from .parquet_io import read_parquet_safe, write_parquet_atomic, quarantine_corrupt
 
@@ -463,6 +463,26 @@ def sp500_yf_codes() -> list[str]:
 _OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
 
 
+def _last_closed_us_date() -> date | None:
+    """마지막으로 마감된 US 정규장 거래일(America/New_York, 16:00 마감 기준, 주말 보정).
+
+    공휴일은 보정하지 않는다 — 휴일이면 그 날짜로 과대평가될 수 있으나, 그 경우 해당
+    종목을 '스킵'하지 않고 재fetch할 뿐(무해). 항상 실제 마지막 거래일 이상이라 과소평가
+    (=신선도 오판으로 stale 종목을 스킵해 데이터 누락)는 발생하지 않는다. 시간대 확인
+    불가 시 None → 신선도 스킵 비활성(전량 fetch, 보수적). fetch_korean_stocks의 KST
+    휴리스틱을 US/Eastern으로 옮긴 동형 정책."""
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:               # tzdata 부재 등 — 스킵 비활성(전량 fetch)
+        return None
+    d, wd = now_et.date(), now_et.weekday()
+    closed = now_et.time() >= datetime.strptime("16:00:00", "%H:%M:%S").time()
+    if wd < 5:                       # 월~금
+        return d if closed else d - timedelta(days=3 if wd == 0 else 1)
+    return d - timedelta(days=1 if wd == 5 else 2)   # 토→금, 일→금
+
+
 def fetch_managed_overseas(limit: int | None = None, verbose: bool = False,
                            batch: int = 200, backfill_start: str = "2015-01-01") -> int:
     """managed_overseas 해외 종목 OHLCV를 yfinance 배치(yf.download)로 일괄 수집.
@@ -483,6 +503,19 @@ def fetch_managed_overseas(limit: int | None = None, verbose: bool = False,
 
     new_codes = [c for c in codes if not _parquet_path(c).exists()]
     upd_codes = [c for c in codes if _parquet_path(c).exists()]
+
+    # 신선도 게이트 — 마지막 마감 US 거래일까지 이미 보유한 종목은 fetch 제외
+    # (fetch_korean_stocks와 동일 정책). 과거엔 매 실행마다 기존 전 종목의 최근창을
+    # 무조건 재다운로드해 재시작·cron마다 불필요한 네트워크 호출이 쌓였다(콜드스타트 지연).
+    last_closed = _last_closed_us_date()
+    if last_closed is not None:
+        stale = []
+        for c in upd_codes:
+            ex = _load_existing(c)
+            if not ex.empty and ex.index[-1].date() >= last_closed:
+                continue                     # 이미 최신 — 스킵
+            stale.append(c)
+        upd_codes = stale
 
     # 기존: 최근 ~10일만(과대수집은 _merge가 중복 제거 — 저렴). 신규: 전체 백필.
     recent_start = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
