@@ -180,20 +180,26 @@ def add_adv(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
 # ── 연속 방향 (연속 상승/하락 일수) ─────────────────────────────────────────
 
 def add_consecutive_days(df: pd.DataFrame) -> pd.DataFrame:
+    """연속 동일방향 일수(부호 있는 streak). 등락 없는 날(diff=0)·첫날은 직전 streak 유지.
+
+    벡터화 — 과거 행단위 Python 루프가 compute_all 비용의 ~63%(지표당 ~14ms)였다.
+    등락 있는 날만 부호 런렝스(연속 동일부호 길이)로 집계하고, flat 일은 직전 streak을
+    ffill해 루프와 동일 결과를 낸다(엣지 포함 등가성은 test_indicators가 고정).
+    """
     df = df.copy()
-    direction = np.sign(df["Close"].diff())
-    streak = []
-    count = 0
-    for d in direction:
-        if d == 0 or np.isnan(d):
-            streak.append(count)
-            continue
-        if count == 0 or np.sign(count) == d:
-            count += int(d)
-        else:
-            count = int(d)
-        streak.append(count)
-    df["streak"] = streak
+    d = np.sign(df["Close"].diff()).to_numpy()
+    n = len(d)
+    nz = ~np.isnan(d) & (d != 0)                 # 등락 있는 날(첫날 NaN·flat 제외)
+    out = np.zeros(n, dtype=np.int64)
+    if nz.any():
+        signs = d[nz].astype(np.int64)           # ±1
+        ss = pd.Series(signs)
+        grp = (ss != ss.shift()).cumsum()        # 부호 바뀌면 새 런
+        pos = ss.groupby(grp).cumcount().to_numpy() + 1   # 런 내 1-기반 위치
+        scattered = np.full(n, np.nan)
+        scattered[nz] = pos * signs              # 비-flat 위치에 부호 런렝스
+        out = pd.Series(scattered).ffill().fillna(0).astype(np.int64).to_numpy()  # flat=직전값·선두=0
+    df["streak"] = out
     return df
 
 
