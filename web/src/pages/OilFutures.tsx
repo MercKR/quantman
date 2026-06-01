@@ -136,12 +136,8 @@ export default function OilFutures() {
       .catch((e) => setGridError(e.message))
       .finally(() => setGridLoading(false));
 
-    // 실시간 현재가 — 즉시 + 60초마다 갱신
-    const loadPrice = () =>
-      oilApi.latestPrice().then(setPrice).catch((e) => console.error("price", e));
-    loadPrice();
-    const priceTimer = setInterval(loadPrice, 60_000);
-    return () => clearInterval(priceTimer);
+    // 현재가(일배치 종가) — 마운트 시 1회. 일 1회 갱신 데이터라 인트라데이 폴링 불필요.
+    oilApi.latestPrice().then(setPrice).catch((e) => console.error("price", e));
   }, []);
 
   useEffect(() => {
@@ -255,7 +251,7 @@ export default function OilFutures() {
           <div className="muted">로딩 중…</div>
         ) : (
           <div className="meta-grid">
-            <div><div className="muted">실시간 현재가</div>
+            <div><div className="muted">현재가 (일배치 종가)</div>
               <div className="meta-value">
                 {price ? `$${price.price.toFixed(2)}` : "—"}
                 <span className="meta-unit">/배럴</span>
@@ -267,7 +263,7 @@ export default function OilFutures() {
               </div>
               {price && (
                 <div className="meta-source">
-                  {price.source}{price.delayed ? " · ~15분 지연" : " · 실시간"}
+                  {price.source} · 일배치 종가
                 </div>
               )}
             </div>
@@ -509,7 +505,7 @@ export default function OilFutures() {
         {!macro ? (
           <div className="muted">로딩 중…</div>
         ) : !macro.available ? (
-          <div className="muted">macro_daily.csv 미배포 — 데이터 갱신 필요</div>
+          <div className="muted">VIX·달러지수 데이터 미수집 — 데이터 수집 후 이용 가능</div>
         ) : (
           <MacroView m={macro} />
         )}
@@ -518,7 +514,7 @@ export default function OilFutures() {
   );
 }
 
-// 헤더 우측 실시간 현재가 태그 (Bloomberg/TradingView 스타일)
+// 헤더 우측 현재가 태그 — 일배치 종가 (Bloomberg/TradingView 스타일)
 function LivePriceTag({ price }: { price: OilLatestPrice }) {
   const up = (price.change_pct ?? 0) >= 0;
   return (
@@ -534,7 +530,7 @@ function LivePriceTag({ price }: { price: OilLatestPrice }) {
       </div>
       <div className="live-price-src">
         <span className={"live-dot " + (price.delayed ? "delayed" : "live")} />
-        {price.source}{price.delayed ? " · ~15분 지연" : " · LIVE"}
+        {price.source} · 일배치 종가
       </div>
     </div>
   );

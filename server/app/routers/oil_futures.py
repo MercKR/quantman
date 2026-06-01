@@ -5,9 +5,12 @@ quant_core.oil_futures 모듈을 HTTP로 노출. 인증 필요 — 로그인 게
 
 엔드포인트:
 - GET  /oil-futures/data-info        데이터 메타 (기간/행수/가격범위)
+- GET  /oil-futures/latest-price     최신가 (캐시 일봉 마지막 종가)
 - GET  /oil-futures/prices           일봉 시계열 (차트용, 기간 필터 옵션)
 - GET  /oil-futures/grid             전체 grid (히트맵·표용)
 - GET  /oil-futures/signals          특정 (type, threshold) 신호 목록
+- GET  /oil-futures/seasonality      월·요일 계절성
+- GET  /oil-futures/macro-context    VIX·DXY 외생 변수 레짐·상관
 - POST /oil-futures/backtest         단일 조합 백테스트 (trades + equity)
 - POST /oil-futures/walkforward      train/test 분할 검증
 """
@@ -24,6 +27,7 @@ from pydantic import BaseModel, Field
 from quant_core.oil_futures import (
     CostModel,
     ExitRules,
+    RollModel,
     generate_signals,
     grid_search,
     prepare_wti,
@@ -357,7 +361,6 @@ class BacktestRequest(BaseModel):
 
 @router.post("/backtest", response_model=BacktestResponse)
 def backtest(req: BacktestRequest):
-    from quant_core.oil_futures import RollModel
     df = _df()
     short_th = [req.threshold] if req.side == "short" else []
     long_th = [req.threshold] if req.side == "long" else []

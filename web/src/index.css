@@ -2230,7 +2230,7 @@ thead th { color: var(--muted); font-weight: 600; }
 }
 .oil-header p { margin: 0; font-size: 13px; }
 
-/* 헤더 우측 실시간 현재가 태그 */
+/* 헤더 우측 현재가 태그 (일배치 종가) */
 .live-price {
   text-align: right;
   background: var(--panel);

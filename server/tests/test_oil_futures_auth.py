@@ -28,7 +28,7 @@ def _client() -> TestClient:
 def test_oil_get_endpoints_require_auth():
     client = _client()
     for path in ["/oil-futures/data-info", "/oil-futures/latest-price",
-                 "/oil-futures/prices", "/oil-futures/grid",
+                 "/oil-futures/prices", "/oil-futures/grid", "/oil-futures/signals",
                  "/oil-futures/seasonality", "/oil-futures/macro-context"]:
         assert client.get(path).status_code == 401, f"{path} should require auth"
 

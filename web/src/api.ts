@@ -301,7 +301,7 @@ export interface OilLatestPrice {
   price: number;
   change: number | null;
   change_pct: number | null;   // 소수 (예: -0.0173)
-  source: string;              // "investing.com" | "yfinance" | "csv"
+  source: string;              // "yahoo-cl=f" (일배치 마지막 종가)
   delayed: boolean;
   fetched_at: string;
 }
