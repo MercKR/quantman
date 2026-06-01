@@ -34,3 +34,14 @@ def test_prepare_wti_accepts_lowercase_date_column():
     raw = _raw().reset_index().rename(columns={"index": "Date"})
     out = prepare_wti(raw)
     assert len(out) == 3  # 음수 1건 제거
+
+
+def test_prepare_wti_raises_on_empty():
+    with pytest.raises(ValueError):
+        prepare_wti(pd.DataFrame())
+
+
+def test_prepare_wti_raises_on_missing_column():
+    raw = _raw().drop(columns=["Close"])
+    with pytest.raises(ValueError):
+        prepare_wti(raw)
