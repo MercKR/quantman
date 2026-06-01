@@ -54,7 +54,7 @@ class Settings:
     # NL→IR 컴파일러 (자연어 전략 설명 → StrategyIR). 키 미설정 시 /ir/compile가
     # 503을 명확히 반환(다른 기능엔 영향 없음). 모델은 env로 교체 가능(최신 Sonnet 권장).
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-    NL_COMPILE_MODEL: str = os.getenv("QP_NL_COMPILE_MODEL", "claude-sonnet-4-5-20250929")
+    NL_COMPILE_MODEL: str = os.getenv("QP_NL_COMPILE_MODEL", "claude-sonnet-4-6")
 
 
 settings = Settings()
