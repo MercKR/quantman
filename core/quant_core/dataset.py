@@ -11,7 +11,7 @@ from collections.abc import Iterable
 
 import pandas as pd
 
-from .data_fetcher import _parquet_path, load_all, load_fund_all
+from .data_fetcher import _parquet_path, load_all, load_fund_all, load_stock_fundamentals
 from .parquet_io import read_parquet_safe
 from .indicators import compute_all
 
@@ -54,6 +54,12 @@ def load_dataset_for(symbols: Iterable[str],
             raw[sym] = df
     if not with_indicators:
         return raw
-    # funds: 사용자 종목 펀더멘털만(소량). load_dataset과 동일하게 .get(sym) 매칭.
-    funds = load_fund_all()
-    return {sym: compute_all(df, funds.get(sym)) for sym, df in raw.items()}
+    # 펀더멘털도 요청 종목만 로드한다. 과거엔 load_fund_all()로 전 종목(수천) 펀더멘털을
+    # 읽어 단일 종목 로드가 ~42초 걸렸다(load_fund_all 자체가 ~45초 — managed_kr 4천+).
+    # 종목별 load_stock_fundamentals는 동일 결과(load_fund_all[sym] ≡ load_stock_fundamentals(sym))를
+    # ~0.1초에 준다. 전체 로드(load_dataset)는 전 종목이 필요하므로 load_fund_all을 유지.
+    out: dict[str, pd.DataFrame] = {}
+    for sym, df in raw.items():
+        fd = load_stock_fundamentals(sym)
+        out[sym] = compute_all(df, fd if not fd.empty else None)
+    return out

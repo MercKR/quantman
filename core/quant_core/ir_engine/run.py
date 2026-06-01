@@ -40,11 +40,17 @@ def _scoped(dataset: dict, syms, *nodes) -> dict:
     때문에 각 종목 값이 듬성해져 롤링 지표가 NaN이 된다(이벤트·룰 신호 0건 버그의
     근본 원인). 유니버스 종목의 공통 달력에서만 평가하도록 좁힌다. 명시적 "SYM.x"
     참조(VIX·S&P500 등)는 보존. 비면 안전하게 전체로 폴백.
+
+    유니버스 순서(syms)를 보존하고 외부 참조는 정렬해 덧붙여 ds(=패널 컬럼) 순서를
+    결정적으로 고정한다 — set 순회는 PYTHONHASHSEED에 따라 프로세스마다 순서가 달라져
+    rank(method="first") 동률 분해·정수주 배분이 흔들렸다(engine._scoped와 동일 처리).
     """
-    keep = set(syms)
+    keep = list(dict.fromkeys(syms))
+    extra: set = set()
     for nd in nodes:
         if nd is not None:
-            keep |= referenced_symbols(nd)
+            extra |= referenced_symbols(nd)
+    keep += sorted(extra.difference(keep))
     sub = {s: dataset[s] for s in keep
            if s in dataset and dataset[s] is not None and not dataset[s].empty}
     return sub or dataset

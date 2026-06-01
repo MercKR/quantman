@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from ..blocks.catalog import get, has
 from ..blocks.integrity import DatasetMeta, integrity_issues
-from ..blocks.node import Node
+from ..blocks.node import Node, referenced_symbols
 from ..blocks.validate import (SEV_ERROR, SEV_INTEGRITY_WARN, Issue, has_market_source,
                                meaningfulness_issues, prioritize, validate)
 
@@ -393,3 +393,28 @@ def validate_strategy(s: StrategyIR, valid_refs: Optional[set] = None,
         meta = DatasetMeta(delay=s.simulation.delay)
     issues += list(integrity_issues(s.signal, meta))
     return prioritize(issues)
+
+
+def needed_symbols(s: StrategyIR) -> Optional[set[str]]:
+    """전략이 실제로 참조하는 심볼 집합 — 부분집합 로드용. None=전 유니버스 필요.
+
+    single/list: universe.symbols ∪ 모든 노드(신호·매도조건·그룹라벨·펼침)가 명시
+    참조한 외부심볼("VIX.Close" 등). 이 집합만 로드·지표계산하면 전 유니버스(수천)
+    통째 빌드 없이 동일 결과를 얻는다(test_backtest_golden의 차등 불변식이 보장).
+
+    all/screener: 횡단 랭킹/스크리닝이라 후보 전체가 필요 → None(전 유니버스 로드).
+    엔진의 _universe_symbols(all 경로)가 dataset 전체를 후보로 보는 것과 같은 경계.
+    """
+    if s.universe.kind in ("all", "screener"):
+        return None
+    syms: set[str] = set(s.universe.symbols)
+    nodes = [s.signal, s.position.exit.condition, s.position.overlays.group_label,
+             s.sweep.label, s.sweep.event, s.sweep.target_node]
+    for nd in nodes:
+        if nd is not None:
+            syms |= referenced_symbols(nd)
+    # 전략 조합(strat:<id>) 참조가 있으면 자식 전략이 임의 데이터(전 유니버스 팩터 등)를
+    # 필요로 할 수 있어 부분집합으로 좁힐 수 없다 → 전체 로드(None)로 안전하게 폴백.
+    if any(str(x).startswith("strat:") for x in syms):
+        return None
+    return syms

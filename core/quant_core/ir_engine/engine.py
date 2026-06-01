@@ -66,10 +66,16 @@ class Position:
 # ── 평가 스코핑 (run.py와 동일 — 유니버스 공통 달력) ──────────────────────────
 
 def _scoped(dataset: dict, syms, *nodes) -> dict:
-    keep = set(syms)
+    # 유니버스 순서(syms)를 보존하고 외부 참조는 정렬해 덧붙인다 — ds(=패널 컬럼) 순서를
+    # 결정적으로 고정. 과거엔 set(syms)을 그대로 순회해 컬럼 순서가 PYTHONHASHSEED에 따라
+    # 프로세스마다 달라졌고, 정수주 리밸런스(_execute 매수 배분)·rank(method="first") 동률
+    # 분해가 그 순서에 의존해 같은 전략·데이터의 백테스트 결과가 서버 재시작마다 흔들렸다.
+    keep = list(dict.fromkeys(syms))
+    extra: set = set()
     for nd in nodes:
         if nd is not None:
-            keep |= referenced_symbols(nd)
+            extra |= referenced_symbols(nd)
+    keep += sorted(extra.difference(keep))
     sub = {s: dataset[s] for s in keep
            if s in dataset and dataset[s] is not None and not dataset[s].empty}
     return sub or dataset
@@ -735,7 +741,10 @@ def _run_scheduled(strategy: StrategyIR, dataset: dict) -> dict:
         nav_exec = cash + sum(p.shares * close[s][i] for s, p in positions.items()
                               if not np.isnan(close[s][i]))
         floor_cash = nav_exec * (1.0 - lev)
-        allsyms = set(positions) | set(target)
+        # 결정적 순서 — 매수 루프가 종목별로 남은 현금에서 정수주를 순차 배분하므로
+        # 처리 순서가 반올림 잔여(=결과)를 바꾼다. set 순회는 PYTHONHASHSEED 의존이라
+        # 같은 전략·데이터의 결과가 프로세스마다 흔들렸다. 심볼명 정렬로 재현성 고정.
+        allsyms = sorted(set(positions) | set(target))
         for s in allsyms:                              # 거래 의도 노티오널(턴오버 지표)
             cur = positions[s].shares if s in positions else 0.0
             px0 = close[s][i]
