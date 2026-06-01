@@ -243,6 +243,9 @@ export default function OilFutures() {
         <p className="muted">
           장중 high/low가 임계값을 첫 터치하면 신호 → N영업일 보유 백테스트.
         </p>
+        <p className="oil-source-note">
+          데이터: Yahoo Finance WTI 최근월 선물(CL=F) · 일배치 갱신 · front-month 롤 점프 포함
+        </p>
       </header>
 
       {/* ① 데이터 메타 */}

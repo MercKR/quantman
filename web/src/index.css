@@ -2225,6 +2225,9 @@ thead th { color: var(--muted); font-weight: 600; }
   margin: 0 0 6px; font-size: 24px; font-weight: 700;
   letter-spacing: -0.01em; color: var(--text);
 }
+.oil-source-note {
+  margin: 2px 0 0; font-size: 12px; color: var(--muted);
+}
 .oil-header p { margin: 0; font-size: 13px; }
 
 /* 헤더 우측 실시간 현재가 태그 */
@@ -2322,7 +2325,7 @@ thead th { color: var(--muted); font-weight: 600; }
   flex-wrap: wrap; font-size: 13px;
 }
 .oil-toolbar select, .oil-toolbar input[type=date] {
-  padding: 4px 8px; background: var(--panel-bg); color: var(--text);
+  padding: 4px 8px; background: var(--panel); color: var(--text);
   border: 1px solid var(--border); border-radius: 4px;
 }
 .oil-toolbar button {
