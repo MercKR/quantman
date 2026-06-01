@@ -161,6 +161,26 @@ class BacktestRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now)
 
 
+class CompileLog(SQLModel, table=True):
+    """NL→IR 컴파일 로그 — 베타 컴파일 정확도 측정용.
+
+    nl 입력·컴파일된 IR·검증이슈·자가수리 횟수를 남기고, 유저가 그 IR을 **수정 없이
+    바로 백테스트 실행**했는지(edited=False·ran=True = 컴파일러가 의도를 정확히 잡음)를
+    추적한다. 안전정보만 — 전략 정의·NL 텍스트뿐(계좌·자격증명 없음).
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True, foreign_key="user.id")
+    nl_input: str = ""
+    compiled_ir: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    assumptions: list = Field(default_factory=list, sa_column=Column(JSON))
+    issues: list = Field(default_factory=list, sa_column=Column(JSON))
+    repair_count: int = 0               # 내부 validate→repair 반복 횟수
+    ok: bool = False                    # 검증 통과 IR로 컴파일됐는지
+    ran: bool = False                   # 유저가 이 IR로 백테스트를 실행했는지
+    edited: Optional[bool] = None       # 실행 시 컴파일IR을 수정했는지 (None=미실행)
+    created_at: datetime = Field(default_factory=_now)
+
+
 class TradableSymbol(SQLModel, table=True):
     """KIS 종목마스터에서 sync된 거래 가능 종목 화이트리스트.
 

@@ -59,6 +59,16 @@ export type IrIssue = {
 };
 export type IrValidation = { ok: boolean; issues: IrIssue[] };
 
+// 자연어 → StrategyIR 컴파일 결과 (/ir/compile). success=false면 error 사유.
+export type IrCompileResult = {
+  success: boolean;
+  ir: Record<string, unknown>;
+  assumptions: string[];
+  issues: IrIssue[];
+  error?: string | null;
+  compile_id: number;
+};
+
 export const api = {
   signup: (email: string, password: string) =>
     req<{ access_token: string }>("/auth/signup", {
@@ -181,6 +191,16 @@ export const api = {
   validateIr: (strategy: Record<string, unknown>) =>
     req<IrValidation>("/ir/validate", {
       method: "POST", body: JSON.stringify(strategy),
+    }),
+  // 자연어 전략 설명 → StrategyIR 컴파일. 결과 IR을 빌더가 hydrate한다.
+  compileIr: (nl: string) =>
+    req<IrCompileResult>("/ir/compile", {
+      method: "POST", body: JSON.stringify({ nl }),
+    }),
+  // 컴파일 정확도 신호 — 컴파일된 IR을 (수정 없이) 실행했는지 기록.
+  compileFeedback: (compile_id: number, ran: boolean, edited: boolean | null) =>
+    req<{ ok: boolean }>("/ir/compile/feedback", {
+      method: "POST", body: JSON.stringify({ compile_id, ran, edited }),
     }),
 };
 

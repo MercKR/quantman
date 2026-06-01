@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, type IrValidation } from "../api";
 import SentenceTree, { type Catalog } from "../components/SentenceTree";
 import EquityChart from "../components/EquityChart";
+import { SweepChart, SignalDistChart, ICChart, EventStudyChart } from "../components/ResultCharts";
 import MultiSymbolPicker from "../components/MultiSymbolPicker";
 import type {
   IndicatorInfo, IrBlockSpec, IrDistribution, IrEventStat, IrICStat, IrNode, IrPartition,
@@ -153,6 +154,14 @@ export default function IrBuilder() {
 
   const [result, setResult] = useState<IrStrategyResult | null>(null);
   const [running, setRunning] = useState(false);
+
+  // 자연어 → IR 컴파일 (베타). compileId/baseline로 "수정 없이 실행=정확" 신호 추적.
+  const [nlText, setNlText] = useState("");
+  const [compiling, setCompiling] = useState(false);
+  const [compileErr, setCompileErr] = useState("");
+  const [compileAssumptions, setCompileAssumptions] = useState<string[]>([]);
+  const [compileId, setCompileId] = useState<number | null>(null);
+  const compileBaseline = useRef<string>("");
 
   // 저장/불러오기 — 이름·편집대상·저장 상태. ?edit=<id>면 기존 IR 전략을 불러와 수정.
   const navigate = useNavigate();
@@ -429,12 +438,49 @@ export default function IrBuilder() {
     return sweepWindows.split(",").map((x) => Number(x.trim())).filter((n) => !Number.isNaN(n));
   }
 
+  // 자연어 설명 → IR 컴파일 → 빌더 전 폼에 hydrate. 변환 후 유저가 확인·실행.
+  async function compileFromNl() {
+    if (!nlText.trim() || compiling) return;
+    setCompiling(true); setCompileErr(""); setCompileAssumptions([]);
+    try {
+      const res = await api.compileIr(nlText.trim());
+      setCompileAssumptions(res.assumptions ?? []);
+      if (!res.success) {
+        setCompileErr(res.error || "컴파일에 실패했습니다.");
+        setCompileId(null);
+        return;
+      }
+      hydrate(res.ir as unknown as IrStrategyDef);   // 컴파일 IR을 기존 hydrate로 전 폼 복원
+      setCompileId(res.compile_id);
+      setResult(null);
+    } catch (e) {
+      setCompileErr((e as Error).message);
+      setCompileId(null);
+    } finally {
+      setCompiling(false);
+    }
+  }
+
+  // 컴파일 직후 빌더 상태를 baseline으로 캡처 — 실행 시 수정 여부(정확도 신호) 비교용.
+  useEffect(() => {
+    if (compileId == null) return;
+    try { compileBaseline.current = JSON.stringify(buildStrategy()); }
+    catch { compileBaseline.current = ""; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compileId]);
+
   async function run() {
     if (!signal) return;
     setRunning(true); setResult(null);
     try {
       // 저장된 전략(?edit) 백테스트면 strategy_id를 실어 BacktestRun으로 내역 저장.
-      const body: Record<string, unknown> = { ...(buildStrategy() as Record<string, unknown>) };
+      const built = buildStrategy() as Record<string, unknown>;
+      // 컴파일된 IR이면 "수정 없이 실행했는지" 기록(베타 정확도 신호).
+      if (compileId != null) {
+        const edited = JSON.stringify(built) !== compileBaseline.current;
+        api.compileFeedback(compileId, true, edited).catch(() => {});
+      }
+      const body: Record<string, unknown> = { ...built };
       if (editId) body.strategy_id = Number(editId);
       setResult(await api.runIrStrategy(body));
     } catch (e) {
@@ -492,6 +538,43 @@ export default function IrBuilder() {
         블록을 조립해 룰·팩터·포트폴리오 전략을 만들고 백테스트합니다.
         슬롯에 블록을 끼워 중첩할 수 있어요.
       </p>
+
+      {/* 자연어로 전략 만들기 (NL→IR 컴파일, 베타) */}
+      <div className="panel">
+        <div className="panel-title">
+          자연어로 전략 만들기{" "}
+          <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>베타</span>
+        </div>
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+          전략을 문장으로 설명하면 아래 빌더에 자동으로 채워집니다. 변환 후 각 항목을 확인하고 백테스트를 실행하세요.
+        </p>
+        <textarea
+          value={nlText}
+          onChange={(e) => setNlText(e.target.value)}
+          placeholder="예: 삼성전자를 종가가 20일 이동평균 위로 올라오면 매수하고, 10% 익절·5% 손절"
+          rows={3}
+          aria-label="자연어 전략 설명"
+          style={{
+            width: "100%", resize: "vertical", padding: 10, fontSize: 14,
+            border: "1px solid var(--input-border)", borderRadius: 8, boxSizing: "border-box",
+          }}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+          <button type="button" onClick={compileFromNl} disabled={compiling || !nlText.trim()}>
+            {compiling ? "변환 중…" : "변환"}
+          </button>
+          <span className="muted" style={{ fontSize: 12 }}>변환은 아래 폼을 덮어씁니다.</span>
+        </div>
+        {compileErr && <div className="error" style={{ marginTop: 8 }}>{compileErr}</div>}
+        {compileAssumptions.length > 0 && (
+          <div className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+            <strong>해석 가정</strong> — 의도와 다르면 아래에서 직접 수정하세요.
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {compileAssumptions.map((a, i) => <li key={i}>{a}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
 
       <input
         className="strategy-name-input"
@@ -1028,6 +1111,7 @@ function ResultPanel({ result }: { result: IrStrategyResult }) {
         {result.warnings?.length ? (
           <div className="warn-banner">⚠ {result.warnings.map((w) => w.message).join(" · ")}</div>
         ) : null}
+        <SweepChart axis={result.axis} buckets={result.buckets} axes={result.axes} />
         <table className="sweep-table">
           <thead><tr><th>구분</th><th>표본</th><th>누적(%)</th><th>CAGR(%)</th>
             <th>MDD(%)</th><th>샤프</th><th>소르티노</th><th>승률(%)</th><th>손익비</th></tr></thead>
@@ -1102,6 +1186,7 @@ function SignalStudyPanel({ result }: { result: IrStrategyResult }) {
       <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
         신호 자체의 값 분포(손익 아님) · 표본 {dist.n ?? 0}개. 국면 블록을 넣으면 국면별로 비교됩니다.
       </p>
+      <SignalDistChart overall={dist} byRegime={reg} />
       <div className="stat-grid">
         <div className="stat"><div className="label">평균</div><div className="value">{fmt(dist.mean, "")}</div></div>
         <div className="stat"><div className="label">표준편차</div><div className="value">{fmt(dist.std, "")}</div></div>
@@ -1152,6 +1237,7 @@ function ICStudyPanel({ result }: { result: IrStrategyResult }) {
         매 거래일 횡단 순위상관(IC). 평균 IC가 0보다 유의하면 예측력 있음(분석 전용 — 미래참조).
         IR = 평균IC ÷ IC표준편차. p&lt;0.05면 유의.
       </p>
+      <ICChart windows={windows} byWindow={byWindow} />
       <table className="sweep-table">
         <thead><tr><th>예측 horizon(일)</th><th>표본</th><th>평균 IC</th><th>IR</th>
           <th>t</th><th>양(+)확률(%)</th><th>p-value</th></tr></thead>
@@ -1193,6 +1279,7 @@ function EventStudyPanel({ result }: { result: IrStrategyResult }) {
         총 이벤트 {result.n_events ?? 0}건 · 기준 {basisLabel}. p&lt;0.05면 평균이 0과 유의하게 다름.
         MAE=보유 중 평균 최대낙폭, MFE=평균 최대상승.
       </p>
+      <EventStudyChart windows={windows} overall={overall} />
       <table className="sweep-table">
         <thead><tr><th>윈도우(일)</th><th>표본</th><th>평균수익(%)</th>
           <th>MAE(%)</th><th>MFE(%)</th><th>양(+)확률(%)</th><th>손익비</th><th>p-value</th></tr></thead>

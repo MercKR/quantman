@@ -22,7 +22,8 @@ from .config import settings
 from .db import create_db_and_tables
 from .routers import (admin as admin_router, auth, backtest,
                        calendars as calendars_router, commands,
-                       dataset, ir as ir_router, market, portfolio,
+                       dataset, ir as ir_router, ir_compile as ir_compile_router,
+                       market, portfolio,
                        preview as preview_router,
                        screener as screener_router,
                        settings as settings_router, strategies, sync,
@@ -571,6 +572,7 @@ app.include_router(preview_router.router)
 app.include_router(calendars_router.router)
 app.include_router(trading_router.router)
 app.include_router(ir_router.router)
+app.include_router(ir_compile_router.router)   # NL 컴파일러(베타) — 미배포(로컬만), 배포 시 별도 결정
 app.include_router(admin_router.router)
 
 

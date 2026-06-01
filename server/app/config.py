@@ -7,6 +7,21 @@ _BASE = Path(__file__).resolve().parent.parent
 
 _DEFAULT_SECRET = "dev-insecure-secret-change-me"
 
+# 로컬 개발 편의 — server/.env가 있으면 KEY=VALUE를 환경변수로 로드(.env는 gitignored).
+# .env는 **미설정·빈** 환경변수만 채운다(실제로 설정된 값은 보존). setdefault가 아니라
+# 빈 값도 덮어쓰는 이유: 일부 환경이 ANTHROPIC_API_KEY=""처럼 빈 값을 export해두면
+# setdefault가 .env를 무시하기 때문. 프로덕션(Railway)은 실제 env var가 그대로 우선.
+_envfile = _BASE / ".env"
+if _envfile.exists():
+    for _line in _envfile.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            _k = _k.strip()
+            _v = _v.strip().strip('"').strip("'")
+            if _v and not os.environ.get(_k):
+                os.environ[_k] = _v
+
 
 class Settings:
     # 실행 환경 — production 배포 시 QP_ENV=production 설정 (fail-fast 검증 활성).
@@ -35,6 +50,11 @@ class Settings:
     CORS_ORIGINS: list[str] = os.getenv(
         "QP_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
     ).split(",")
+
+    # NL→IR 컴파일러 (자연어 전략 설명 → StrategyIR). 키 미설정 시 /ir/compile가
+    # 503을 명확히 반환(다른 기능엔 영향 없음). 모델은 env로 교체 가능(최신 Sonnet 권장).
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    NL_COMPILE_MODEL: str = os.getenv("QP_NL_COMPILE_MODEL", "claude-sonnet-4-5-20250929")
 
 
 settings = Settings()
